@@ -480,8 +480,41 @@ export default function SignalFlowMap() {
 
   const handleSaveDevice = async (updates: Partial<Device>) => {
     if (!editingDevice) return;
-    await (supabase as any).from('devices').update(updates).eq('id', editingDevice.id);
+    const targetId = editingDevice.id;
+
+    // undefined 값 제거 (Supabase가 확실히 덮어쓰지 않도록)
+    const cleanUpdates: Record<string, any> = {};
+    Object.entries(updates).forEach(([k, v]) => {
+      if (v !== undefined) cleanUpdates[k] = v;
+    });
+
+    // 낙관적 로컬 업데이트
+    setDevices(prev => prev.map(d => d.id === targetId ? { ...d, ...updates } : d));
     setEditingDevice(null);
+
+    // DB 저장 시도
+    const { error } = await (supabase as any).from('devices').update(cleanUpdates).eq('id', targetId);
+
+    if (error) {
+      console.error('[DB save error]', error);
+      // 신규 컬럼 부재로 실패한 경우, 신규 컬럼만 제외하고 재시도
+      const KNOWN_NEW_COLS = ['model', 'location', 'roomNumber', 'normals', 'pgmPort', 'role'];
+      const missing = KNOWN_NEW_COLS.filter(k =>
+        (error.message ?? '').includes(k) || (error.details ?? '').includes(k)
+      );
+      if (missing.length > 0) {
+        const fallback = { ...cleanUpdates };
+        missing.forEach(k => delete fallback[k]);
+        const { error: err2 } = await (supabase as any).from('devices').update(fallback).eq('id', targetId);
+        if (err2) {
+          alert(`저장 실패: ${err2.message ?? err2}\n\nSupabase SQL Editor에서 schema.sql을 한 번 실행해주세요.`);
+        } else {
+          alert(`⚠️  일부 컬럼을 DB에 저장하지 못했습니다: ${missing.join(', ')}\nSupabase SQL Editor에서 schema.sql 실행 필요.`);
+        }
+      } else {
+        alert(`저장 실패: ${error.message ?? JSON.stringify(error)}`);
+      }
+    }
   };
   const handleDeleteDevice = async () => {
     if (!editingDevice) return;
