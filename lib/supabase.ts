@@ -37,6 +37,16 @@ export const DEVICE_ROLE_LABELS: Record<DeviceRole, string> = {
   wallbox:  '월박스',
 };
 
+// 가상 랙 (패치베이 관리 페이지에서 사용)
+export type Rack = {
+  id: string;
+  name: string;           // 예: "Main Rack A", "부조 Rack #1"
+  location?: string;      // 설치 위치
+  totalUnits: number;     // 전체 유닛 수 (예: 42U)
+  sort_order: number;
+  created_at?: string;
+};
+
 export type Device = {
   id: string;
   name: string;
@@ -51,6 +61,9 @@ export type Device = {
   // wallbox 전용: 설치 장소 + 방번호
   location?: string;   // 예: '주경기장', '중계석#1', 'PC 존', '선수대기실-1'
   roomNumber?: string; // 예: 'WB-101', 'OBS-01'
+  // 가상 랙 배치 (주로 패치베이에 사용)
+  rackId?: string;     // 속한 랙 ID
+  rackUnit?: number;   // 랙 내 유닛 번호 (1부터 시작, 위가 1)
   // 그룹화
   groupId?: string;    // 같은 그룹끼리는 동일 id
   groupName?: string;  // 그룹 표시명 (같은 groupId면 동일)

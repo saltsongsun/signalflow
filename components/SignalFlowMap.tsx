@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { supabase, Device, Connection, ConnectionType, Layer, DEFAULT_LAYERS, DEVICE_ROLE_LABELS } from '../lib/supabase';
+import { supabase, Device, Connection, ConnectionType, Layer, DEFAULT_LAYERS, DEVICE_ROLE_LABELS, Rack } from '../lib/supabase';
 import { INITIAL_DEVICES, INITIAL_CONNECTIONS, TYPE_COLORS, CONN_TYPE_STYLES } from '../lib/initialData';
 import DeviceEditor from './DeviceEditor';
 import LayerPanel from './LayerPanel';
@@ -81,6 +81,7 @@ export default function SignalFlowMap() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [layers, setLayers] = useState<Layer[]>([]);
+  const [racks, setRacks] = useState<Rack[]>([]);
   const [loading, setLoading] = useState(true);
   const [online, setOnline] = useState(1);
 
@@ -134,10 +135,11 @@ export default function SignalFlowMap() {
   // ===== Load data =====
   useEffect(() => {
     (async () => {
-      const [devRes, connRes, layerRes] = await Promise.all([
+      const [devRes, connRes, layerRes, rackRes] = await Promise.all([
         supabase.from('devices').select('*'),
         supabase.from('connections').select('*'),
         supabase.from('layers').select('*'),
+        supabase.from('racks').select('*'),
       ]);
       let loadedLayers = (layerRes.data ?? []) as Layer[];
       if (loadedLayers.length === 0) {
@@ -145,6 +147,7 @@ export default function SignalFlowMap() {
         loadedLayers = DEFAULT_LAYERS;
       }
       setLayers(loadedLayers);
+      setRacks((rackRes.data ?? []) as Rack[]);
       if (devRes.data && devRes.data.length > 0) {
         setDevices(devRes.data as any);
         setConnections((connRes.data ?? []) as any);
@@ -173,6 +176,11 @@ export default function SignalFlowMap() {
         if (p.eventType === 'INSERT') setLayers(prev => [...prev.filter(l => l.id !== p.new.id), p.new]);
         else if (p.eventType === 'UPDATE') setLayers(prev => prev.map(l => l.id === p.new.id ? p.new : l));
         else if (p.eventType === 'DELETE') setLayers(prev => prev.filter(l => l.id !== p.old.id));
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'racks' }, (p: any) => {
+        if (p.eventType === 'INSERT') setRacks(prev => [...prev.filter(r => r.id !== p.new.id), p.new]);
+        else if (p.eventType === 'UPDATE') setRacks(prev => prev.map(r => r.id === p.new.id ? p.new : r));
+        else if (p.eventType === 'DELETE') setRacks(prev => prev.filter(r => r.id !== p.old.id));
       });
     ch.on('presence', { event: 'sync' }, () => {
       setOnline(Object.keys(ch.presenceState()).length || 1);
@@ -1002,21 +1010,28 @@ export default function SignalFlowMap() {
               const toIsPatchbay = to.role === 'patchbay';
               if (fromIsPatchbay && toIsPatchbay) {
                 // 둘 다 패치베이: OUT(위)↑에서 나가 IN(아래)↓로 들어감
-                const offsetV = Math.max(40, Math.abs(y2 - y1) / 3);
+                const dxAbs = Math.abs(x2 - x1);
+                const dyAbs = Math.abs(y2 - y1);
+                const offsetV = Math.max(60, dyAbs / 2.2, dxAbs / 4);
                 path = `M ${x1} ${y1} C ${x1} ${y1 - offsetV}, ${x2} ${y2 + offsetV}, ${x2} ${y2}`;
               } else if (fromIsPatchbay) {
                 // from만 패치베이: 위로 빠져나간 뒤 옆으로
-                const offsetV = Math.max(30, Math.abs(y2 - y1) / 4);
-                const dxc = Math.max(40, Math.abs(x2 - x1) / 2);
+                const offsetV = Math.max(50, Math.abs(y2 - y1) / 3);
+                const dxc = Math.max(50, Math.abs(x2 - x1) / 1.8);
                 path = `M ${x1} ${y1} C ${x1} ${y1 - offsetV}, ${x2 - dxc} ${y2}, ${x2} ${y2}`;
               } else if (toIsPatchbay) {
                 // to만 패치베이: 옆으로 가다가 아래로 들어감
-                const offsetV = Math.max(30, Math.abs(y2 - y1) / 4);
-                const dxc = Math.max(40, Math.abs(x2 - x1) / 2);
+                const offsetV = Math.max(50, Math.abs(y2 - y1) / 3);
+                const dxc = Math.max(50, Math.abs(x2 - x1) / 1.8);
                 path = `M ${x1} ${y1} C ${x1 + dxc} ${y1}, ${x2} ${y2 + offsetV}, ${x2} ${y2}`;
               } else {
-                const dx = Math.max(60, Math.abs(x2 - x1) / 2);
-                path = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+                // 일반 장비끼리: 자유로운 베지어
+                const dxAbs = Math.abs(x2 - x1);
+                const dyAbs = Math.abs(y2 - y1);
+                // 수평 거리와 수직 편차에 따라 제어점 여유 조정. 
+                // 가로로 넓으면 제어점 중간, 세로로 치우치면 S자가 자연스럽게 빠지도록 큰 값
+                const ctrl = Math.max(80, dxAbs / 1.8, dyAbs / 2.5);
+                path = `M ${x1} ${y1} C ${x1 + ctrl} ${y1}, ${x2 - ctrl} ${y2}, ${x2} ${y2}`;
               }
               const isTraced = traced.connections.has(c.id);
               const isDim = traceId && !isTraced;
@@ -1481,6 +1496,7 @@ export default function SignalFlowMap() {
           devices={devices}
           connections={connections}
           layers={layers}
+          racks={racks}
           onClose={() => setShowPatchbayMgr(false)}
         />
       )}
