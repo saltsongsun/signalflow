@@ -7,6 +7,7 @@ type Props = {
   layers: Layer[];
   onSave: (updates: Partial<Device>) => void;
   onDelete: () => void;
+  onDuplicate: () => void;
   onClose: () => void;
 };
 
@@ -18,11 +19,12 @@ const TYPE_ACCENT = {
   combined: { grad: 'from-purple-500/20 to-purple-600/5', ring: 'ring-purple-500/40', dot: '#A855F7' },
 };
 
-export default function DeviceEditor({ device, layers, onSave, onDelete, onClose }: Props) {
+export default function DeviceEditor({ device, layers, onSave, onDelete, onDuplicate, onClose }: Props) {
   const [name, setName] = useState(device.name);
   const [type, setType] = useState<Device['type']>(device.type);
   const [role, setRole] = useState<DeviceRole>(device.role ?? 'standard');
   const [pgmPort, setPgmPort] = useState<string>(device.pgmPort ?? '');
+  const [normals, setNormals] = useState<Record<string, string>>(device.normals ?? {});
   const [width, setWidth] = useState(device.width ?? 200);
   const [inputs, setInputs] = useState<PortRow[]>([]);
   const [outputs, setOutputs] = useState<PortRow[]>([]);
@@ -38,6 +40,7 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onClose
     setType(device.type);
     setRole(device.role ?? 'standard');
     setPgmPort(device.pgmPort ?? '');
+    setNormals(device.normals ?? {});
     setWidth(device.width ?? 200);
     const toRows = (arr: string[], meta?: Record<string, PortInfo>): PortRow[] =>
       arr.map(p => ({
@@ -97,6 +100,7 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onClose
       name: name.trim() || device.name,
       type, role,
       pgmPort: role === 'switcher' ? (pgmPort || undefined) : undefined,
+      normals: role === 'patchbay' ? normals : undefined,
       width,
       inputs: finalInputs.map(r => r.name),
       outputs: finalOutputs.map(r => r.name),
@@ -249,10 +253,10 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onClose
           <label className="block text-[10px] uppercase tracking-[0.12em] text-neutral-500 mb-2 font-semibold">
             역할 <span className="text-neutral-600 normal-case tracking-normal ml-1">Device Role</span>
           </label>
-          <div className="grid grid-cols-4 gap-1 p-1 bg-white/5 rounded-lg border border-white/10">
+          <div className="grid grid-cols-5 gap-1 p-1 bg-white/5 rounded-lg border border-white/10">
             {DEVICE_ROLES.map(r => {
               const active = role === r;
-              const icon = r === 'switcher' ? '⇆' : r === 'router' ? '⇅' : r === 'splitter' ? '⇶' : '◻';
+              const icon = r === 'switcher' ? '⇆' : r === 'router' ? '⇅' : r === 'splitter' ? '⇶' : r === 'patchbay' ? '⊟' : '◻';
               return (
                 <button
                   key={r}
@@ -266,9 +270,10 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onClose
             })}
           </div>
           <div className="mt-1.5 text-[10px] text-neutral-600 leading-relaxed">
-            {role === 'switcher' && '⇆ 여러 입력 중 선택된 소스를 출력으로 보냄. PGM 출력 지정 가능.'}
+            {role === 'switcher' && '⇆ 여러 입력 중 선택된 소스를 출력으로. PGM 출력 지정 가능.'}
             {role === 'router' && '⇅ 모든 입력을 모든 출력으로 자유롭게 라우팅.'}
             {role === 'splitter' && '⇶ 하나의 입력을 여러 출력으로 분배 (VDA/DA).'}
+            {role === 'patchbay' && '⊟ 물리 패치베이. 기본 배선(normal)과 수동 패치(patch) 구분.'}
             {role === 'standard' && '◻ 일반 장비. 1:1 포트 매핑.'}
           </div>
         </div>
@@ -292,6 +297,79 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onClose
             </select>
             <div className="mt-1.5 text-[10px] text-neutral-500">
               지정하면 장비카드에 「PGM」 뱃지가 붙고, 신호추적시 이 출력이 우선.
+            </div>
+          </div>
+        )}
+
+        {/* Patchbay Normals (patchbay only) */}
+        {role === 'patchbay' && (
+          <div className="bg-gradient-to-br from-teal-500/10 to-transparent border border-teal-500/20 rounded-lg p-3 space-y-2.5">
+            <div>
+              <label className="block text-[10px] uppercase tracking-[0.12em] text-teal-300 font-semibold">
+                ⊟ Normal 매핑
+                <span className="text-neutral-500 normal-case tracking-normal ml-1 font-normal">IN → OUT 기본 통로</span>
+              </label>
+              <div className="text-[10px] text-neutral-500 mt-1">
+                Normal은 패치 케이블 <b className="text-teal-300">연결 안됐을 때 기본 배선</b> (normal-thru). 
+                외부에서 IN으로 들어온 신호는 매핑된 OUT으로 그대로 나감.
+                수동으로 꽂은 케이블(patch)은 여기서 설정한 normal을 <b className="text-amber-300">끊고</b> 대신 지나감.
+              </div>
+            </div>
+
+            <div className="flex gap-1.5">
+              <button
+                onClick={() => {
+                  // 1:1 자동 매핑 (IN-01 → OUT-01 ...)
+                  const map: Record<string, string> = {};
+                  inputs.forEach((inp, idx) => {
+                    if (outputs[idx]) map[inp.name] = outputs[idx].name;
+                  });
+                  setNormals(map);
+                }}
+                className="flex-1 py-1.5 text-[11px] rounded-md bg-teal-500/20 hover:bg-teal-500/35 text-teal-200 font-medium border border-teal-500/30 transition"
+              >🔗 1:1 자동매핑</button>
+              <button
+                onClick={() => setNormals({})}
+                className="flex-1 py-1.5 text-[11px] rounded-md bg-white/5 hover:bg-rose-500/40 text-neutral-400 hover:text-white font-medium border border-white/10 transition"
+              >✕ 전체 해제</button>
+            </div>
+
+            <div className="max-h-64 overflow-y-auto custom-scroll space-y-1 pr-1">
+              {inputs.map((inp, i) => {
+                const mapped = normals[inp.name] ?? '';
+                return (
+                  <div key={inp.name} className="flex items-center gap-1.5 bg-black/30 rounded p-1.5 border border-white/5">
+                    <span className="text-[10.5px] font-mono text-neutral-300 w-20 truncate">{inp.name}</span>
+                    <span className="text-teal-400 text-[12px]">→</span>
+                    <select
+                      value={mapped}
+                      onChange={e => {
+                        const v = e.target.value;
+                        setNormals(prev => {
+                          const next = { ...prev };
+                          if (v) next[inp.name] = v;
+                          else delete next[inp.name];
+                          return next;
+                        });
+                      }}
+                      className="flex-1 bg-neutral-900 border border-white/10 rounded px-2 py-1 text-[11px] font-mono text-teal-200 focus:border-teal-400 focus:outline-none"
+                    >
+                      <option value="">(normal 없음 — 통로 없음)</option>
+                      {outputs.map(o => <option key={o.name} value={o.name}>{o.name}{o.label ? ` — ${o.label}` : ''}</option>)}
+                    </select>
+                  </div>
+                );
+              })}
+              {inputs.length === 0 && (
+                <div className="text-center py-4 text-[10px] text-neutral-600">
+                  입력 포트를 먼저 추가하세요
+                </div>
+              )}
+            </div>
+
+            <div className="text-[10px] text-neutral-500 bg-black/20 rounded p-2 leading-relaxed">
+              💡 <b className="text-teal-300">Normal-thru</b>: 매핑된 IN/OUT은 기본적으로 연결됨 (실선 · 부드러운 tint).<br/>
+              💡 <b className="text-amber-300">Patch(수동)</b>: 케이블 생성 후 해당 케이블의 <code className="text-amber-200">is_patch</code> 플래그를 켜면 주황 점선 + normal 끊김.
             </div>
           </div>
         )}
@@ -346,8 +424,14 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onClose
         <div className="flex gap-2 pt-3 border-t border-white/5">
           <button onClick={handleSave}
             className="flex-1 bg-gradient-to-r from-sky-500 to-sky-600 hover:from-sky-400 hover:to-sky-500 text-white py-2.5 text-sm rounded-lg font-semibold shadow-lg shadow-sky-500/30 transition">저장</button>
+          <button onClick={onDuplicate}
+            className="px-4 bg-purple-500/15 hover:bg-purple-500 text-purple-300 hover:text-white py-2.5 text-sm rounded-lg font-medium border border-purple-500/30 hover:border-purple-400 transition flex items-center gap-1.5"
+            title="같은 속성으로 장비 복제 (연결은 제외)">
+            <span>⎘</span>
+            <span>복제</span>
+          </button>
           <button onClick={() => { if (confirm('정말 삭제?')) onDelete(); }}
-            className="px-5 bg-rose-500/10 hover:bg-rose-500 text-rose-300 hover:text-white py-2.5 text-sm rounded-lg font-medium border border-rose-500/30 hover:border-rose-500 transition">삭제</button>
+            className="px-4 bg-rose-500/10 hover:bg-rose-500 text-rose-300 hover:text-white py-2.5 text-sm rounded-lg font-medium border border-rose-500/30 hover:border-rose-500 transition">삭제</button>
         </div>
       </div>
     </div>

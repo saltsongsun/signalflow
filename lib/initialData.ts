@@ -261,6 +261,25 @@ const videoDevices: DeviceSeed[] = [
   { id: 'enc_rec', name: '녹화 송출 ENC', type: 'combined', x: 1700, y: 400, inputs: ['SDI'], outputs: ['IP OUT'],
     inputsMeta: { 'SDI': { connType: '12G-SDI' } },
     outputsMeta: { 'IP OUT': { connType: 'IP' } } },
+
+  // ===== Video Patchbay (BNC 24 x 2) =====
+  // 물리 패치베이 - 기본은 1:1 normal-thru, 앞면 패치로 오버라이드 가능
+  { id: 'vpatch_1', name: 'Video Patchbay #1 (BNC 24×2)', type: 'video', role: 'patchbay', x: 1220, y: 1080, width: 300,
+    inputs:  Array.from({length:24}, (_,i)=>`IN-${String(i+1).padStart(2,'0')}`),
+    outputs: Array.from({length:24}, (_,i)=>`OUT-${String(i+1).padStart(2,'0')}`),
+    inputsMeta: Object.fromEntries(Array.from({length:24},(_,i)=>{
+      const k=`IN-${String(i+1).padStart(2,'0')}`;
+      return [k,{ connType: '12G-SDI' as ConnectionType, layerId:'layer_video' }];
+    })),
+    outputsMeta: Object.fromEntries(Array.from({length:24},(_,i)=>{
+      const k=`OUT-${String(i+1).padStart(2,'0')}`;
+      return [k,{ connType: '12G-SDI' as ConnectionType, layerId:'layer_video' }];
+    })),
+    // 기본은 모두 1:1 normal-thru
+    normals: Object.fromEntries(Array.from({length:24},(_,i)=>[
+      `IN-${String(i+1).padStart(2,'0')}`, `OUT-${String(i+1).padStart(2,'0')}`,
+    ])),
+  },
 ];
 
 const audioDevices: DeviceSeed[] = [
@@ -422,6 +441,23 @@ const audioDevices: DeviceSeed[] = [
     inputsMeta: { 'AES-L': { connType: 'AES' }, 'AES-R': { connType: 'AES' } } },
   { id: 'tally', name: 'Tally Switch', type: 'combined', x: 1280, y: 2140, inputs: ['GPO'], outputs: [],
     inputsMeta: { 'GPO': { label: 'ON-AIR LAMP', connType: 'GPIO' } } },
+
+  // ===== Audio Patchbay (XLR 24 x 2 / TT Bantam) =====
+  { id: 'apatch_1', name: 'Audio Patchbay (XLR 24×2)', type: 'audio', role: 'patchbay', x: 1520, y: 1580, width: 300,
+    inputs:  Array.from({length:24}, (_,i)=>`IN-${String(i+1).padStart(2,'0')}`),
+    outputs: Array.from({length:24}, (_,i)=>`OUT-${String(i+1).padStart(2,'0')}`),
+    inputsMeta: Object.fromEntries(Array.from({length:24},(_,i)=>{
+      const k=`IN-${String(i+1).padStart(2,'0')}`;
+      return [k,{ connType: 'XLR' as ConnectionType, layerId:'layer_audio' }];
+    })),
+    outputsMeta: Object.fromEntries(Array.from({length:24},(_,i)=>{
+      const k=`OUT-${String(i+1).padStart(2,'0')}`;
+      return [k,{ connType: 'XLR' as ConnectionType, layerId:'layer_audio' }];
+    })),
+    normals: Object.fromEntries(Array.from({length:24},(_,i)=>[
+      `IN-${String(i+1).padStart(2,'0')}`, `OUT-${String(i+1).padStart(2,'0')}`,
+    ])),
+  },
 ];
 
 // Connections

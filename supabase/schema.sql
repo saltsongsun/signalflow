@@ -6,6 +6,7 @@ create table if not exists public.devices (
   type text not null check (type in ('video', 'audio', 'combined')),
   role text default 'standard',
   "pgmPort" text,
+  normals jsonb not null default '{}'::jsonb,
   x double precision not null default 0,
   y double precision not null default 0,
   width double precision,
@@ -26,6 +27,8 @@ create table if not exists public.connections (
   to_device text not null references public.devices(id) on delete cascade,
   to_port text not null,
   conn_type text,
+  tie_line text,
+  is_patch boolean default false,
   created_at timestamp with time zone default now(),
   unique (to_device, to_port)
 );
@@ -46,7 +49,10 @@ alter table public.devices add column if not exists "inputsMeta" jsonb not null 
 alter table public.devices add column if not exists "outputsMeta" jsonb not null default '{}'::jsonb;
 alter table public.devices add column if not exists role text default 'standard';
 alter table public.devices add column if not exists "pgmPort" text;
+alter table public.devices add column if not exists normals jsonb not null default '{}'::jsonb;
 alter table public.connections add column if not exists conn_type text;
+alter table public.connections add column if not exists tie_line text;
+alter table public.connections add column if not exists is_patch boolean default false;
 
 -- Realtime
 do $$

@@ -4,6 +4,7 @@ import { supabase, Device, Connection, ConnectionType, Layer, DEFAULT_LAYERS, DE
 import { INITIAL_DEVICES, INITIAL_CONNECTIONS, TYPE_COLORS, CONN_TYPE_STYLES } from '../lib/initialData';
 import DeviceEditor from './DeviceEditor';
 import LayerPanel from './LayerPanel';
+import CableEditor from './CableEditor';
 
 type TraceMode = 'both' | 'upstream' | 'downstream';
 
@@ -12,7 +13,21 @@ const HEADER_H = 46;
 const PADDING_Y = 14;
 const DRAG_THRESHOLD = 4;
 
-function deviceWidth(d: Device) { return d.width ?? 200; }
+// 패치베이 2단 렌더링 치수
+const PB_JACK_W = 36;      // 각 잭 셀 너비
+const PB_JACK_H = 34;      // 각 잭 셀 높이
+const PB_ROW_GAP = 6;      // OUT 행과 IN 행 사이 간격
+const PB_SIDE_PAD = 10;    // 좌우 여백
+const PB_TOP_PAD = 8;      // 잭 영역 상단 여백
+
+function deviceWidth(d: Device) {
+  // 패치베이는 포트 수 × 잭 너비로 자동
+  if (d.role === 'patchbay') {
+    const maxPorts = Math.max(d.inputs.length, d.outputs.length);
+    return Math.max(220, PB_SIDE_PAD * 2 + maxPorts * PB_JACK_W);
+  }
+  return d.width ?? 200;
+}
 
 function visiblePorts(d: Device, dir: 'in' | 'out', visibleLayerIds: Set<string>) {
   const arr = dir === 'in' ? d.inputs : d.outputs;
@@ -28,14 +43,34 @@ function visiblePorts(d: Device, dir: 'in' | 'out', visibleLayerIds: Set<string>
 
 function deviceHeight(d: Device, visibleLayerIds: Set<string>) {
   if (d.height) return d.height;
+  // 패치베이: 헤더 + 상단(OUT) 행 + 간격 + 하단(IN) 행 + 하단 여백
+  if (d.role === 'patchbay') {
+    return HEADER_H + PB_TOP_PAD + PB_JACK_H + PB_ROW_GAP + PB_JACK_H + PB_TOP_PAD;
+  }
   const vi = visiblePorts(d, 'in', visibleLayerIds).length;
   const vo = visiblePorts(d, 'out', visibleLayerIds).length;
   const portCount = Math.max(vi, vo, 1);
   return HEADER_H + PADDING_Y * 2 + portCount * PORT_H;
 }
 
+// 일반 장비용 포트 Y
 function portYFromRenderIdx(d: Device, renderIdx: number) {
   return d.y + HEADER_H + PADDING_Y + renderIdx * PORT_H + PORT_H / 2;
+}
+
+// 패치베이 전용: 포트 X/Y 계산 (셀 중앙 좌표)
+// dir: 'out' = 상단 행 / 'in' = 하단 행
+function patchbayPortXY(d: Device, dir: 'in' | 'out', portIdx: number) {
+  const cx = d.x + PB_SIDE_PAD + portIdx * PB_JACK_W + PB_JACK_W / 2;
+  if (dir === 'out') {
+    // 상단 행 - OUT은 셀 상단에서 나감
+    const cy = d.y + HEADER_H + PB_TOP_PAD;
+    return { x: cx, y: cy };
+  } else {
+    // 하단 행 - IN은 셀 하단에서 들어옴
+    const cy = d.y + HEADER_H + PB_TOP_PAD + PB_JACK_H + PB_ROW_GAP + PB_JACK_H;
+    return { x: cx, y: cy };
+  }
 }
 
 export default function SignalFlowMap() {
@@ -50,6 +85,7 @@ export default function SignalFlowMap() {
   const [traceId, setTraceId] = useState<string | null>(null);
   const [traceMode, setTraceMode] = useState<TraceMode>('both');
   const [editingDevice, setEditingDevice] = useState<Device | null>(null);
+  const [editingCable, setEditingCable] = useState<Connection | null>(null);
   const [showLayerPanel, setShowLayerPanel] = useState(false);
   const [pendingFrom, setPendingFrom] = useState<{ device: string; port: string; connType?: ConnectionType } | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -414,6 +450,30 @@ export default function SignalFlowMap() {
     setEditingDevice(d);
   };
 
+  const handleDuplicateDevice = async () => {
+    if (!editingDevice) return;
+    const src = editingDevice;
+    const id = `${src.id}_copy_${Date.now().toString(36)}`;
+    const clone: Device = {
+      ...src,
+      id,
+      name: `${src.name} 복사`,
+      x: src.x + 40,
+      y: src.y + 40,
+      // 연결은 복제 안함 (Connection은 장비에 종속이고, from/to 모두 src를 가리키기 때문)
+      // 포트 정보, 레이어, 역할, normals, pgmPort 등은 다 복사 — 그대로 깊은 복사
+      inputs: [...src.inputs],
+      outputs: [...src.outputs],
+      inputsMeta: src.inputsMeta ? JSON.parse(JSON.stringify(src.inputsMeta)) : {},
+      outputsMeta: src.outputsMeta ? JSON.parse(JSON.stringify(src.outputsMeta)) : {},
+      physPorts: { ...src.physPorts },
+      routing: { ...src.routing },
+      normals: src.normals ? { ...src.normals } : undefined,
+    };
+    await (supabase as any).from('devices').insert(clone);
+    setEditingDevice(clone);
+  };
+
   const handleSaveDevice = async (updates: Partial<Device>) => {
     if (!editingDevice) return;
     await (supabase as any).from('devices').update(updates).eq('id', editingDevice.id);
@@ -433,6 +493,88 @@ export default function SignalFlowMap() {
       await (supabase as any).from('devices').delete().eq('id', id);
     }
     setSelectedIds(new Set());
+  };
+
+  // ========== 정렬 기능 ==========
+  type AlignType = 'left' | 'right' | 'top' | 'bottom' | 'center-x' | 'center-y' | 'dist-x' | 'dist-y';
+
+  const handleAlign = async (kind: AlignType) => {
+    if (selectedIds.size < 2) return;
+    const sel = Array.from(selectedIds)
+      .map(id => devices.find(d => d.id === id))
+      .filter(Boolean) as Device[];
+    if (sel.length < 2) return;
+
+    const widths = sel.map(d => deviceWidth(d));
+    const heights = sel.map(d => deviceHeight(d, visibleLayerIds));
+    const lefts = sel.map(d => d.x);
+    const rights = sel.map((d, i) => d.x + widths[i]);
+    const tops = sel.map(d => d.y);
+    const bottoms = sel.map((d, i) => d.y + heights[i]);
+    const centersX = sel.map((d, i) => d.x + widths[i] / 2);
+    const centersY = sel.map((d, i) => d.y + heights[i] / 2);
+
+    const newPositions = new Map<string, { x: number; y: number }>();
+
+    if (kind === 'left') {
+      const minLeft = Math.min(...lefts);
+      sel.forEach(d => newPositions.set(d.id, { x: minLeft, y: d.y }));
+    } else if (kind === 'right') {
+      const maxRight = Math.max(...rights);
+      sel.forEach((d, i) => newPositions.set(d.id, { x: maxRight - widths[i], y: d.y }));
+    } else if (kind === 'top') {
+      const minTop = Math.min(...tops);
+      sel.forEach(d => newPositions.set(d.id, { x: d.x, y: minTop }));
+    } else if (kind === 'bottom') {
+      const maxBottom = Math.max(...bottoms);
+      sel.forEach((d, i) => newPositions.set(d.id, { x: d.x, y: maxBottom - heights[i] }));
+    } else if (kind === 'center-x') {
+      const avg = centersX.reduce((a, b) => a + b, 0) / centersX.length;
+      sel.forEach((d, i) => newPositions.set(d.id, { x: avg - widths[i] / 2, y: d.y }));
+    } else if (kind === 'center-y') {
+      const avg = centersY.reduce((a, b) => a + b, 0) / centersY.length;
+      sel.forEach((d, i) => newPositions.set(d.id, { x: d.x, y: avg - heights[i] / 2 }));
+    } else if (kind === 'dist-x') {
+      // 가로 방향 균등 분배 (양 끝 위치 고정, 중간 장비를 균등 간격으로)
+      if (sel.length < 3) return;
+      const sorted = [...sel].sort((a, b) => a.x - b.x);
+      const first = sorted[0];
+      const last = sorted[sorted.length - 1];
+      const firstW = deviceWidth(first);
+      const totalSpan = (last.x + deviceWidth(last)) - first.x;
+      const sumW = sorted.reduce((acc, d) => acc + deviceWidth(d), 0);
+      const gap = (totalSpan - sumW) / (sorted.length - 1);
+      let cursor = first.x;
+      sorted.forEach(d => {
+        newPositions.set(d.id, { x: cursor, y: d.y });
+        cursor += deviceWidth(d) + gap;
+      });
+    } else if (kind === 'dist-y') {
+      if (sel.length < 3) return;
+      const sorted = [...sel].sort((a, b) => a.y - b.y);
+      const first = sorted[0];
+      const last = sorted[sorted.length - 1];
+      const totalSpan = (last.y + deviceHeight(last, visibleLayerIds)) - first.y;
+      const sumH = sorted.reduce((acc, d) => acc + deviceHeight(d, visibleLayerIds), 0);
+      const gap = (totalSpan - sumH) / (sorted.length - 1);
+      let cursor = first.y;
+      sorted.forEach(d => {
+        newPositions.set(d.id, { x: d.x, y: cursor });
+        cursor += deviceHeight(d, visibleLayerIds) + gap;
+      });
+    }
+
+    // 낙관적 업데이트
+    setDevices(prev => prev.map(d => {
+      const pos = newPositions.get(d.id);
+      return pos ? { ...d, x: pos.x, y: pos.y } : d;
+    }));
+
+    // DB 저장
+    const updates = Array.from(newPositions.entries()).map(([id, pos]) =>
+      (supabase as any).from('devices').update({ x: pos.x, y: pos.y }).eq('id', id)
+    );
+    await Promise.all(updates);
   };
   const handleResetAll = async () => {
     if (!confirm('모든 데이터 삭제 후 초기 데이터로 재시드?')) return;
@@ -527,6 +669,24 @@ export default function SignalFlowMap() {
                     className="px-2.5 py-1 text-[11px] rounded-lg bg-rose-500/15 hover:bg-rose-500 text-rose-300 hover:text-white border border-rose-500/30 hover:border-rose-400 font-medium transition">삭제</button>
                 </>
               )}
+              {selectedIds.size >= 2 && (
+                <div className="flex items-center gap-0.5 bg-purple-500/10 border border-purple-500/30 rounded-lg p-0.5" title="선택된 장비 정렬">
+                  <button onClick={() => handleAlign('left')} className="w-7 h-7 text-[14px] hover:bg-purple-500/30 rounded text-purple-200 hover:text-white transition flex items-center justify-center" title="왼쪽 정렬">⊣</button>
+                  <button onClick={() => handleAlign('center-x')} className="w-7 h-7 text-[14px] hover:bg-purple-500/30 rounded text-purple-200 hover:text-white transition flex items-center justify-center" title="가로 중앙">╎</button>
+                  <button onClick={() => handleAlign('right')} className="w-7 h-7 text-[14px] hover:bg-purple-500/30 rounded text-purple-200 hover:text-white transition flex items-center justify-center" title="오른쪽 정렬">⊢</button>
+                  <div className="w-px h-4 bg-purple-500/30 mx-0.5"></div>
+                  <button onClick={() => handleAlign('top')} className="w-7 h-7 text-[14px] hover:bg-purple-500/30 rounded text-purple-200 hover:text-white transition flex items-center justify-center" title="위쪽 정렬">⊤</button>
+                  <button onClick={() => handleAlign('center-y')} className="w-7 h-7 text-[14px] hover:bg-purple-500/30 rounded text-purple-200 hover:text-white transition flex items-center justify-center" title="세로 중앙">─</button>
+                  <button onClick={() => handleAlign('bottom')} className="w-7 h-7 text-[14px] hover:bg-purple-500/30 rounded text-purple-200 hover:text-white transition flex items-center justify-center" title="아래쪽 정렬">⊥</button>
+                  {selectedIds.size >= 3 && (
+                    <>
+                      <div className="w-px h-4 bg-purple-500/30 mx-0.5"></div>
+                      <button onClick={() => handleAlign('dist-x')} className="w-7 h-7 text-[11px] hover:bg-purple-500/30 rounded text-purple-200 hover:text-white transition font-bold flex items-center justify-center" title="가로 균등 분배">⇔</button>
+                      <button onClick={() => handleAlign('dist-y')} className="w-7 h-7 text-[11px] hover:bg-purple-500/30 rounded text-purple-200 hover:text-white transition font-bold flex items-center justify-center" title="세로 균등 분배">⇕</button>
+                    </>
+                  )}
+                </div>
+              )}
               <button onClick={handleResetAll}
                 className="px-2.5 py-1.5 text-[11px] rounded-lg bg-white/5 hover:bg-rose-500/80 text-neutral-500 hover:text-white border border-white/10 transition">⟲</button>
             </>
@@ -571,6 +731,7 @@ export default function SignalFlowMap() {
             <div><kbd className="px-1 py-0.5 rounded bg-white/5 border border-white/10 text-neutral-400 font-mono text-[9px]">클릭</kbd> 편집</div>
             <div><kbd className="px-1 py-0.5 rounded bg-white/5 border border-white/10 text-neutral-400 font-mono text-[9px]">Shift</kbd> 다중선택</div>
             <div><kbd className="px-1 py-0.5 rounded bg-white/5 border border-white/10 text-neutral-400 font-mono text-[9px]">Shift+드래그</kbd> 박스</div>
+            <div><kbd className="px-1 py-0.5 rounded bg-white/5 border border-white/10 text-neutral-400 font-mono text-[9px]">케이블 클릭</kbd> tie-line/patch</div>
           </div>
         )}
       </div>
@@ -588,7 +749,7 @@ export default function SignalFlowMap() {
       >
         <div style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`, transformOrigin: '0 0', width: '4000px', height: '3000px', position: 'relative' }}>
           {/* Connections */}
-          <svg width="4000" height="3000" className="absolute inset-0 pointer-events-none" style={{ overflow: 'visible' }}>
+          <svg width="4000" height="3000" className="absolute inset-0" style={{ overflow: 'visible', pointerEvents: 'none' }}>
             <defs>
               <filter id="glow"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
               <filter id="glow-strong"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
@@ -602,12 +763,51 @@ export default function SignalFlowMap() {
               const fi = outVis.findIndex(p => p.name === c.from_port);
               const ti = inVis.findIndex(p => p.name === c.to_port);
               if (fi < 0 || ti < 0) return null;
-              const x1 = from.x + deviceWidth(from);
-              const y1 = portYFromRenderIdx(from, fi);
-              const x2 = to.x;
-              const y2 = portYFromRenderIdx(to, ti);
-              const dx = Math.max(60, Math.abs(x2 - x1) / 2);
-              const path = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+
+              // 케이블 출발점 (from의 출력)
+              let x1: number, y1: number;
+              if (from.role === 'patchbay') {
+                // 패치베이의 OUT은 상단 - 위로 빠져나감
+                const p = patchbayPortXY(from, 'out', fi);
+                x1 = p.x; y1 = p.y;
+              } else {
+                x1 = from.x + deviceWidth(from);
+                y1 = portYFromRenderIdx(from, fi);
+              }
+
+              // 케이블 도착점 (to의 입력)
+              let x2: number, y2: number;
+              if (to.role === 'patchbay') {
+                // 패치베이의 IN은 하단 - 아래에서 들어옴
+                const p = patchbayPortXY(to, 'in', ti);
+                x2 = p.x; y2 = p.y;
+              } else {
+                x2 = to.x;
+                y2 = portYFromRenderIdx(to, ti);
+              }
+
+              // 경로 계산 - 패치베이 관련이면 수직 베지어, 아니면 수평
+              let path: string;
+              const fromIsPatchbay = from.role === 'patchbay';
+              const toIsPatchbay = to.role === 'patchbay';
+              if (fromIsPatchbay && toIsPatchbay) {
+                // 둘 다 패치베이: OUT(위)↑에서 나가 IN(아래)↓로 들어감
+                const offsetV = Math.max(40, Math.abs(y2 - y1) / 3);
+                path = `M ${x1} ${y1} C ${x1} ${y1 - offsetV}, ${x2} ${y2 + offsetV}, ${x2} ${y2}`;
+              } else if (fromIsPatchbay) {
+                // from만 패치베이: 위로 빠져나간 뒤 옆으로
+                const offsetV = Math.max(30, Math.abs(y2 - y1) / 4);
+                const dxc = Math.max(40, Math.abs(x2 - x1) / 2);
+                path = `M ${x1} ${y1} C ${x1} ${y1 - offsetV}, ${x2 - dxc} ${y2}, ${x2} ${y2}`;
+              } else if (toIsPatchbay) {
+                // to만 패치베이: 옆으로 가다가 아래로 들어감
+                const offsetV = Math.max(30, Math.abs(y2 - y1) / 4);
+                const dxc = Math.max(40, Math.abs(x2 - x1) / 2);
+                path = `M ${x1} ${y1} C ${x1 + dxc} ${y1}, ${x2} ${y2 + offsetV}, ${x2} ${y2}`;
+              } else {
+                const dx = Math.max(60, Math.abs(x2 - x1) / 2);
+                path = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+              }
               const isTraced = traced.connections.has(c.id);
               const isDim = traceId && !isTraced;
               const ct = c.conn_type ?? from.outputsMeta?.[c.from_port]?.connType;
@@ -616,37 +816,72 @@ export default function SignalFlowMap() {
               const layerColor = fromLayerId ? layerById.get(fromLayerId)?.color : undefined;
               const color = layerColor ?? (from.type === 'audio' ? TYPE_COLORS.audio.main : from.type === 'combined' ? TYPE_COLORS.combined.main : TYPE_COLORS.video.main);
               const isPgm = from.role === 'switcher' && from.pgmPort === c.from_port;
+              const isPatch = c.is_patch === true;
               const mx = (x1 + x2) / 2;
               const my = (y1 + y2) / 2;
 
+              // 패치 케이블은 주황색으로 오버라이드
+              const cableColor = isPatch ? '#F97316' : color;
+              const cableDash = isPatch ? '5 4' : (style?.dash ?? undefined);
+
               return (
-                <g key={c.id} opacity={isDim ? 0.1 : 1}>
-                  {(isTraced || isPgm) && <path d={path} stroke={color} strokeWidth={isPgm ? 7 : 6} fill="none" opacity={isPgm ? 0.35 : 0.25} filter="url(#glow-strong)" />}
+                <g key={c.id} opacity={isDim ? 0.1 : 1} style={{ pointerEvents: 'none' }}>
+                  {(isTraced || isPgm || isPatch) && (
+                    <path d={path} stroke={cableColor} strokeWidth={isPgm ? 7 : 6} fill="none"
+                          opacity={isPgm ? 0.35 : isPatch ? 0.3 : 0.25} filter="url(#glow-strong)" />
+                  )}
                   {/* 베이스 라인 */}
-                  <path d={path} stroke={color} strokeWidth={isPgm ? 3 : isTraced ? 2.5 : 1.4}
-                        strokeDasharray={style?.dash ?? undefined} fill="none"
-                        opacity={isTraced || isPgm ? 1 : 0.55}
+                  <path d={path} stroke={cableColor} strokeWidth={isPgm ? 3 : isTraced ? 2.5 : isPatch ? 2 : 1.4}
+                        strokeDasharray={cableDash} fill="none"
+                        opacity={isTraced || isPgm || isPatch ? 1 : 0.55}
                         filter={isTraced || isPgm ? 'url(#glow)' : undefined} />
-                  {/* 흐름 애니메이션 오버레이 - 선 위를 움직이는 점선 */}
+                  {/* 흐름 애니메이션 오버레이 */}
                   <path
                     d={path}
-                    stroke={color}
-                    strokeWidth={isPgm ? 3 : isTraced ? 2.5 : 1.4}
+                    stroke={cableColor}
+                    strokeWidth={isPgm ? 3 : isTraced ? 2.5 : isPatch ? 2 : 1.4}
                     fill="none"
                     strokeLinecap="round"
                     strokeDasharray="6 12"
                     className="flow-line"
                     style={{
-                      filter: isTraced || isPgm ? 'drop-shadow(0 0 3px currentColor)' : undefined,
-                      animationDuration: isTraced || isPgm ? '1.2s' : '2.8s',
-                      opacity: isTraced || isPgm ? 1 : 0.85,
+                      filter: isTraced || isPgm || isPatch ? 'drop-shadow(0 0 3px currentColor)' : undefined,
+                      animationDuration: isPatch ? '0.9s' : isTraced || isPgm ? '1.2s' : '2.8s',
+                      opacity: isTraced || isPgm || isPatch ? 1 : 0.85,
                     }}
                   />
-                  {ct && (scale > 0.5 || isTraced || isPgm) && (
+                  {/* 편집모드에선 클릭 가능한 넓은 투명 path (선 hit area) */}
+                  {editMode && (
+                    <path
+                      d={path} stroke="transparent" strokeWidth={18} fill="none"
+                      style={{ cursor: 'pointer', pointerEvents: 'stroke' }}
+                      onClick={e => { e.stopPropagation(); setEditingCable(c); }}
+                    />
+                  )}
+                  {/* 연결방식 라벨 */}
+                  {ct && (scale > 0.5 || isTraced || isPgm || isPatch) && (
                     <g>
-                      <rect x={mx - 24} y={my - 8.5} width="48" height="15" rx="4" fill="rgba(8,8,10,0.92)" stroke={color} strokeWidth="0.6" />
-                      <text x={mx} y={my + 2.8} textAnchor="middle" fontSize="9.5" fill={color} fontFamily="var(--font-mono)" fontWeight="700" letterSpacing="0.02em">
+                      <rect x={mx - 24} y={my - 8.5} width="48" height="15" rx="4" fill="rgba(8,8,10,0.92)" stroke={cableColor} strokeWidth="0.6" />
+                      <text x={mx} y={my + 2.8} textAnchor="middle" fontSize="9.5" fill={cableColor} fontFamily="var(--font-mono)" fontWeight="700" letterSpacing="0.02em">
                         {style?.label ?? ct}
+                      </text>
+                    </g>
+                  )}
+                  {/* Tie-Line 번호 */}
+                  {c.tie_line && (scale > 0.4 || isTraced) && (
+                    <g>
+                      <rect x={mx - 30} y={my + 8} width="60" height="12" rx="3" fill="rgba(20,15,5,0.92)" stroke="#F59E0B" strokeWidth="0.5" />
+                      <text x={mx} y={my + 17} textAnchor="middle" fontSize="8.5" fill="#FCD34D" fontFamily="var(--font-mono)" fontWeight="700">
+                        {c.tie_line}
+                      </text>
+                    </g>
+                  )}
+                  {/* Patch 뱃지 */}
+                  {isPatch && scale > 0.45 && (
+                    <g>
+                      <rect x={mx - 22} y={my - 22} width="44" height="11" rx="2.5" fill="#F97316" opacity="0.95" />
+                      <text x={mx} y={my - 14} textAnchor="middle" fontSize="7.5" fill="white" fontFamily="var(--font-mono)" fontWeight="800" letterSpacing="0.05em">
+                        PATCH
                       </text>
                     </g>
                   )}
@@ -679,7 +914,8 @@ export default function SignalFlowMap() {
             const inVis = visiblePorts(d, 'in', visibleLayerIds);
             const outVis = visiblePorts(d, 'out', visibleLayerIds);
             const role = d.role ?? 'standard';
-            const roleIcon = role === 'switcher' ? '⇆' : role === 'router' ? '⇅' : role === 'splitter' ? '⇶' : null;
+            const roleIcon = role === 'switcher' ? '⇆' : role === 'router' ? '⇅' : role === 'splitter' ? '⇶' : role === 'patchbay' ? '⊟' : null;
+            const isPatchbay = role === 'patchbay';
 
             const borderColor = isSelected ? '#fbbf24' : isTraceTarget ? color.glow : editMode ? 'rgba(251,191,36,0.35)' : color.border;
             const borderWidth = isSelected || isTraceTarget ? 2 : 1.2;
@@ -695,14 +931,18 @@ export default function SignalFlowMap() {
                 className={`absolute rounded-xl overflow-hidden transition-[opacity,box-shadow,transform] ${isSelected ? 'device-selected' : ''}`}
                 style={{
                   left: d.x, top: d.y, width: w, minHeight: h,
-                  background: `linear-gradient(165deg, ${color.bg} 0%, rgba(10,10,12,0.96) 40%, rgba(4,4,6,0.98) 100%)`,
-                  border: `${borderWidth}px solid ${borderColor}`,
+                  background: isPatchbay
+                    ? `linear-gradient(165deg, rgba(20,184,166,0.15) 0%, rgba(8,12,12,0.96) 40%, rgba(4,6,6,0.98) 100%)`
+                    : `linear-gradient(165deg, ${color.bg} 0%, rgba(10,10,12,0.96) 40%, rgba(4,4,6,0.98) 100%)`,
+                  border: `${borderWidth}px solid ${isPatchbay && !isSelected && !isTraceTarget ? 'rgba(20,184,166,0.4)' : borderColor}`,
                   boxShadow: isSelected
                     ? `0 0 0 1px rgba(251,191,36,0.4), 0 0 30px rgba(251,191,36,0.45), 0 10px 30px rgba(0,0,0,0.5)`
                     : isTraceTarget
                     ? `0 0 0 1px ${color.glow}66, 0 0 35px ${color.glow}55, 0 10px 30px rgba(0,0,0,0.5)`
                     : isHovered
                     ? `0 0 24px ${color.glow}30, 0 8px 22px rgba(0,0,0,0.6)`
+                    : isPatchbay
+                    ? `0 0 18px rgba(20,184,166,0.15), 0 4px 16px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04)`
                     : `0 4px 16px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04)`,
                   opacity: isDim ? 0.25 : 1,
                   cursor: editMode ? 'move' : 'pointer',
@@ -746,7 +986,111 @@ export default function SignalFlowMap() {
                 </div>
 
                 {/* Ports */}
-                <div className="py-3.5 relative">
+                {isPatchbay ? (
+                  // === 패치베이 2단 렌더링 ===
+                  <div className="relative" style={{ paddingTop: PB_TOP_PAD, paddingBottom: PB_TOP_PAD }}>
+                    {/* 상단 행: OUT (출력) — 신호 나감 */}
+                    <div className="flex items-center justify-center" style={{ paddingLeft: PB_SIDE_PAD, paddingRight: PB_SIDE_PAD, height: PB_JACK_H }}>
+                      {d.outputs.map((portName, idx) => {
+                        const meta = d.outputsMeta?.[portName];
+                        const lid = meta?.layerId;
+                        const layer = lid ? layerById.get(lid) : undefined;
+                        const portColor = layer?.color ?? color.main;
+                        const isPending = pendingFrom?.device === d.id && pendingFrom?.port === portName;
+                        const isPgm = d.role === 'switcher' && d.pgmPort === portName;
+                        // normal 매핑이 있으면 살짝 강조
+                        const hasNormal = d.normals && Object.values(d.normals).includes(portName);
+                        return (
+                          <div
+                            key={portName}
+                            className="flex flex-col items-center justify-start relative shrink-0"
+                            style={{ width: PB_JACK_W, height: PB_JACK_H }}
+                            title={`OUT ${portName}${meta?.label ? ` — ${meta.label}` : ''}`}
+                          >
+                            {/* 잭 플러그 형태 */}
+                            <button
+                              data-port
+                              onMouseDown={onPortMouseDown}
+                              onClick={e => onPortClick(e, d.id, portName, true)}
+                              className={`relative rounded-full transition-transform hover:scale-[1.25] ${isPending ? 'ring-2 ring-amber-300 animate-pulse' : isPgm ? 'ring-2 ring-emerald-400' : ''}`}
+                              style={{
+                                width: 20, height: 20,
+                                marginTop: -6, // 셀 상단에 맞춰서 살짝 올라가게
+                                background: `radial-gradient(circle at 35% 35%, ${isPending ? '#fbbf24' : isPgm ? '#10b981' : portColor} 20%, rgba(0,0,0,0.6) 100%)`,
+                                boxShadow: `0 0 ${isPgm ? '10px' : '6px'} ${isPending ? '#fbbf24' : isPgm ? '#10b981' : portColor}, inset 0 -1px 2px rgba(0,0,0,0.5), inset 0 1px 1px rgba(255,255,255,0.4)`,
+                                border: `1px solid ${portColor}88`,
+                              }}
+                            >
+                              {/* 잭 구멍 */}
+                              <div className="absolute inset-0 m-auto rounded-full" style={{ width: 7, height: 7, background: 'radial-gradient(circle, #000 30%, #222 100%)', boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.9)' }}></div>
+                            </button>
+                            {/* normal 인디케이터 */}
+                            {hasNormal && !isPgm && (
+                              <div className="absolute top-0 right-1 w-1 h-1 rounded-full bg-teal-400" title="Normal 매핑됨"></div>
+                            )}
+                            {/* 번호 */}
+                            <div className="absolute bottom-0 left-0 right-0 text-center text-[8.5px] font-mono font-bold text-neutral-300 leading-none" style={{ textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}>
+                              {idx + 1}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* 중간 라벨 "OUT / IN" */}
+                    <div className="flex justify-between px-2 text-[8.5px] font-bold tracking-widest text-neutral-500" style={{ height: PB_ROW_GAP, lineHeight: `${PB_ROW_GAP}px` }}>
+                      <span className="text-teal-400/70">⬆ OUT</span>
+                      <span className="text-teal-400/70">IN ⬇</span>
+                    </div>
+
+                    {/* 하단 행: IN (입력) — 신호 들어옴 */}
+                    <div className="flex items-center justify-center" style={{ paddingLeft: PB_SIDE_PAD, paddingRight: PB_SIDE_PAD, height: PB_JACK_H }}>
+                      {d.inputs.map((portName, idx) => {
+                        const meta = d.inputsMeta?.[portName];
+                        const lid = meta?.layerId;
+                        const layer = lid ? layerById.get(lid) : undefined;
+                        const portColor = layer?.color ?? color.main;
+                        const hasNormal = d.normals?.[portName];
+                        return (
+                          <div
+                            key={portName}
+                            className="flex flex-col items-center justify-end relative shrink-0"
+                            style={{ width: PB_JACK_W, height: PB_JACK_H }}
+                            title={`IN ${portName}${meta?.label ? ` — ${meta.label}` : ''}${hasNormal ? ` · normal → ${hasNormal}` : ''}`}
+                          >
+                            {/* 번호 */}
+                            <div className="absolute top-0 left-0 right-0 text-center text-[8.5px] font-mono font-bold text-neutral-300 leading-none" style={{ textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}>
+                              {idx + 1}
+                            </div>
+                            {/* 잭 플러그 */}
+                            <button
+                              data-port
+                              onMouseDown={onPortMouseDown}
+                              onClick={e => onPortClick(e, d.id, portName, false)}
+                              className="relative rounded-full transition-transform hover:scale-[1.25]"
+                              style={{
+                                width: 20, height: 20,
+                                marginBottom: -6,
+                                background: `radial-gradient(circle at 35% 35%, ${portColor} 20%, rgba(0,0,0,0.6) 100%)`,
+                                boxShadow: `0 0 6px ${portColor}, inset 0 -1px 2px rgba(0,0,0,0.5), inset 0 1px 1px rgba(255,255,255,0.4)`,
+                                border: `1px solid ${portColor}88`,
+                              }}
+                            >
+                              <div className="absolute inset-0 m-auto rounded-full" style={{ width: 7, height: 7, background: 'radial-gradient(circle, #000 30%, #222 100%)', boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.9)' }}></div>
+                            </button>
+                            {hasNormal && (
+                              <div className="absolute bottom-0 right-1 w-1 h-1 rounded-full bg-teal-400" title={`normal → ${hasNormal}`}></div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Rack 홈 (하단 레일 느낌) */}
+                    <div className="absolute left-0 right-0 h-[1px] pointer-events-none" style={{ top: HEADER_H + PB_TOP_PAD + PB_JACK_H - HEADER_H + 2, background: 'linear-gradient(90deg, transparent, rgba(20,184,166,0.3), transparent)' }}></div>
+                  </div>
+                ) : (
+                  <div className="py-3.5 relative">
                   <div className="pr-3">
                     {inVis.map((p, renderIdx) => {
                       const meta = d.inputsMeta?.[p.name];
@@ -823,6 +1167,7 @@ export default function SignalFlowMap() {
                     })}
                   </div>
                 </div>
+                )}
               </div>
             );
           })}
@@ -843,7 +1188,21 @@ export default function SignalFlowMap() {
           layers={layers}
           onSave={handleSaveDevice}
           onDelete={handleDeleteDevice}
+          onDuplicate={handleDuplicateDevice}
           onClose={() => setEditingDevice(null)}
+        />
+      )}
+
+      {editingCable && (
+        <CableEditor
+          connection={editingCable}
+          fromName={devById.get(editingCable.from_device)?.name ?? editingCable.from_device}
+          toName={devById.get(editingCable.to_device)?.name ?? editingCable.to_device}
+          onClose={() => setEditingCable(null)}
+          onDelete={async () => {
+            await (supabase as any).from('connections').delete().eq('id', editingCable.id);
+            setEditingCable(null);
+          }}
         />
       )}
     </div>
