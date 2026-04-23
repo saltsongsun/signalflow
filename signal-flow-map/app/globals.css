@@ -1,0 +1,62 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-sans: var(--font-inter), -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Pretendard', 'Apple SD Gothic Neo', Roboto, sans-serif;
+  --font-mono: var(--font-mono), 'SF Mono', Menlo, Monaco, Consolas, monospace;
+}
+
+html, body {
+  font-family: var(--font-sans);
+  font-feature-settings: "cv02","cv03","cv04","cv11","ss01";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.01em;
+}
+
+/* Monospace */
+.font-mono, code, kbd, pre {
+  font-family: var(--font-mono);
+  font-feature-settings: "zero", "ss01";
+}
+
+/* Scrollbars in the editor panel */
+.custom-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.custom-scroll::-webkit-scrollbar-track { background: transparent; }
+.custom-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 4px; }
+.custom-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.15); }
+
+/* Subtle animated grid */
+@keyframes drift {
+  0%   { background-position: 0 0; }
+  100% { background-position: 120px 120px; }
+}
+
+/* Device card shine */
+@keyframes shine {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
+}
+
+.device-selected::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent 0%, rgba(251,191,36,0.15) 50%, transparent 100%);
+  pointer-events: none;
+  animation: shine 2.5s ease-in-out infinite;
+}
+
+/* Signal flow animation — 점선이 출력 → 입력 방향으로 흐름 */
+@keyframes flow {
+  from { stroke-dashoffset: 0; }
+  to   { stroke-dashoffset: -36; }   /* -(6+12)*2 = -36 · dasharray 한 주기의 배수 */
+}
+
+.flow-line {
+  animation: flow 2.8s linear infinite;
+  animation-duration: inherit;
+  will-change: stroke-dashoffset;
+}
