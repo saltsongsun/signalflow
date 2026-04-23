@@ -53,7 +53,17 @@ function deviceHeight(d: Device, visibleLayerIds: Set<string>) {
   const vi = visiblePorts(d, 'in', visibleLayerIds).length;
   const vo = visiblePorts(d, 'out', visibleLayerIds).length;
   const portCount = Math.max(vi, vo, 1);
-  return HEADER_H + PADDING_Y * 2 + portCount * PORT_H;
+  let h = HEADER_H + PADDING_Y * 2 + portCount * PORT_H;
+  // source/display 이미지 영역 (16:9, width-20 기준)
+  if (d.role === 'source' && d.imageUrl) {
+    const w = d.width ?? 200;
+    h += Math.round((w - 20) * 9 / 16) + 10; // aspect + margin
+  }
+  if (d.role === 'display') {
+    const w = d.width ?? 200;
+    h += Math.round((w - 20) * 9 / 16) + 10;
+  }
+  return h;
 }
 
 // 일반 장비용 포트 Y
@@ -234,6 +244,142 @@ export default function SignalFlowMap() {
     return { devices: dSet, connections: cSet };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [traceId, connections, traceMode, visibleLayerIds, devices]);
+
+  // ===== 시그널 시뮬레이션 =====
+  // "이 장비의 이 입력 포트에 어떤 소스의 이미지가 도착하는지" 계산
+  // source 장비 자신도 자기 imageUrl을 가지고 있다고 본다.
+  // 장비별 "출력 포트 → 어디서 온 source device id" 매핑
+  const signalByOutput = useMemo(() => {
+    const out = new Map<string, string>(); // key: "deviceId:portName" → sourceDeviceId
+    const inSignal = new Map<string, string>(); // key: "deviceId:portName" (input) → sourceDeviceId
+
+    // 1) source 장비들의 모든 출력 포트는 자신을 소스로 가짐
+    devices.forEach(d => {
+      if (d.role === 'source' && d.imageUrl) {
+        d.outputs.forEach(p => out.set(`${d.id}:${p}`, d.id));
+      }
+    });
+
+    // 2) 반복 전파 (fixed point): 최대 devices.length + 1 번 반복
+    const iterations = Math.max(8, devices.length + 2);
+    for (let iter = 0; iter < iterations; iter++) {
+      let changed = false;
+
+      // 입력 포트로 신호 전파 (from_device OUT → to_device IN)
+      connections.forEach(c => {
+        const fromKey = `${c.from_device}:${c.from_port}`;
+        const toKey = `${c.to_device}:${c.to_port}`;
+        const src = out.get(fromKey);
+        if (src && inSignal.get(toKey) !== src) {
+          inSignal.set(toKey, src);
+          changed = true;
+        }
+      });
+
+      // 장비의 출력으로 전파 (role별)
+      devices.forEach(d => {
+        if (d.role === 'source') return; // source는 이미 처리됨
+
+        if (d.role === 'display') {
+          // display는 전파 안함 (입력만 표시)
+          return;
+        }
+
+        if (d.role === 'switcher' || d.role === 'router') {
+          // 선택된 입력의 신호를 모든 출력으로 전달
+          const sel = d.selectedInput;
+          if (!sel) return;
+          const srcSig = inSignal.get(`${d.id}:${sel}`);
+          if (!srcSig) return;
+          d.outputs.forEach(p => {
+            const k = `${d.id}:${p}`;
+            if (out.get(k) !== srcSig) { out.set(k, srcSig); changed = true; }
+          });
+          return;
+        }
+
+        if (d.role === 'splitter') {
+          // 첫 번째 입력을 모든 출력으로
+          const firstIn = d.inputs[0];
+          if (!firstIn) return;
+          const srcSig = inSignal.get(`${d.id}:${firstIn}`);
+          if (!srcSig) return;
+          d.outputs.forEach(p => {
+            const k = `${d.id}:${p}`;
+            if (out.get(k) !== srcSig) { out.set(k, srcSig); changed = true; }
+          });
+          return;
+        }
+
+        if (d.role === 'patchbay') {
+          // normal 매핑 기반 + 패치 케이블 기반 전달
+          // 우선순위: 수동 패치(self-loop is_patch=true)가 normal을 덮어씀
+          const patches = new Map<string, string>(); // OUT → IN (역방향: IN → OUT 매핑을 생성)
+          connections.forEach(c => {
+            if (c.from_device === d.id && c.to_device === d.id && c.is_patch) {
+              patches.set(c.to_port, c.from_port); // 이 IN 신호를 이 OUT으로 보냄
+            }
+          });
+          // 모든 OUT에 대해: 패치 > normal
+          d.outputs.forEach(outPort => {
+            // 이 OUT 포트로 보낼 IN을 찾음
+            // patches는 IN → OUT 매핑이므로 여기선 역탐색
+            let sourceIn: string | undefined;
+            for (const [pIn, pOut] of patches.entries()) {
+              if (pOut === outPort) { sourceIn = pIn; break; }
+            }
+            if (!sourceIn && d.normals) {
+              // normals: IN → OUT 매핑. 이 OUT으로 연결된 IN 찾기
+              for (const [nIn, nOut] of Object.entries(d.normals)) {
+                if (nOut === outPort) { sourceIn = nIn; break; }
+              }
+            }
+            if (!sourceIn) return;
+            const srcSig = inSignal.get(`${d.id}:${sourceIn}`);
+            if (!srcSig) return;
+            const k = `${d.id}:${outPort}`;
+            if (out.get(k) !== srcSig) { out.set(k, srcSig); changed = true; }
+          });
+          return;
+        }
+
+        if (d.role === 'wallbox' || d.role === 'connector' || d.role === 'standard') {
+          // 1:1 passthrough (input 이름과 output 이름이 일치하거나, 첫 입력 → 각 출력)
+          // 일반적으로 wallbox/connector는 IN → OUT 1:1 이 관례. 이름 기반 시도 후 없으면 첫 입력 → 모든 출력
+          d.outputs.forEach(p => {
+            let srcSig = inSignal.get(`${d.id}:${p}`); // 같은 이름의 입력이 있는가
+            if (!srcSig && d.inputs.length > 0) {
+              srcSig = inSignal.get(`${d.id}:${d.inputs[0]}`);
+            }
+            if (!srcSig) return;
+            const k = `${d.id}:${p}`;
+            if (out.get(k) !== srcSig) { out.set(k, srcSig); changed = true; }
+          });
+          return;
+        }
+      });
+
+      if (!changed) break;
+    }
+
+    return { out, inSignal };
+  }, [devices, connections]);
+
+  // 디스플레이 장비별로 "지금 어느 소스가 도착하는가" 계산 (첫 입력 포트 기준)
+  const displaySources = useMemo(() => {
+    const m = new Map<string, Device>(); // displayDeviceId → sourceDevice
+    devices.filter(d => d.role === 'display').forEach(d => {
+      // 각 입력 포트 중 신호가 들어오는 첫 번째를 사용
+      for (const inp of d.inputs) {
+        const srcId = signalByOutput.inSignal.get(`${d.id}:${inp}`);
+        if (srcId) {
+          const srcDev = devById.get(srcId);
+          if (srcDev) { m.set(d.id, srcDev); break; }
+        }
+      }
+    });
+    return m;
+  }, [devices, signalByOutput, devById]);
 
   // ===== Global window listeners =====
   useEffect(() => {
@@ -777,6 +923,25 @@ export default function SignalFlowMap() {
             title="월박스 관리 페이지"
           >▦ 월박스 <span className="font-mono opacity-70">{devices.filter(d => d.role === 'wallbox').length}</span></button>
 
+          {(() => {
+            const activeSources = devices.filter(d => d.role === 'source' && d.imageUrl).length;
+            const liveDisplays = Array.from(displaySources.values()).length;
+            if (activeSources === 0 && devices.filter(d => d.role === 'display').length === 0) return null;
+            return (
+              <div
+                className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-lime-500/10 to-sky-500/10 border border-lime-500/25"
+                title="신호 시뮬레이션 활성 상태"
+              >
+                <div className="w-1.5 h-1.5 rounded-full bg-lime-400 animate-pulse shadow-md shadow-lime-400/60"></div>
+                <span className="text-[11px] font-medium">
+                  <span className="text-lime-300 font-mono">▶{activeSources}</span>
+                  <span className="text-neutral-500 mx-1">→</span>
+                  <span className="text-sky-300 font-mono">🖵{liveDisplays}</span>
+                </span>
+              </div>
+            );
+          })()}
+
           {!editMode && traceId && (
             <div className="flex items-center gap-0.5 bg-sky-500/10 border border-sky-500/30 rounded-lg p-0.5">
               {(['both','upstream','downstream'] as TraceMode[]).map(m => (
@@ -1042,37 +1207,40 @@ export default function SignalFlowMap() {
               const color = layerColor ?? (from.type === 'audio' ? TYPE_COLORS.audio.main : from.type === 'combined' ? TYPE_COLORS.combined.main : TYPE_COLORS.video.main);
               const isPgm = from.role === 'switcher' && from.pgmPort === c.from_port;
               const isPatch = c.is_patch === true;
+              // 이 케이블에 실제 신호(source)가 흐르는지
+              const liveSrcId = signalByOutput.out.get(`${c.from_device}:${c.from_port}`);
+              const isLive = !!liveSrcId;
               const mx = (x1 + x2) / 2;
               const my = (y1 + y2) / 2;
 
-              // 패치 케이블은 주황색으로 오버라이드
+              // 패치 케이블은 주황색, live는 색 더 선명
               const cableColor = isPatch ? '#F97316' : color;
               const cableDash = isPatch ? '5 4' : (style?.dash ?? undefined);
 
               return (
                 <g key={c.id} opacity={isDim ? 0.1 : 1} style={{ pointerEvents: 'none' }}>
-                  {(isTraced || isPgm || isPatch) && (
-                    <path d={path} stroke={cableColor} strokeWidth={isPgm ? 7 : 6} fill="none"
-                          opacity={isPgm ? 0.35 : isPatch ? 0.3 : 0.25} filter="url(#glow-strong)" />
+                  {(isTraced || isPgm || isPatch || isLive) && (
+                    <path d={path} stroke={cableColor} strokeWidth={isLive ? 7 : isPgm ? 7 : 6} fill="none"
+                          opacity={isLive ? 0.38 : isPgm ? 0.35 : isPatch ? 0.3 : 0.25} filter="url(#glow-strong)" />
                   )}
                   {/* 베이스 라인 */}
-                  <path d={path} stroke={cableColor} strokeWidth={isPgm ? 3 : isTraced ? 2.5 : isPatch ? 2 : 1.4}
+                  <path d={path} stroke={cableColor} strokeWidth={isLive ? 2.8 : isPgm ? 3 : isTraced ? 2.5 : isPatch ? 2 : 1.4}
                         strokeDasharray={cableDash} fill="none"
-                        opacity={isTraced || isPgm || isPatch ? 1 : 0.55}
-                        filter={isTraced || isPgm ? 'url(#glow)' : undefined} />
+                        opacity={isLive || isTraced || isPgm || isPatch ? 1 : 0.55}
+                        filter={isLive || isTraced || isPgm ? 'url(#glow)' : undefined} />
                   {/* 흐름 애니메이션 오버레이 */}
                   <path
                     d={path}
                     stroke={cableColor}
-                    strokeWidth={isPgm ? 3 : isTraced ? 2.5 : isPatch ? 2 : 1.4}
+                    strokeWidth={isLive ? 2.8 : isPgm ? 3 : isTraced ? 2.5 : isPatch ? 2 : 1.4}
                     fill="none"
                     strokeLinecap="round"
                     strokeDasharray="6 12"
                     className="flow-line"
                     style={{
-                      filter: isTraced || isPgm || isPatch ? 'drop-shadow(0 0 3px currentColor)' : undefined,
-                      animationDuration: isPatch ? '0.9s' : isTraced || isPgm ? '1.2s' : '2.8s',
-                      opacity: isTraced || isPgm || isPatch ? 1 : 0.85,
+                      filter: isLive || isTraced || isPgm || isPatch ? 'drop-shadow(0 0 3px currentColor)' : undefined,
+                      animationDuration: isLive ? '1.0s' : isPatch ? '0.9s' : isTraced || isPgm ? '1.2s' : '2.8s',
+                      opacity: isLive || isTraced || isPgm || isPatch ? 1 : 0.85,
                     }}
                   />
                   {/* 편집모드에선 클릭 가능한 넓은 투명 path (선 hit area) */}
@@ -1139,9 +1307,21 @@ export default function SignalFlowMap() {
             const inVis = visiblePorts(d, 'in', visibleLayerIds);
             const outVis = visiblePorts(d, 'out', visibleLayerIds);
             const role = d.role ?? 'standard';
-            const roleIcon = role === 'switcher' ? '⇆' : role === 'router' ? '⇅' : role === 'splitter' ? '⇶' : role === 'patchbay' ? '⊟' : role === 'wallbox' ? '▦' : null;
+            const roleIcon =
+              role === 'switcher' ? '⇆'
+              : role === 'router' ? '⇅'
+              : role === 'splitter' ? '⇶'
+              : role === 'patchbay' ? '⊟'
+              : role === 'wallbox' ? '▦'
+              : role === 'source' ? '▶'
+              : role === 'display' ? '🖵'
+              : role === 'connector' ? '━'
+              : null;
             const isPatchbay = role === 'patchbay';
             const isWallbox = role === 'wallbox';
+            const isSource = role === 'source';
+            const isDisplay = role === 'display';
+            const currentDisplaySource = isDisplay ? displaySources.get(d.id) : undefined;
 
             const borderColor = isSelected ? '#fbbf24' : isTraceTarget ? color.glow : editMode ? 'rgba(251,191,36,0.35)' : color.border;
             const borderWidth = isSelected || isTraceTarget ? 2 : 1.2;
@@ -1200,9 +1380,28 @@ export default function SignalFlowMap() {
                         <span
                           className="text-[9px] px-1 py-[1px] rounded shrink-0 font-mono font-bold"
                           style={{
-                            background: isWallbox ? 'rgba(245,158,11,0.15)' : isPatchbay ? 'rgba(20,184,166,0.15)' : 'rgba(16,185,129,0.15)',
-                            color: isWallbox ? '#FBBF24' : isPatchbay ? '#2DD4BF' : '#34D399',
-                            border: `0.5px solid ${isWallbox ? 'rgba(251,191,36,0.4)' : isPatchbay ? 'rgba(45,212,191,0.4)' : 'rgba(52,211,153,0.4)'}`,
+                            background:
+                              isWallbox ? 'rgba(245,158,11,0.15)'
+                              : isPatchbay ? 'rgba(20,184,166,0.15)'
+                              : isSource ? 'rgba(132,204,22,0.2)'
+                              : isDisplay ? 'rgba(14,165,233,0.18)'
+                              : role === 'connector' ? 'rgba(148,163,184,0.15)'
+                              : 'rgba(16,185,129,0.15)',
+                            color:
+                              isWallbox ? '#FBBF24'
+                              : isPatchbay ? '#2DD4BF'
+                              : isSource ? '#A3E635'
+                              : isDisplay ? '#38BDF8'
+                              : role === 'connector' ? '#CBD5E1'
+                              : '#34D399',
+                            border: `0.5px solid ${
+                              isWallbox ? 'rgba(251,191,36,0.4)'
+                              : isPatchbay ? 'rgba(45,212,191,0.4)'
+                              : isSource ? 'rgba(163,230,53,0.4)'
+                              : isDisplay ? 'rgba(56,189,248,0.4)'
+                              : role === 'connector' ? 'rgba(203,213,225,0.3)'
+                              : 'rgba(52,211,153,0.4)'
+                            }`,
                           }}
                           title={DEVICE_ROLE_LABELS[role]}
                         >{roleIcon} {DEVICE_ROLE_LABELS[role]}</span>
@@ -1476,6 +1675,59 @@ export default function SignalFlowMap() {
                     })}
                   </div>
                 </div>
+                )}
+
+                {/* Source thumbnail */}
+                {isSource && d.imageUrl && (
+                  <div className="relative mx-2.5 mb-2.5 rounded-md overflow-hidden border border-lime-500/25"
+                    style={{ aspectRatio: '16/9', background: '#000' }}
+                  >
+                    <img
+                      src={d.imageUrl}
+                      alt={d.name}
+                      className="w-full h-full object-cover"
+                      draggable={false}
+                    />
+                    <div className="absolute top-1 left-1 flex items-center gap-1 px-1.5 py-0.5 rounded bg-lime-500/90 text-black text-[9px] font-bold">
+                      <div className="w-1 h-1 rounded-full bg-white animate-pulse"></div>
+                      LIVE
+                    </div>
+                  </div>
+                )}
+
+                {/* Display screen */}
+                {isDisplay && (
+                  <div className="relative mx-2.5 mb-2.5 rounded-md overflow-hidden border-2 border-neutral-700"
+                    style={{ aspectRatio: '16/9', background: 'linear-gradient(180deg, #000 0%, #0a0a0a 100%)' }}
+                  >
+                    {currentDisplaySource?.imageUrl ? (
+                      <>
+                        <img
+                          src={currentDisplaySource.imageUrl}
+                          alt={currentDisplaySource.name}
+                          className="w-full h-full object-cover"
+                          draggable={false}
+                        />
+                        <div className="absolute top-1 right-1 flex items-center gap-1 px-1.5 py-0.5 rounded bg-black/70 text-emerald-300 text-[9px] font-bold font-mono">
+                          <div className="w-1 h-1 rounded-full bg-emerald-400 animate-pulse"></div>
+                          {currentDisplaySource.name}
+                        </div>
+                      </>
+                    ) : currentDisplaySource ? (
+                      <div className="absolute inset-0 flex items-center justify-center text-neutral-600 text-[10px]">
+                        📡 {currentDisplaySource.name} (이미지 없음)
+                      </div>
+                    ) : (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center text-neutral-700">
+                        <div className="text-[10px] font-mono">NO SIGNAL</div>
+                        <div className="text-[8px] opacity-60 mt-0.5">소스 연결 대기</div>
+                      </div>
+                    )}
+                    {/* 스캔라인 */}
+                    <div className="absolute inset-0 pointer-events-none" style={{
+                      background: 'repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.08) 2px, rgba(0,0,0,0.08) 3px)',
+                    }}></div>
+                  </div>
                 )}
               </div>
             );

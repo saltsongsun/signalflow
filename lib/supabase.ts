@@ -25,16 +25,22 @@ export type PortInfo = {
 };
 
 // 장비 역할
-export const DEVICE_ROLES = ['standard', 'switcher', 'router', 'splitter', 'patchbay', 'wallbox'] as const;
+export const DEVICE_ROLES = [
+  'standard', 'switcher', 'router', 'splitter', 'patchbay', 'wallbox',
+  'source', 'display', 'connector',
+] as const;
 export type DeviceRole = typeof DEVICE_ROLES[number];
 
 export const DEVICE_ROLE_LABELS: Record<DeviceRole, string> = {
-  standard: '일반',
-  switcher: '스위처',
-  router:   '라우터',
-  splitter: '스플리터',
-  patchbay: '패치베이',
-  wallbox:  '월박스',
+  standard:  '일반',
+  switcher:  '스위처',
+  router:    '라우터',
+  splitter:  '스플리터',
+  patchbay:  '패치베이',
+  wallbox:   '월박스',
+  source:    '소스',
+  display:   '디스플레이',
+  connector: '연결',
 };
 
 // 가상 랙 (패치베이 관리 페이지에서 사용)
@@ -64,6 +70,10 @@ export type Device = {
   // 가상 랙 배치 (주로 패치베이에 사용)
   rackId?: string;     // 속한 랙 ID
   rackUnit?: number;   // 랙 내 유닛 번호 (1부터 시작, 위가 1)
+  // 소스/디스플레이 시뮬레이션
+  imageUrl?: string;       // 소스 장비의 재생 이미지 URL
+  imageStoragePath?: string; // Supabase Storage path (삭제용)
+  selectedInput?: string;  // 스위처/라우터가 현재 OUT으로 보내는 IN 포트
   // 그룹화
   groupId?: string;    // 같은 그룹끼리는 동일 id
   groupName?: string;  // 그룹 표시명 (같은 groupId면 동일)

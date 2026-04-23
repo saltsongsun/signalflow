@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect } from 'react';
-import { Device, CONNECTION_TYPES, ConnectionType, PortInfo, Layer, DEVICE_ROLES, DEVICE_ROLE_LABELS, DeviceRole } from '../lib/supabase';
+import { Device, CONNECTION_TYPES, ConnectionType, PortInfo, Layer, DEVICE_ROLES, DEVICE_ROLE_LABELS, DeviceRole, supabase } from '../lib/supabase';
 
 type Props = {
   device: Device;
@@ -26,6 +26,10 @@ export default function DeviceEditor({ device, layers, selectionCount, onSave, o
   const [model, setModel] = useState(device.model ?? '');
   const [location, setLocation] = useState(device.location ?? '');
   const [roomNumber, setRoomNumber] = useState(device.roomNumber ?? '');
+  const [imageUrl, setImageUrl] = useState(device.imageUrl ?? '');
+  const [imageStoragePath, setImageStoragePath] = useState(device.imageStoragePath ?? '');
+  const [selectedInput, setSelectedInput] = useState(device.selectedInput ?? '');
+  const [uploadingImage, setUploadingImage] = useState(false);
   const [type, setType] = useState<Device['type']>(device.type);
   const [role, setRole] = useState<DeviceRole>(device.role ?? 'standard');
   const [pgmPort, setPgmPort] = useState<string>(device.pgmPort ?? '');
@@ -45,6 +49,9 @@ export default function DeviceEditor({ device, layers, selectionCount, onSave, o
     setModel(device.model ?? '');
     setLocation(device.location ?? '');
     setRoomNumber(device.roomNumber ?? '');
+    setImageUrl(device.imageUrl ?? '');
+    setImageStoragePath(device.imageStoragePath ?? '');
+    setSelectedInput(device.selectedInput ?? '');
     setType(device.type);
     setRole(device.role ?? 'standard');
     setPgmPort(device.pgmPort ?? '');
@@ -136,6 +143,9 @@ export default function DeviceEditor({ device, layers, selectionCount, onSave, o
       model: model.trim() || undefined,
       location: role === 'wallbox' ? (location.trim() || undefined) : undefined,
       roomNumber: role === 'wallbox' ? (roomNumber.trim() || undefined) : undefined,
+      imageUrl: role === 'source' ? (imageUrl.trim() || undefined) : undefined,
+      imageStoragePath: role === 'source' ? (imageStoragePath.trim() || undefined) : undefined,
+      selectedInput: (role === 'switcher' || role === 'router') ? (selectedInput || undefined) : undefined,
       type, role,
       pgmPort: role === 'switcher' ? (pgmPort || undefined) : undefined,
       normals: role === 'patchbay' ? normals : undefined,
@@ -323,10 +333,19 @@ export default function DeviceEditor({ device, layers, selectionCount, onSave, o
           <label className="block text-[10px] uppercase tracking-[0.12em] text-neutral-500 mb-2 font-semibold">
             역할 <span className="text-neutral-600 normal-case tracking-normal ml-1">Device Role</span>
           </label>
-          <div className="grid grid-cols-6 gap-1 p-1 bg-white/5 rounded-lg border border-white/10">
+          <div className="grid grid-cols-3 gap-1 p-1 bg-white/5 rounded-lg border border-white/10">
             {DEVICE_ROLES.map(r => {
               const active = role === r;
-              const icon = r === 'switcher' ? '⇆' : r === 'router' ? '⇅' : r === 'splitter' ? '⇶' : r === 'patchbay' ? '⊟' : r === 'wallbox' ? '▦' : '◻';
+              const icon =
+                r === 'switcher' ? '⇆'
+                : r === 'router' ? '⇅'
+                : r === 'splitter' ? '⇶'
+                : r === 'patchbay' ? '⊟'
+                : r === 'wallbox' ? '▦'
+                : r === 'source' ? '▶'
+                : r === 'display' ? '🖵'
+                : r === 'connector' ? '━'
+                : '◻';
               return (
                 <button
                   key={r}
@@ -340,11 +359,14 @@ export default function DeviceEditor({ device, layers, selectionCount, onSave, o
             })}
           </div>
           <div className="mt-1.5 text-[10px] text-neutral-600 leading-relaxed">
-            {role === 'switcher' && '⇆ 여러 입력 중 선택된 소스를 출력으로. PGM 출력 지정 가능.'}
-            {role === 'router' && '⇅ 모든 입력을 모든 출력으로 자유롭게 라우팅.'}
+            {role === 'switcher' && '⇆ 여러 입력 중 선택된 소스를 출력으로. PGM 출력 + 현재 선택된 입력 지정.'}
+            {role === 'router' && '⇅ 지정된 입력을 출력으로 라우팅.'}
             {role === 'splitter' && '⇶ 하나의 입력을 여러 출력으로 분배 (VDA/DA).'}
             {role === 'patchbay' && '⊟ 물리 패치베이. 기본 배선(normal)과 수동 패치(patch) 구분.'}
             {role === 'wallbox' && '▦ 벽면 판넬 월박스. 현장 장소별 포트 접점.'}
+            {role === 'source' && '▶ 신호 소스 (카메라, 플레이어 등). 이미지를 올리면 디스플레이에 재생됨.'}
+            {role === 'display' && '🖵 신호 디스플레이 (모니터, 벽). 연결된 소스의 이미지를 표시.'}
+            {role === 'connector' && '━ 통과 장비 (케이블, 변환기). 신호를 그대로 흘려보냄.'}
             {role === 'standard' && '◻ 일반 장비. 1:1 포트 매핑.'}
           </div>
         </div>
@@ -369,6 +391,117 @@ export default function DeviceEditor({ device, layers, selectionCount, onSave, o
             <div className="mt-1.5 text-[10px] text-neutral-500">
               지정하면 장비카드에 「PGM」 뱃지가 붙고, 신호추적시 이 출력이 우선.
             </div>
+          </div>
+        )}
+
+        {/* Source 이미지 업로드 */}
+        {role === 'source' && (
+          <div className="bg-gradient-to-br from-lime-500/10 to-transparent border border-lime-500/20 rounded-lg p-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <span className="text-[15px]">▶</span>
+              <div>
+                <div className="text-[11px] font-bold text-lime-300">소스 이미지</div>
+                <div className="text-[10px] text-neutral-500">연결된 디스플레이에서 이 이미지를 재생합니다</div>
+              </div>
+            </div>
+
+            {imageUrl ? (
+              <div className="relative group">
+                <img src={imageUrl} alt="Source preview"
+                  className="w-full max-h-48 object-contain bg-black/60 rounded border border-lime-500/20" />
+                <button
+                  onClick={async () => {
+                    if (imageStoragePath) {
+                      await (supabase as any).storage.from('device-images').remove([imageStoragePath]);
+                    }
+                    setImageUrl('');
+                    setImageStoragePath('');
+                  }}
+                  className="absolute top-1 right-1 w-6 h-6 rounded bg-rose-500/90 hover:bg-rose-500 text-white text-[11px] opacity-0 group-hover:opacity-100 transition"
+                  title="이미지 제거"
+                >✕</button>
+              </div>
+            ) : (
+              <div className="text-[10px] text-neutral-500 italic py-2 text-center bg-black/30 rounded">
+                이미지가 없음
+              </div>
+            )}
+
+            <label className={`block w-full cursor-pointer ${uploadingImage ? 'opacity-50 pointer-events-none' : ''}`}>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  setUploadingImage(true);
+                  // 업로드 경로: {deviceId}/{timestamp}_{name}
+                  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+                  const path = `${device.id}/${Date.now()}_${safeName}`;
+                  const { error } = await (supabase as any).storage
+                    .from('device-images')
+                    .upload(path, file, { cacheControl: '3600', upsert: false });
+                  if (error) {
+                    alert(`업로드 실패: ${error.message}\n\n"device-images" 버킷이 있는지 확인 (schema.sql 실행)`);
+                    console.error(error);
+                  } else {
+                    // 이전 파일 삭제
+                    if (imageStoragePath) {
+                      await (supabase as any).storage.from('device-images').remove([imageStoragePath]);
+                    }
+                    const { data: pub } = (supabase as any).storage.from('device-images').getPublicUrl(path);
+                    setImageUrl(pub.publicUrl);
+                    setImageStoragePath(path);
+                  }
+                  setUploadingImage(false);
+                  e.target.value = '';
+                }}
+                className="hidden"
+              />
+              <div className="w-full py-2 text-center text-[11px] font-medium rounded bg-lime-500/20 hover:bg-lime-500/35 text-lime-200 border border-lime-500/30 transition">
+                {uploadingImage ? '⏳ 업로드 중...' : imageUrl ? '🖼 이미지 교체' : '📤 이미지 업로드'}
+              </div>
+            </label>
+
+            <div className="text-[10px] text-neutral-500">
+              또는 외부 URL 직접 입력:
+            </div>
+            <input
+              type="url"
+              value={imageUrl}
+              onChange={e => { setImageUrl(e.target.value); setImageStoragePath(''); }}
+              placeholder="https://example.com/image.jpg"
+              className="w-full bg-neutral-900 border border-lime-500/20 rounded px-2 py-1 text-[11px] font-mono text-neutral-200 focus:border-lime-400 focus:outline-none"
+            />
+          </div>
+        )}
+
+        {/* Switcher/Router 현재 선택 입력 */}
+        {(role === 'switcher' || role === 'router') && inputs.length > 0 && (
+          <div className="bg-gradient-to-br from-cyan-500/10 to-transparent border border-cyan-500/20 rounded-lg p-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <span className="text-[15px]">{role === 'switcher' ? '⇆' : '⇅'}</span>
+              <div>
+                <div className="text-[11px] font-bold text-cyan-300">현재 선택된 입력 (시뮬레이션)</div>
+                <div className="text-[10px] text-neutral-500">
+                  {role === 'switcher'
+                    ? '이 입력의 신호가 PGM/모든 출력으로 나감'
+                    : '이 입력의 신호가 출력으로 전달됨'}
+                </div>
+              </div>
+            </div>
+            <select
+              value={selectedInput}
+              onChange={e => setSelectedInput(e.target.value)}
+              className="w-full bg-neutral-900 border border-cyan-500/30 rounded px-2 py-1.5 text-[12px] font-mono text-cyan-100 focus:border-cyan-400 focus:outline-none"
+            >
+              <option value="">(선택 없음 — 신호 없음)</option>
+              {inputs.map(i => (
+                <option key={i.name} value={i.name}>
+                  {i.name}{i.label ? ` — ${i.label}` : ''}
+                </option>
+              ))}
+            </select>
           </div>
         )}
 

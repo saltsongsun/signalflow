@@ -11,9 +11,11 @@ type DeviceSeed = Omit<Device, 'inputsMeta' | 'outputsMeta' | 'physPorts' | 'rou
 
 const videoDevices: DeviceSeed[] = [
   // Col 1: Sources
-  { id: 'cam1', name: 'CAM 1', type: 'video', x: 40, y: 40, inputs: [], outputs: ['SDI'],
+  { id: 'cam1', name: 'CAM 1', type: 'video', role: 'source', x: 40, y: 40, inputs: [], outputs: ['SDI'],
+    imageUrl: 'https://picsum.photos/seed/cam1/800/450',
     outputsMeta: { 'SDI': { label: 'CAM-1 12G OP', connType: '12G-SDI' } } },
-  { id: 'cam2', name: 'CAM 2', type: 'video', x: 40, y: 140, inputs: [], outputs: ['SDI'],
+  { id: 'cam2', name: 'CAM 2', type: 'video', role: 'source', x: 40, y: 140, inputs: [], outputs: ['SDI'],
+    imageUrl: 'https://picsum.photos/seed/cam2/800/450',
     outputsMeta: { 'SDI': { label: 'CAM-2 12G OP', connType: '12G-SDI' } } },
   { id: 'cam3', name: 'CAM 3', type: 'video', x: 40, y: 240, inputs: [], outputs: ['SDI'],
     outputsMeta: { 'SDI': { label: 'CAM-3 12G OP', connType: '12G-SDI' } } },
@@ -155,7 +157,7 @@ const videoDevices: DeviceSeed[] = [
     } },
 
   // Col 5: Main / Sub Switcher
-  { id: 'mvs', name: 'Main Video Switcher', model: 'Sony XVS-G1', type: 'video', role: 'switcher', pgmPort: 'PGM 1', x: 980, y: 40, width: 210,
+  { id: 'mvs', name: 'Main Video Switcher', model: 'Sony XVS-G1', type: 'video', role: 'switcher', pgmPort: 'PGM 1', selectedInput: 'IP1', x: 980, y: 40, width: 210,
     inputs: Array.from({length:20},(_,i)=>`IP${i+1}`),
     outputs: ['PGM 1','PGM 2','CLEAN 1','CLEAN 2','PVW 1','AUX 1','AUX 2','AUX 3','AUX 4','AUX 5','AUX 6','M/V 1','M/V 2'],
     inputsMeta: {
@@ -229,7 +231,7 @@ const videoDevices: DeviceSeed[] = [
     inputsMeta: { 'HDMI': { connType: 'HDMI' } } },
   { id: 'led_bottom', name: '주경기장 하단 LED', type: 'video', x: 1460, y: 240, inputs: ['HDMI'], outputs: [],
     inputsMeta: { 'HDMI': { connType: 'HDMI' } } },
-  { id: 'main_pgm', name: 'MAIN PGM 송출', type: 'combined', x: 1460, y: 360, inputs: ['SDI-1','SDI-2','SDI-3'], outputs: [],
+  { id: 'main_pgm', name: 'MAIN PGM 송출', type: 'combined', role: 'display', x: 1460, y: 360, inputs: ['SDI-1','SDI-2','SDI-3'], outputs: [],
     inputsMeta: { 'SDI-1': { connType: '12G-SDI' },'SDI-2':{connType:'12G-SDI'},'SDI-3':{connType:'12G-SDI'} } },
   { id: 'main_clean', name: 'MAIN CLEAN 송출', type: 'combined', x: 1460, y: 480, inputs: ['SDI-1','SDI-2','SDI-3'], outputs: [],
     inputsMeta: { 'SDI-1': { connType: '12G-SDI' },'SDI-2':{connType:'12G-SDI'},'SDI-3':{connType:'12G-SDI'} } },

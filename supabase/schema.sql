@@ -69,6 +69,9 @@ alter table public.devices add column if not exists location text;
 alter table public.devices add column if not exists "roomNumber" text;
 alter table public.devices add column if not exists "rackId" text;
 alter table public.devices add column if not exists "rackUnit" integer;
+alter table public.devices add column if not exists "imageUrl" text;
+alter table public.devices add column if not exists "imageStoragePath" text;
+alter table public.devices add column if not exists "selectedInput" text;
 alter table public.devices add column if not exists "groupId" text;
 alter table public.devices add column if not exists "groupName" text;
 alter table public.connections add column if not exists conn_type text;
@@ -127,3 +130,26 @@ create policy "Public read racks" on public.racks for select using (true);
 create policy "Public insert racks" on public.racks for insert with check (true);
 create policy "Public update racks" on public.racks for update using (true);
 create policy "Public delete racks" on public.racks for delete using (true);
+
+-- ======================================================================
+-- Storage bucket for device source images
+-- Run this in the SQL Editor to allow image uploads for 'source' devices.
+-- ======================================================================
+insert into storage.buckets (id, name, public)
+values ('device-images', 'device-images', true)
+on conflict (id) do nothing;
+
+-- public access policies for the bucket
+drop policy if exists "Public read device-images" on storage.objects;
+drop policy if exists "Public upload device-images" on storage.objects;
+drop policy if exists "Public update device-images" on storage.objects;
+drop policy if exists "Public delete device-images" on storage.objects;
+
+create policy "Public read device-images" on storage.objects
+  for select using (bucket_id = 'device-images');
+create policy "Public upload device-images" on storage.objects
+  for insert with check (bucket_id = 'device-images');
+create policy "Public update device-images" on storage.objects
+  for update using (bucket_id = 'device-images');
+create policy "Public delete device-images" on storage.objects
+  for delete using (bucket_id = 'device-images');
