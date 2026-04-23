@@ -8,21 +8,20 @@ import LayerPanel from './LayerPanel';
 type TraceMode = 'both' | 'upstream' | 'downstream';
 
 const PORT_H = 22;
-const HEADER_H = 44;
+const HEADER_H = 46;
 const PADDING_Y = 14;
-const DRAG_THRESHOLD = 4; // px — 이 이상 움직이면 드래그로 판정, 아니면 클릭
+const DRAG_THRESHOLD = 4;
 
 function deviceWidth(d: Device) { return d.width ?? 200; }
 
-// 레이어 가시성 고려한 포트 필터
-function visiblePorts(d: Device, dir: 'in' | 'out', visibleLayerIds: Set<string>): { name: string; index: number }[] {
+function visiblePorts(d: Device, dir: 'in' | 'out', visibleLayerIds: Set<string>) {
   const arr = dir === 'in' ? d.inputs : d.outputs;
   const meta = dir === 'in' ? d.inputsMeta : d.outputsMeta;
   return arr
     .map((name, index) => ({ name, index }))
     .filter(p => {
       const lid = meta?.[p.name]?.layerId;
-      if (!lid) return true; // 레이어 미지정은 항상 표시
+      if (!lid) return true;
       return visibleLayerIds.has(lid);
     });
 }
@@ -35,7 +34,6 @@ function deviceHeight(d: Device, visibleLayerIds: Set<string>) {
   return HEADER_H + PADDING_Y * 2 + portCount * PORT_H;
 }
 
-// 특정 포트의 y좌표 (가시 포트 기준 renderIndex 사용)
 function portYFromRenderIdx(d: Device, renderIdx: number) {
   return d.y + HEADER_H + PADDING_Y + renderIdx * PORT_H + PORT_H / 2;
 }
@@ -54,20 +52,30 @@ export default function SignalFlowMap() {
   const [editingDevice, setEditingDevice] = useState<Device | null>(null);
   const [showLayerPanel, setShowLayerPanel] = useState(false);
   const [pendingFrom, setPendingFrom] = useState<{ device: string; port: string; connType?: ConnectionType } | null>(null);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
 
-  // 뷰포트
   const [scale, setScale] = useState(0.7);
-  const [offset, setOffset] = useState({ x: 40, y: 60 });
+  const [offset, setOffset] = useState({ x: 40, y: 70 });
 
-  // 드래그 상태
-  type DragState =
+  // Drag state managed via refs (to avoid stale closures in window listeners)
+  const dragRef = useRef<
     | { kind: 'none' }
     | { kind: 'canvas'; startX: number; startY: number; origOffset: { x: number; y: number } }
     | { kind: 'device'; ids: string[]; startX: number; startY: number; origPositions: Record<string, { x: number; y: number }>; moved: boolean; clickedId: string; shiftKey: boolean }
-    | { kind: 'marquee'; startX: number; startY: number; curX: number; curY: number };
-  const [drag, setDrag] = useState<DragState>({ kind: 'none' });
+    | { kind: 'marquee'; startX: number; startY: number; curX: number; curY: number; worldStart: { x: number; y: number } }
+  >({ kind: 'none' });
+  const [dragKind, setDragKind] = useState<'none' | 'canvas' | 'device' | 'marquee'>('none');
+  const [marqueeRect, setMarqueeRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
 
-  // Load
+  // Latest state mirror for window listeners
+  const stateRef = useRef({ scale, offset, editMode, devices, selectedIds, visibleLayerIds: new Set<string>() });
+  stateRef.current.scale = scale;
+  stateRef.current.offset = offset;
+  stateRef.current.editMode = editMode;
+  stateRef.current.devices = devices;
+  stateRef.current.selectedIds = selectedIds;
+
+  // Load data
   useEffect(() => {
     (async () => {
       const [devRes, connRes, layerRes] = await Promise.all([
@@ -75,15 +83,12 @@ export default function SignalFlowMap() {
         supabase.from('connections').select('*'),
         supabase.from('layers').select('*'),
       ]);
-
-      // 레이어 없으면 기본 시드
       let loadedLayers = (layerRes.data ?? []) as Layer[];
       if (loadedLayers.length === 0) {
         await (supabase as any).from('layers').insert(DEFAULT_LAYERS);
         loadedLayers = DEFAULT_LAYERS;
       }
       setLayers(loadedLayers);
-
       if (devRes.data && devRes.data.length > 0) {
         setDevices(devRes.data as any);
         setConnections((connRes.data ?? []) as any);
@@ -113,12 +118,10 @@ export default function SignalFlowMap() {
         else if (p.eventType === 'UPDATE') setLayers(prev => prev.map(l => l.id === p.new.id ? p.new : l));
         else if (p.eventType === 'DELETE') setLayers(prev => prev.filter(l => l.id !== p.old.id));
       });
-
     ch.on('presence', { event: 'sync' }, () => {
       const state = ch.presenceState();
       setOnline(Object.keys(state).length || 1);
     });
-
     ch.subscribe(async (status: string) => {
       if (status === 'SUBSCRIBED') await ch.track({ user_id: crypto.randomUUID() });
     });
@@ -128,18 +131,15 @@ export default function SignalFlowMap() {
 
   const devById = useMemo(() => new Map(devices.map(d => [d.id, d])), [devices]);
   const visibleLayerIds = useMemo(() => new Set(layers.filter(l => l.visible).map(l => l.id)), [layers]);
+  stateRef.current.visibleLayerIds = visibleLayerIds;
   const layerById = useMemo(() => new Map(layers.map(l => [l.id, l])), [layers]);
 
-  // 가시 장비: 적어도 하나의 가시 포트가 있거나 포트가 전혀 없는 장비
   const isDeviceVisible = (d: Device): boolean => {
     const hasAny = d.inputs.length + d.outputs.length > 0;
     if (!hasAny) return true;
-    const vi = visiblePorts(d, 'in', visibleLayerIds).length;
-    const vo = visiblePorts(d, 'out', visibleLayerIds).length;
-    return vi + vo > 0;
+    return visiblePorts(d, 'in', visibleLayerIds).length + visiblePorts(d, 'out', visibleLayerIds).length > 0;
   };
 
-  // 케이블 가시성: from_port와 to_port 모두 가시 레이어
   const isConnVisible = (c: Connection): boolean => {
     const from = devById.get(c.from_device);
     const to = devById.get(c.to_device);
@@ -151,7 +151,6 @@ export default function SignalFlowMap() {
     return isDeviceVisible(from) && isDeviceVisible(to);
   };
 
-  // trace
   const traced = useMemo(() => {
     if (!traceId) return { devices: new Set<string>(), connections: new Set<string>() };
     const dSet = new Set<string>([traceId]);
@@ -175,101 +174,116 @@ export default function SignalFlowMap() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [traceId, connections, traceMode, visibleLayerIds, devices]);
 
-  // ========== 마우스 이벤트 ==========
-  const worldFromClient = (cx: number, cy: number) => ({
-    x: (cx - offset.x) / scale,
-    y: (cy - offset.y) / scale,
-  });
+  // ===== Window-level drag listeners (reliable for click-vs-drag) =====
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      const d = dragRef.current;
+      if (d.kind === 'canvas') {
+        setOffset({ x: d.origOffset.x + (e.clientX - d.startX), y: d.origOffset.y + (e.clientY - d.startY) });
+      } else if (d.kind === 'device') {
+        const dx = (e.clientX - d.startX) / stateRef.current.scale;
+        const dy = (e.clientY - d.startY) / stateRef.current.scale;
+        const movedEnough = Math.abs(e.clientX - d.startX) > DRAG_THRESHOLD || Math.abs(e.clientY - d.startY) > DRAG_THRESHOLD;
+        if (movedEnough) {
+          if (!d.moved) { d.moved = true; setDragKind('device'); }
+          setDevices(prev => prev.map(dev => {
+            const orig = d.origPositions[dev.id];
+            if (orig) return { ...dev, x: orig.x + dx, y: orig.y + dy };
+            return dev;
+          }));
+        }
+      } else if (d.kind === 'marquee') {
+        const sc = stateRef.current.scale;
+        const off = stateRef.current.offset;
+        const cx = (e.clientX - off.x) / sc;
+        const cy = (e.clientY - off.y) / sc;
+        d.curX = cx; d.curY = cy;
+        const minX = Math.min(d.worldStart.x, cx);
+        const minY = Math.min(d.worldStart.y, cy);
+        setMarqueeRect({ x: minX, y: minY, w: Math.abs(cx - d.worldStart.x), h: Math.abs(cy - d.worldStart.y) });
+      }
+    };
 
+    const onUp = async (e: MouseEvent) => {
+      const d = dragRef.current;
+      if (d.kind === 'device') {
+        if (d.moved) {
+          // persist all moved
+          const latestDevices = stateRef.current.devices;
+          const saves = d.ids.map(id => {
+            const latest = latestDevices.find(x => x.id === id);
+            return latest ? (supabase as any).from('devices').update({ x: latest.x, y: latest.y }).eq('id', id) : null;
+          }).filter(Boolean);
+          await Promise.all(saves);
+        } else {
+          // it's a click
+          const clickedDev = stateRef.current.devices.find(x => x.id === d.clickedId);
+          if (clickedDev) {
+            if (stateRef.current.editMode) {
+              if (d.shiftKey) {
+                setSelectedIds(prev => {
+                  const next = new Set(prev);
+                  if (next.has(d.clickedId)) next.delete(d.clickedId);
+                  else next.add(d.clickedId);
+                  return next;
+                });
+              } else {
+                setSelectedIds(new Set([d.clickedId]));
+                setEditingDevice(clickedDev);
+              }
+            } else {
+              setTraceId(t => t === d.clickedId ? null : d.clickedId);
+            }
+          }
+        }
+      } else if (d.kind === 'marquee') {
+        const minX = Math.min(d.worldStart.x, d.curX);
+        const maxX = Math.max(d.worldStart.x, d.curX);
+        const minY = Math.min(d.worldStart.y, d.curY);
+        const maxY = Math.max(d.worldStart.y, d.curY);
+        const vis = stateRef.current.visibleLayerIds;
+        const inside = stateRef.current.devices.filter(dev => {
+          if (dev.inputs.length + dev.outputs.length > 0) {
+            const vi = visiblePorts(dev, 'in', vis).length;
+            const vo = visiblePorts(dev, 'out', vis).length;
+            if (vi + vo === 0) return false;
+          }
+          const w = deviceWidth(dev);
+          const h = deviceHeight(dev, vis);
+          return dev.x < maxX && dev.x + w > minX && dev.y < maxY && dev.y + h > minY;
+        }).map(dev => dev.id);
+        setSelectedIds(new Set(inside));
+        setMarqueeRect(null);
+      }
+      dragRef.current = { kind: 'none' };
+      setDragKind('none');
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, []);
+
+  // Canvas background mousedown
   const onCanvasMouseDown = (e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
-    // 장비/포트 위에서 시작한 드래그는 여기서 처리 안함
     if (target.closest('[data-device-id], [data-port], [data-ui]')) return;
 
     if (editMode && e.shiftKey) {
-      // Shift+드래그 = 마키 선택
-      const w = worldFromClient(e.clientX, e.clientY);
-      setDrag({ kind: 'marquee', startX: w.x, startY: w.y, curX: w.x, curY: w.y });
+      const wx = (e.clientX - offset.x) / scale;
+      const wy = (e.clientY - offset.y) / scale;
+      dragRef.current = { kind: 'marquee', startX: e.clientX, startY: e.clientY, curX: wx, curY: wy, worldStart: { x: wx, y: wy } };
+      setDragKind('marquee');
+      setMarqueeRect({ x: wx, y: wy, w: 0, h: 0 });
     } else {
-      // 캔버스 팬
-      setDrag({ kind: 'canvas', startX: e.clientX, startY: e.clientY, origOffset: offset });
+      dragRef.current = { kind: 'canvas', startX: e.clientX, startY: e.clientY, origOffset: offset };
+      setDragKind('canvas');
       if (!editMode) setTraceId(null);
       if (editMode && !e.shiftKey) setSelectedIds(new Set());
     }
-  };
-
-  const onMouseMove = (e: React.MouseEvent) => {
-    if (drag.kind === 'canvas') {
-      setOffset({
-        x: drag.origOffset.x + (e.clientX - drag.startX),
-        y: drag.origOffset.y + (e.clientY - drag.startY),
-      });
-    } else if (drag.kind === 'device' && editMode) {
-      const dx = (e.clientX - drag.startX) / scale;
-      const dy = (e.clientY - drag.startY) / scale;
-      const movedEnough = Math.abs(e.clientX - drag.startX) > DRAG_THRESHOLD || Math.abs(e.clientY - drag.startY) > DRAG_THRESHOLD;
-      if (movedEnough) {
-        setDevices(prev => prev.map(d => {
-          const orig = drag.origPositions[d.id];
-          if (orig) return { ...d, x: orig.x + dx, y: orig.y + dy };
-          return d;
-        }));
-        if (!drag.moved) setDrag({ ...drag, moved: true });
-      }
-    } else if (drag.kind === 'marquee') {
-      const w = worldFromClient(e.clientX, e.clientY);
-      setDrag({ ...drag, curX: w.x, curY: w.y });
-    }
-  };
-
-  const onMouseUp = async (e: React.MouseEvent) => {
-    if (drag.kind === 'device') {
-      if (drag.moved) {
-        // 저장 — 이동된 장비 모두
-        const updates = drag.ids.map(id => {
-          const d = devById.get(id);
-          if (!d) return null;
-          const latest = devices.find(x => x.id === id);
-          return latest ? (supabase as any).from('devices').update({ x: latest.x, y: latest.y }).eq('id', id) : null;
-        }).filter(Boolean);
-        await Promise.all(updates);
-      } else {
-        // 이동 안했으면 클릭으로 처리
-        const clicked = devById.get(drag.clickedId);
-        if (clicked) {
-          if (editMode) {
-            if (drag.shiftKey) {
-              setSelectedIds(prev => {
-                const next = new Set(prev);
-                if (next.has(drag.clickedId)) next.delete(drag.clickedId);
-                else next.add(drag.clickedId);
-                return next;
-              });
-            } else {
-              // 편집 패널 열기
-              setEditingDevice(clicked);
-              setSelectedIds(new Set([drag.clickedId]));
-            }
-          } else {
-            setTraceId(t => t === drag.clickedId ? null : drag.clickedId);
-          }
-        }
-      }
-    } else if (drag.kind === 'marquee') {
-      // 마키 영역 내 장비 모두 선택
-      const minX = Math.min(drag.startX, drag.curX);
-      const maxX = Math.max(drag.startX, drag.curX);
-      const minY = Math.min(drag.startY, drag.curY);
-      const maxY = Math.max(drag.startY, drag.curY);
-      const inside = devices.filter(d => {
-        if (!isDeviceVisible(d)) return false;
-        const w = deviceWidth(d);
-        const h = deviceHeight(d, visibleLayerIds);
-        return d.x < maxX && d.x + w > minX && d.y < maxY && d.y + h > minY;
-      }).map(d => d.id);
-      setSelectedIds(new Set(inside));
-    }
-    setDrag({ kind: 'none' });
   };
 
   const onWheel = (e: React.WheelEvent) => {
@@ -279,7 +293,6 @@ export default function SignalFlowMap() {
     const my = e.clientY - rect.top;
     const delta = e.deltaY > 0 ? 0.9 : 1.1;
     const newScale = Math.min(2, Math.max(0.15, scale * delta));
-    // 마우스 포인터 기준 줌
     const wx = (mx - offset.x) / scale;
     const wy = (my - offset.y) / scale;
     setScale(newScale);
@@ -289,10 +302,9 @@ export default function SignalFlowMap() {
   const onDeviceMouseDown = (e: React.MouseEvent, d: Device) => {
     e.stopPropagation();
     if (!editMode) {
-      // 보기 모드는 클릭에서 처리
+      // in view mode, let click handler handle trace
       return;
     }
-    // 편집모드: 드래그 시작. 선택되어 있으면 그 그룹 전체, 아니면 이 장비만.
     const isInSelection = selectedIds.has(d.id);
     const idsToMove = isInSelection && selectedIds.size > 0 ? Array.from(selectedIds) : [d.id];
     const origPositions: Record<string, { x: number; y: number }> = {};
@@ -300,18 +312,20 @@ export default function SignalFlowMap() {
       const dev = devById.get(id);
       if (dev) origPositions[id] = { x: dev.x, y: dev.y };
     });
-    setDrag({
+    dragRef.current = {
       kind: 'device',
       ids: idsToMove,
       startX: e.clientX, startY: e.clientY,
       origPositions, moved: false,
       clickedId: d.id,
       shiftKey: e.shiftKey,
-    });
+    };
+    // don't set dragKind yet — wait until actual movement, so we don't show "dragging" cursor for simple click
   };
 
+  // View mode click on device → trace
   const onDeviceClickView = (e: React.MouseEvent, d: Device) => {
-    if (editMode) return; // 편집모드는 mouseup에서 처리
+    if (editMode) return;
     e.stopPropagation();
     setTraceId(t => t === d.id ? null : d.id);
   };
@@ -321,7 +335,6 @@ export default function SignalFlowMap() {
     if (!editMode) return;
     const d = devById.get(deviceId);
     if (!d) return;
-
     if (isOutput) {
       const ct = d.outputsMeta?.[port]?.connType;
       setPendingFrom({ device: deviceId, port, connType: ct });
@@ -332,8 +345,7 @@ export default function SignalFlowMap() {
         id: crypto.randomUUID(),
         from_device: pendingFrom.device,
         from_port: pendingFrom.port,
-        to_device: deviceId,
-        to_port: port,
+        to_device: deviceId, to_port: port,
         conn_type: pendingFrom.connType ?? d.inputsMeta?.[port]?.connType ?? null,
       };
       await (supabase as any).from('connections').delete().eq('to_device', deviceId).eq('to_port', port);
@@ -347,9 +359,8 @@ export default function SignalFlowMap() {
     const defaultLayer = layers[0]?.id ?? 'layer_video';
     const d: Device = {
       id, name: '새 장비', type: 'video',
-      x: (-offset.x + 300) / scale, y: (-offset.y + 200) / scale,
-      width: 200,
-      inputs: ['IN-1'], outputs: ['OUT-1'],
+      x: (-offset.x + 400) / scale, y: (-offset.y + 200) / scale,
+      width: 200, inputs: ['IN-1'], outputs: ['OUT-1'],
       inputsMeta: { 'IN-1': { name: 'IN-1', layerId: defaultLayer } },
       outputsMeta: { 'OUT-1': { name: 'OUT-1', layerId: defaultLayer } },
       physPorts: {}, routing: {},
@@ -365,15 +376,13 @@ export default function SignalFlowMap() {
   };
   const handleDeleteDevice = async () => {
     if (!editingDevice) return;
-    await (supabase as any).from('connections').delete()
-      .or(`from_device.eq.${editingDevice.id},to_device.eq.${editingDevice.id}`);
+    await (supabase as any).from('connections').delete().or(`from_device.eq.${editingDevice.id},to_device.eq.${editingDevice.id}`);
     await (supabase as any).from('devices').delete().eq('id', editingDevice.id);
     setEditingDevice(null);
   };
-
   const handleDeleteSelected = async () => {
     if (selectedIds.size === 0) return;
-    if (!confirm(`선택된 ${selectedIds.size}개 장비를 삭제합니다.`)) return;
+    if (!confirm(`${selectedIds.size}개 장비 삭제?`)) return;
     const ids = Array.from(selectedIds);
     for (const id of ids) {
       await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
@@ -381,9 +390,8 @@ export default function SignalFlowMap() {
     }
     setSelectedIds(new Set());
   };
-
   const handleResetAll = async () => {
-    if (!confirm('모든 장비/연결/레이어를 삭제하고 초기 데이터로 재시드합니다.')) return;
+    if (!confirm('모든 데이터 삭제 후 도면 초기 데이터로 재시드?')) return;
     await (supabase as any).from('connections').delete().neq('id', '00000000-0000-0000-0000-000000000000');
     await (supabase as any).from('devices').delete().neq('id', '__nope__');
     await (supabase as any).from('layers').delete().neq('id', '__nope__');
@@ -397,128 +405,164 @@ export default function SignalFlowMap() {
   };
 
   if (loading) {
-    return <div className="h-screen bg-neutral-950 flex items-center justify-center text-neutral-400 text-sm">불러오는 중…</div>;
+    return (
+      <div className="h-screen bg-gradient-to-br from-neutral-950 via-black to-neutral-950 flex items-center justify-center">
+        <div className="flex items-center gap-3 text-neutral-400 text-sm">
+          <div className="w-4 h-4 border-2 border-sky-500 border-t-transparent rounded-full animate-spin"></div>
+          불러오는 중…
+        </div>
+      </div>
+    );
   }
 
   return (
-    <div className="h-screen w-screen bg-neutral-950 text-white overflow-hidden relative select-none">
+    <div className="h-screen w-screen bg-gradient-to-br from-neutral-950 via-black to-neutral-950 text-white overflow-hidden relative select-none">
       {/* Top bar */}
-      <div className="absolute top-0 left-0 right-0 z-30 bg-neutral-950/85 backdrop-blur-md border-b border-neutral-800 px-4 h-12 flex items-center gap-3" data-ui>
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
-          <span className="text-sm font-medium">Signal Flow Map</span>
-          <span className="text-xs text-neutral-500 ml-1">경남이스포츠 UHD</span>
-        </div>
-
-        <div className="w-px h-6 bg-neutral-800"></div>
-
-        <div className="flex items-center gap-1 bg-neutral-900 rounded p-0.5">
-          <button
-            onClick={() => { setEditMode(false); setPendingFrom(null); setSelectedIds(new Set()); }}
-            className={`px-3 py-1 text-xs rounded ${!editMode ? 'bg-neutral-700 text-white' : 'text-neutral-400 hover:text-white'}`}
-          >보기</button>
-          <button
-            onClick={() => { setEditMode(true); setTraceId(null); }}
-            className={`px-3 py-1 text-xs rounded ${editMode ? 'bg-amber-600 text-white' : 'text-neutral-400 hover:text-white'}`}
-          >편집</button>
-        </div>
-
-        {!editMode && traceId && (
-          <div className="flex items-center gap-1 bg-neutral-900 rounded p-0.5">
-            {(['both', 'upstream', 'downstream'] as TraceMode[]).map(m => (
-              <button
-                key={m}
-                onClick={() => setTraceMode(m)}
-                className={`px-2.5 py-1 text-[11px] rounded ${traceMode === m ? 'bg-sky-600 text-white' : 'text-neutral-400 hover:text-white'}`}
-              >{m === 'both' ? '양방향' : m === 'upstream' ? '상류' : '하류'}</button>
-            ))}
+      <div
+        data-ui
+        className="absolute top-0 left-0 right-0 z-30 h-14 bg-black/60 backdrop-blur-2xl border-b border-white/10 shadow-xl shadow-black/40"
+      >
+        <div className="h-full flex items-center gap-3 px-4">
+          {/* Logo */}
+          <div className="flex items-center gap-2.5">
+            <div className="relative w-7 h-7 rounded-lg bg-gradient-to-br from-sky-400 to-purple-600 flex items-center justify-center shadow-lg shadow-sky-500/30">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <circle cx="3" cy="3" r="1.5" fill="white"/>
+                <circle cx="13" cy="3" r="1.5" fill="white"/>
+                <circle cx="3" cy="13" r="1.5" fill="white"/>
+                <circle cx="13" cy="13" r="1.5" fill="white"/>
+                <path d="M3 3 L13 13 M13 3 L3 13" stroke="white" strokeWidth="0.8" opacity="0.6"/>
+              </svg>
+            </div>
+            <div>
+              <div className="text-[13px] font-bold tracking-tight leading-tight">Signal Flow Map</div>
+              <div className="text-[9.5px] text-neutral-500 leading-tight font-mono">경남이스포츠 · UHD</div>
+            </div>
           </div>
-        )}
 
-        {editMode && (
-          <>
-            <button onClick={handleAddDevice} className="px-3 py-1 text-xs bg-sky-600 hover:bg-sky-500 rounded text-white">＋ 장비</button>
-            {selectedIds.size > 0 && (
-              <>
-                <span className="text-xs text-amber-400">{selectedIds.size}개 선택됨</span>
-                <button onClick={handleDeleteSelected} className="px-2 py-1 text-xs bg-rose-900/60 hover:bg-rose-600 rounded text-rose-200 hover:text-white">삭제</button>
-              </>
-            )}
-            <button onClick={handleResetAll} className="px-3 py-1 text-xs bg-neutral-800 hover:bg-rose-600 rounded text-neutral-400 hover:text-white">⟲ 초기화</button>
-          </>
-        )}
+          <div className="w-px h-7 bg-white/10"></div>
 
-        <button
-          onClick={() => setShowLayerPanel(s => !s)}
-          className={`px-3 py-1 text-xs rounded ${showLayerPanel ? 'bg-purple-600 text-white' : 'bg-neutral-900 text-neutral-400 hover:text-white'}`}
-          data-ui
-        >⧉ 레이어 ({layers.filter(l => l.visible).length}/{layers.length})</button>
+          {/* Mode toggle */}
+          <div className="flex items-center gap-0.5 bg-white/5 rounded-lg p-0.5 border border-white/10">
+            <button
+              onClick={() => { setEditMode(false); setPendingFrom(null); setSelectedIds(new Set()); }}
+              className={`px-3 py-1.5 text-[11px] font-medium rounded-md transition-all ${!editMode ? 'bg-gradient-to-r from-neutral-700 to-neutral-600 text-white shadow-md' : 'text-neutral-400 hover:text-white'}`}
+            >👁 보기</button>
+            <button
+              onClick={() => { setEditMode(true); setTraceId(null); }}
+              className={`px-3 py-1.5 text-[11px] font-medium rounded-md transition-all ${editMode ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md shadow-amber-500/30' : 'text-neutral-400 hover:text-white'}`}
+            >✎ 편집</button>
+          </div>
 
-        <div className="ml-auto flex items-center gap-3 text-xs text-neutral-500">
-          <span>{devices.length} · {connections.length} cables</span>
-          <div className="w-px h-4 bg-neutral-800"></div>
-          <span className="text-emerald-400">● {online}</span>
+          {/* Layer toggle — always visible */}
+          <button
+            onClick={() => setShowLayerPanel(s => !s)}
+            className={`px-3 py-1.5 text-[11px] font-medium rounded-lg border transition-all ${showLayerPanel ? 'bg-gradient-to-r from-purple-500 to-purple-600 text-white border-purple-400 shadow-md shadow-purple-500/30' : 'bg-white/5 border-white/10 text-neutral-300 hover:text-white hover:bg-white/10'}`}
+          >⧉ 레이어 <span className="font-mono opacity-70">{layers.filter(l => l.visible).length}/{layers.length}</span></button>
+
+          {/* Trace mode (view mode only) */}
+          {!editMode && traceId && (
+            <div className="flex items-center gap-0.5 bg-sky-500/10 border border-sky-500/30 rounded-lg p-0.5">
+              {(['both','upstream','downstream'] as TraceMode[]).map(m => (
+                <button key={m} onClick={() => setTraceMode(m)}
+                  className={`px-2.5 py-1 text-[10.5px] font-medium rounded-md transition ${traceMode === m ? 'bg-sky-500 text-white' : 'text-sky-300 hover:text-white'}`}
+                >{m === 'both' ? '양방향' : m === 'upstream' ? '⬅ 상류' : '하류 ➡'}</button>
+              ))}
+            </div>
+          )}
+
+          {/* Edit mode actions */}
+          {editMode && (
+            <>
+              <button onClick={handleAddDevice}
+                className="px-3 py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-sky-500 to-sky-600 hover:from-sky-400 hover:to-sky-500 text-white shadow-md shadow-sky-500/30 transition">＋ 장비</button>
+              {selectedIds.size > 0 && (
+                <>
+                  <div className="px-2.5 py-1 text-[11px] rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 font-medium">
+                    {selectedIds.size}개 선택
+                  </div>
+                  <button onClick={handleDeleteSelected}
+                    className="px-2.5 py-1 text-[11px] rounded-lg bg-rose-500/15 hover:bg-rose-500 text-rose-300 hover:text-white border border-rose-500/30 hover:border-rose-400 font-medium transition">삭제</button>
+                </>
+              )}
+              <button onClick={handleResetAll}
+                className="px-2.5 py-1.5 text-[11px] rounded-lg bg-white/5 hover:bg-rose-500/80 text-neutral-500 hover:text-white border border-white/10 transition">⟲</button>
+            </>
+          )}
+
+          <div className="ml-auto flex items-center gap-3 text-[11px]">
+            <span className="text-neutral-500 font-mono">{devices.length}D · {connections.length}C</span>
+            <div className="w-px h-4 bg-white/10"></div>
+            <div className="flex items-center gap-1.5">
+              <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shadow-md shadow-emerald-400/60"></div>
+              <span className="text-emerald-400 font-semibold font-mono">{online}</span>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Layer panel */}
+      {/* Layer Panel */}
       {showLayerPanel && <LayerPanel layers={layers} onClose={() => setShowLayerPanel(false)} />}
 
-      {/* Legend */}
-      <div className="absolute bottom-4 left-4 z-20 bg-neutral-900/85 backdrop-blur border border-neutral-800 rounded-lg px-3 py-2 text-[11px] space-y-1" data-ui>
-        <div className="text-neutral-500 uppercase text-[10px] tracking-wider mb-1">Type</div>
-        <div className="flex items-center gap-2"><div className="w-3 h-2 rounded-sm bg-sky-500"></div> Video</div>
-        <div className="flex items-center gap-2"><div className="w-3 h-2 rounded-sm bg-rose-500"></div> Audio</div>
-        <div className="flex items-center gap-2"><div className="w-3 h-2 rounded-sm bg-purple-500"></div> V+A</div>
-        {editMode && (
-          <div className="mt-2 pt-2 border-t border-neutral-800 text-[10px] text-neutral-500">
-            Shift+클릭: 다중선택<br/>
-            Shift+드래그: 박스선택
-          </div>
-        )}
-      </div>
-
-      {/* Pending */}
+      {/* Pending banner */}
       {pendingFrom && (
-        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-20 bg-amber-900/90 backdrop-blur border border-amber-700 rounded-lg px-4 py-2 text-xs" data-ui>
-          <div className="text-amber-200 font-medium mb-0.5">연결 대기</div>
-          <div className="text-amber-100/80">{devById.get(pendingFrom.device)?.name} · {pendingFrom.port}</div>
-          <div className="text-amber-200/60 mt-1">입력 포트 클릭 · <button onClick={() => setPendingFrom(null)} className="underline">취소</button></div>
+        <div data-ui className="absolute top-[68px] left-1/2 -translate-x-1/2 z-30 px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500/20 to-orange-500/20 backdrop-blur-xl border border-amber-500/40 shadow-2xl shadow-amber-500/20">
+          <div className="flex items-center gap-3 text-xs">
+            <div className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></div>
+            <div>
+              <span className="text-amber-200 font-semibold">연결 대기: </span>
+              <span className="text-amber-100 font-mono">{devById.get(pendingFrom.device)?.name} · {pendingFrom.port}</span>
+              <span className="text-amber-300/70 ml-2">→ 입력 포트 클릭</span>
+            </div>
+            <button onClick={() => setPendingFrom(null)} className="ml-2 text-amber-300/70 hover:text-white underline text-[10px]">취소</button>
+          </div>
         </div>
       )}
 
+      {/* Legend */}
+      <div data-ui className="absolute bottom-4 left-4 z-20 bg-black/60 backdrop-blur-xl border border-white/10 rounded-xl px-3 py-2.5 shadow-lg">
+        <div className="text-[9.5px] uppercase tracking-[0.12em] text-neutral-500 font-semibold mb-1.5">타입</div>
+        <div className="space-y-1 text-[10.5px]">
+          <div className="flex items-center gap-2"><div className="w-3 h-2.5 rounded-sm bg-gradient-to-r from-sky-400 to-sky-600 shadow-sm shadow-sky-500/50"></div> <span className="text-neutral-300">Video</span></div>
+          <div className="flex items-center gap-2"><div className="w-3 h-2.5 rounded-sm bg-gradient-to-r from-rose-400 to-rose-600 shadow-sm shadow-rose-500/50"></div> <span className="text-neutral-300">Audio</span></div>
+          <div className="flex items-center gap-2"><div className="w-3 h-2.5 rounded-sm bg-gradient-to-r from-purple-400 to-purple-600 shadow-sm shadow-purple-500/50"></div> <span className="text-neutral-300">V + A</span></div>
+        </div>
+        {editMode && (
+          <div className="mt-2.5 pt-2 border-t border-white/10 text-[9.5px] text-neutral-500 space-y-0.5">
+            <div><kbd className="px-1 py-0.5 rounded bg-white/5 border border-white/10 text-neutral-400 font-mono text-[9px]">클릭</kbd> 편집</div>
+            <div><kbd className="px-1 py-0.5 rounded bg-white/5 border border-white/10 text-neutral-400 font-mono text-[9px]">Shift</kbd> 다중선택</div>
+            <div><kbd className="px-1 py-0.5 rounded bg-white/5 border border-white/10 text-neutral-400 font-mono text-[9px]">Shift+드래그</kbd> 박스</div>
+          </div>
+        )}
+      </div>
+
       {/* Canvas */}
       <div
-        className={`absolute inset-0 pt-12 ${drag.kind === 'canvas' ? 'cursor-grabbing' : 'cursor-grab'}`}
+        className={`absolute inset-0 pt-14 ${dragKind === 'canvas' ? 'cursor-grabbing' : dragKind === 'marquee' ? 'cursor-crosshair' : 'cursor-grab'}`}
         onMouseDown={onCanvasMouseDown}
-        onMouseMove={onMouseMove}
-        onMouseUp={onMouseUp}
-        onMouseLeave={onMouseUp}
         onWheel={onWheel}
         style={{
-          backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px)',
-          backgroundSize: `${24 * scale}px ${24 * scale}px`,
-          backgroundPosition: `${offset.x}px ${offset.y}px`,
+          backgroundImage: 'radial-gradient(circle at 50% 50%, rgba(168,85,247,0.015) 0%, transparent 50%), radial-gradient(circle, rgba(255,255,255,0.035) 1px, transparent 1px)',
+          backgroundSize: `auto, ${24 * scale}px ${24 * scale}px`,
+          backgroundPosition: `0 0, ${offset.x}px ${offset.y}px`,
         }}
       >
         <div style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`, transformOrigin: '0 0', width: '4000px', height: '3000px', position: 'relative' }}>
-          {/* Connections */}
+          {/* Connections SVG */}
           <svg width="4000" height="3000" className="absolute inset-0 pointer-events-none" style={{ overflow: 'visible' }}>
             <defs>
-              <filter id="glow"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+              <filter id="glow"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+              <filter id="glow-strong"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
             </defs>
             {connections.map(c => {
               if (!isConnVisible(c)) return null;
               const from = devById.get(c.from_device)!;
               const to = devById.get(c.to_device)!;
-
-              // 가시 포트 인덱스
               const outVis = visiblePorts(from, 'out', visibleLayerIds);
               const inVis = visiblePorts(to, 'in', visibleLayerIds);
               const fi = outVis.findIndex(p => p.name === c.from_port);
               const ti = inVis.findIndex(p => p.name === c.to_port);
               if (fi < 0 || ti < 0) return null;
-
               const x1 = from.x + deviceWidth(from);
               const y1 = portYFromRenderIdx(from, fi);
               const x2 = to.x;
@@ -529,26 +573,22 @@ export default function SignalFlowMap() {
               const isDim = traceId && !isTraced;
               const ct = c.conn_type ?? from.outputsMeta?.[c.from_port]?.connType;
               const style = ct ? CONN_TYPE_STYLES[ct] : undefined;
-
-              // 케이블 색: from 포트의 레이어 색 우선, 없으면 장비 타입 색
               const fromLayerId = from.outputsMeta?.[c.from_port]?.layerId;
               const layerColor = fromLayerId ? layerById.get(fromLayerId)?.color : undefined;
-              const color = layerColor ?? (from.type === 'audio' ? TYPE_COLORS.audio.main
-                         : from.type === 'combined' ? TYPE_COLORS.combined.main
-                         : TYPE_COLORS.video.main);
-
+              const color = layerColor ?? (from.type === 'audio' ? TYPE_COLORS.audio.main : from.type === 'combined' ? TYPE_COLORS.combined.main : TYPE_COLORS.video.main);
               const mx = (x1 + x2) / 2;
               const my = (y1 + y2) / 2;
 
               return (
-                <g key={c.id} opacity={isDim ? 0.12 : 1}>
-                  <path d={path} stroke={color} strokeWidth={isTraced ? 2.8 : 1.5}
+                <g key={c.id} opacity={isDim ? 0.1 : 1}>
+                  {isTraced && <path d={path} stroke={color} strokeWidth={6} fill="none" opacity={0.25} filter="url(#glow-strong)" />}
+                  <path d={path} stroke={color} strokeWidth={isTraced ? 2.5 : 1.4}
                         strokeDasharray={style?.dash ?? undefined} fill="none"
                         filter={isTraced ? 'url(#glow)' : undefined} />
                   {ct && (scale > 0.5 || isTraced) && (
                     <g>
-                      <rect x={mx - 22} y={my - 8} width="44" height="14" rx="3" fill="rgba(10,10,10,0.85)" stroke={color} strokeWidth="0.5" />
-                      <text x={mx} y={my + 2.5} textAnchor="middle" fontSize="9" fill={color} fontFamily="monospace" fontWeight="600">
+                      <rect x={mx - 24} y={my - 8.5} width="48" height="15" rx="4" fill="rgba(8,8,10,0.92)" stroke={color} strokeWidth="0.6" />
+                      <text x={mx} y={my + 2.8} textAnchor="middle" fontSize="9.5" fill={color} fontFamily="var(--font-mono)" fontWeight="700" letterSpacing="0.02em">
                         {style?.label ?? ct}
                       </text>
                     </g>
@@ -558,16 +598,13 @@ export default function SignalFlowMap() {
             })}
 
             {/* Marquee */}
-            {drag.kind === 'marquee' && (
+            {marqueeRect && (
               <rect
-                x={Math.min(drag.startX, drag.curX)}
-                y={Math.min(drag.startY, drag.curY)}
-                width={Math.abs(drag.curX - drag.startX)}
-                height={Math.abs(drag.curY - drag.startY)}
+                x={marqueeRect.x} y={marqueeRect.y}
+                width={marqueeRect.w} height={marqueeRect.h}
                 fill="rgba(59,130,246,0.08)"
-                stroke="rgba(59,130,246,0.8)"
-                strokeWidth="1"
-                strokeDasharray="4 2"
+                stroke="rgba(59,130,246,0.8)" strokeWidth="1.5"
+                strokeDasharray="5 3" rx="4"
               />
             )}
           </svg>
@@ -580,11 +617,14 @@ export default function SignalFlowMap() {
             const isTraceTarget = traceId === d.id;
             const isTraced = traced.devices.has(d.id);
             const isDim = traceId && !isTraced;
+            const isHovered = hoveredId === d.id;
             const w = deviceWidth(d);
             const h = deviceHeight(d, visibleLayerIds);
-
             const inVis = visiblePorts(d, 'in', visibleLayerIds);
             const outVis = visiblePorts(d, 'out', visibleLayerIds);
+
+            const borderColor = isSelected ? '#fbbf24' : isTraceTarget ? color.glow : editMode ? 'rgba(251,191,36,0.35)' : color.border;
+            const borderWidth = isSelected || isTraceTarget ? 2 : 1.2;
 
             return (
               <div
@@ -592,26 +632,46 @@ export default function SignalFlowMap() {
                 data-device-id={d.id}
                 onMouseDown={e => onDeviceMouseDown(e, d)}
                 onClick={e => onDeviceClickView(e, d)}
-                className="absolute rounded-lg"
+                onMouseEnter={() => setHoveredId(d.id)}
+                onMouseLeave={() => setHoveredId(null)}
+                className={`absolute rounded-xl overflow-hidden transition-[opacity,box-shadow,transform] ${isSelected ? 'device-selected' : ''}`}
                 style={{
                   left: d.x, top: d.y, width: w, minHeight: h,
-                  background: `linear-gradient(180deg, ${color.bg} 0%, rgba(10,10,10,0.9) 100%)`,
-                  border: `1.5px solid ${isSelected ? '#fbbf24' : isTraceTarget ? color.glow : editMode ? 'rgba(245,158,11,0.35)' : color.border}`,
-                  boxShadow: isSelected ? '0 0 20px rgba(251,191,36,0.5), inset 0 0 0 1px rgba(251,191,36,0.6)'
-                            : isTraceTarget ? `0 0 24px ${color.glow}66, inset 0 0 0 1px ${color.glow}55`
-                            : '0 2px 8px rgba(0,0,0,0.4)',
-                  opacity: isDim ? 0.3 : 1,
+                  background: `linear-gradient(165deg, ${color.bg} 0%, rgba(10,10,12,0.96) 40%, rgba(4,4,6,0.98) 100%)`,
+                  border: `${borderWidth}px solid ${borderColor}`,
+                  boxShadow: isSelected
+                    ? `0 0 0 1px rgba(251,191,36,0.4), 0 0 30px rgba(251,191,36,0.45), 0 10px 30px rgba(0,0,0,0.5)`
+                    : isTraceTarget
+                    ? `0 0 0 1px ${color.glow}66, 0 0 35px ${color.glow}55, 0 10px 30px rgba(0,0,0,0.5)`
+                    : isHovered
+                    ? `0 0 24px ${color.glow}30, 0 8px 22px rgba(0,0,0,0.6)`
+                    : `0 4px 16px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04)`,
+                  opacity: isDim ? 0.25 : 1,
                   cursor: editMode ? 'move' : 'pointer',
-                  backdropFilter: 'blur(6px)',
+                  backdropFilter: 'blur(8px)',
+                  transform: isHovered && !editMode ? 'translateY(-1px)' : undefined,
                 }}
               >
-                {/* Header */}
-                <div className="px-3 h-[44px] flex items-center gap-2 border-b" style={{ borderColor: color.border }}>
-                  <div className="w-1.5 h-4 rounded-full" style={{ background: color.main }}></div>
+                {/* Header with gradient */}
+                <div
+                  className="px-3.5 flex items-center gap-2.5 relative"
+                  style={{
+                    height: HEADER_H,
+                    background: `linear-gradient(90deg, ${color.main}22 0%, transparent 60%)`,
+                    borderBottom: `1px solid ${color.border}`,
+                  }}
+                >
+                  <div
+                    className="w-1 h-5 rounded-full"
+                    style={{ background: `linear-gradient(180deg, ${color.glow}, ${color.main})`, boxShadow: `0 0 8px ${color.glow}` }}
+                  ></div>
                   <div className="flex-1 min-w-0">
-                    <div className="text-[13px] font-semibold truncate text-white">{d.name}</div>
-                    <div className="text-[9px] text-neutral-500 uppercase tracking-wider">{d.type}</div>
+                    <div className="text-[13px] font-semibold truncate text-white leading-tight tracking-tight">{d.name}</div>
+                    <div className="text-[9px] text-neutral-500 uppercase tracking-[0.1em] font-medium">{d.type}</div>
                   </div>
+                  {editMode && (
+                    <div className="text-[9px] text-neutral-600 font-mono opacity-60">{w}×{Math.round(h)}</div>
+                  )}
                 </div>
 
                 {/* Ports */}
@@ -630,19 +690,19 @@ export default function SignalFlowMap() {
                           <button
                             data-port
                             onClick={e => onPortClick(e, d.id, p.name, false)}
-                            className="w-2.5 h-2.5 rounded-full -ml-[5px] hover:scale-150 transition-transform"
-                            style={{ background: portColor, boxShadow: `0 0 6px ${portColor}` }}
+                            className="w-3 h-3 rounded-full -ml-[6px] hover:scale-[1.6] transition-transform ring-2 ring-black/40"
+                            style={{ background: portColor, boxShadow: `0 0 8px ${portColor}, inset 0 1px 1px rgba(255,255,255,0.3)` }}
                             title={meta?.label ?? p.name}
                           ></button>
                           <div className="ml-2 flex-1 flex items-center gap-1.5 min-w-0">
-                            <span className="text-[10.5px] text-neutral-300 font-mono truncate">{p.name}</span>
+                            <span className="text-[10.5px] text-neutral-200 font-mono truncate font-medium">{p.name}</span>
                             {ct && (
-                              <span className="text-[8.5px] px-1 rounded font-mono"
-                                style={{ background: `${portColor}15`, color: portColor, border: `0.5px solid ${portColor}66` }}>
+                              <span className="text-[8.5px] px-1 py-[1px] rounded font-mono font-semibold"
+                                style={{ background: `${portColor}20`, color: portColor, border: `0.5px solid ${portColor}55`, boxShadow: `0 0 4px ${portColor}30` }}>
                                 {ctStyle?.label ?? ct}
                               </span>
                             )}
-                            {meta?.label && <span className="text-[9px] text-neutral-500 truncate">{meta.label}</span>}
+                            {meta?.label && <span className="text-[9.5px] text-neutral-500 truncate">{meta.label}</span>}
                           </div>
                         </div>
                       );
@@ -657,25 +717,26 @@ export default function SignalFlowMap() {
                       const lid = meta?.layerId;
                       const layer = lid ? layerById.get(lid) : undefined;
                       const portColor = layer?.color ?? color.main;
+                      const isPending = pendingFrom?.device === d.id && pendingFrom?.port === p.name;
                       return (
                         <div key={p.name} className="flex items-center justify-end pointer-events-auto" style={{ height: PORT_H }}>
                           <div className="flex-1 flex items-center justify-end gap-1.5 min-w-0 mr-2">
-                            {meta?.label && <span className="text-[9px] text-neutral-500 truncate text-right">{meta.label}</span>}
+                            {meta?.label && <span className="text-[9.5px] text-neutral-500 truncate text-right">{meta.label}</span>}
                             {ct && (
-                              <span className="text-[8.5px] px-1 rounded font-mono"
-                                style={{ background: `${portColor}15`, color: portColor, border: `0.5px solid ${portColor}66` }}>
+                              <span className="text-[8.5px] px-1 py-[1px] rounded font-mono font-semibold"
+                                style={{ background: `${portColor}20`, color: portColor, border: `0.5px solid ${portColor}55`, boxShadow: `0 0 4px ${portColor}30` }}>
                                 {ctStyle?.label ?? ct}
                               </span>
                             )}
-                            <span className="text-[10.5px] text-neutral-300 font-mono truncate">{p.name}</span>
+                            <span className="text-[10.5px] text-neutral-200 font-mono truncate font-medium">{p.name}</span>
                           </div>
                           <button
                             data-port
                             onClick={e => onPortClick(e, d.id, p.name, true)}
-                            className="w-2.5 h-2.5 rounded-full -mr-[5px] hover:scale-150 transition-transform"
+                            className={`w-3 h-3 rounded-full -mr-[6px] hover:scale-[1.6] transition-transform ring-2 ${isPending ? 'ring-amber-300/60 animate-pulse' : 'ring-black/40'}`}
                             style={{
-                              background: pendingFrom?.device === d.id && pendingFrom?.port === p.name ? '#fbbf24' : portColor,
-                              boxShadow: `0 0 6px ${portColor}`,
+                              background: isPending ? '#fbbf24' : portColor,
+                              boxShadow: `0 0 8px ${isPending ? '#fbbf24' : portColor}, inset 0 1px 1px rgba(255,255,255,0.3)`,
                             }}
                             title={meta?.label ?? p.name}
                           ></button>
@@ -690,11 +751,11 @@ export default function SignalFlowMap() {
         </div>
 
         {/* Zoom */}
-        <div className="absolute bottom-4 right-4 z-20 bg-neutral-900/85 backdrop-blur border border-neutral-800 rounded-lg p-1 flex flex-col gap-0.5" data-ui>
-          <button onClick={() => setScale(s => Math.min(2, s * 1.2))} className="w-8 h-8 hover:bg-neutral-800 rounded text-sm">＋</button>
-          <div className="text-[10px] text-center text-neutral-500 py-1">{Math.round(scale * 100)}%</div>
-          <button onClick={() => setScale(s => Math.max(0.15, s / 1.2))} className="w-8 h-8 hover:bg-neutral-800 rounded text-sm">−</button>
-          <button onClick={() => { setScale(0.7); setOffset({ x: 40, y: 60 }); }} className="w-8 h-8 hover:bg-neutral-800 rounded text-[10px]">⊡</button>
+        <div data-ui className="absolute bottom-4 right-4 z-20 bg-black/60 backdrop-blur-xl border border-white/10 rounded-xl p-1 flex flex-col gap-0.5 shadow-lg">
+          <button onClick={() => setScale(s => Math.min(2, s * 1.2))} className="w-8 h-8 hover:bg-white/10 rounded-lg text-base transition">＋</button>
+          <div className="text-[10px] text-center text-neutral-400 font-mono py-1 border-y border-white/5">{Math.round(scale * 100)}%</div>
+          <button onClick={() => setScale(s => Math.max(0.15, s / 1.2))} className="w-8 h-8 hover:bg-white/10 rounded-lg text-base transition">−</button>
+          <button onClick={() => { setScale(0.7); setOffset({ x: 40, y: 70 }); }} className="w-8 h-8 hover:bg-white/10 rounded-lg text-[10px] transition" title="초기화">⊡</button>
         </div>
       </div>
 

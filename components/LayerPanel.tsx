@@ -16,7 +16,6 @@ export default function LayerPanel({ layers, onClose }: Props) {
   const toggleVisible = async (l: Layer) => {
     await (supabase as any).from('layers').update({ visible: !l.visible }).eq('id', l.id);
   };
-
   const addLayer = async () => {
     const id = `layer_${Date.now().toString(36)}`;
     const maxOrder = layers.reduce((m, l) => Math.max(m, l.sort_order), 0);
@@ -25,56 +24,75 @@ export default function LayerPanel({ layers, onClose }: Props) {
       id, name: `레이어 ${layers.length + 1}`, color, visible: true, sort_order: maxOrder + 1,
     });
   };
-
   const deleteLayer = async (l: Layer) => {
     if (layers.length <= 1) { alert('최소 1개 레이어는 유지'); return; }
-    if (!confirm(`"${l.name}" 레이어 삭제? 이 레이어의 포트들은 첫 번째 레이어로 이동합니다.`)) return;
+    if (!confirm(`"${l.name}" 레이어 삭제?`)) return;
     await (supabase as any).from('layers').delete().eq('id', l.id);
-    // NOTE: 포트 layerId 재할당은 서버에서 cascading 안되므로 클라이언트에서 처리하거나 보류. 
-    // 일단 삭제만. 고아 layerId는 Fallback으로 첫 레이어 취급됨.
   };
-
   const renameLayer = async (l: Layer, newName: string) => {
     await (supabase as any).from('layers').update({ name: newName }).eq('id', l.id);
     setEditingId(null);
   };
-
   const changeColor = async (l: Layer, color: string) => {
     await (supabase as any).from('layers').update({ color }).eq('id', l.id);
   };
 
   const sorted = [...layers].sort((a, b) => a.sort_order - b.sort_order);
+  const visibleCount = layers.filter(l => l.visible).length;
+  const allVisible = visibleCount === layers.length;
+  const toggleAll = async () => {
+    await Promise.all(layers.map(l => (supabase as any).from('layers').update({ visible: !allVisible }).eq('id', l.id)));
+  };
 
   return (
-    <div className="absolute top-14 right-4 z-30 bg-neutral-950 border border-neutral-800 rounded-lg shadow-2xl w-72 max-h-[70vh] flex flex-col">
-      <div className="px-3 py-2 border-b border-neutral-800 flex items-center justify-between">
-        <div className="text-sm font-semibold">레이어</div>
-        <button onClick={onClose} className="w-6 h-6 rounded hover:bg-neutral-800 text-neutral-400">✕</button>
+    <div
+      data-ui
+      className="fixed top-[72px] left-4 z-40 w-72 bg-gradient-to-b from-neutral-900/95 to-neutral-950/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl shadow-black/60 overflow-hidden"
+      style={{ maxHeight: 'calc(100vh - 100px)' }}
+    >
+      <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between bg-gradient-to-r from-purple-500/10 to-transparent">
+        <div className="flex items-center gap-2">
+          <div className="w-1 h-5 rounded-full bg-gradient-to-b from-purple-400 to-purple-600"></div>
+          <div>
+            <div className="text-sm font-semibold text-white">레이어</div>
+            <div className="text-[10px] text-neutral-500">{visibleCount} / {layers.length} 표시중</div>
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={toggleAll}
+            className="text-[10px] px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-neutral-300 hover:text-white transition"
+          >{allVisible ? '모두 숨김' : '모두 표시'}</button>
+          <button onClick={onClose} className="w-6 h-6 rounded hover:bg-white/10 text-neutral-500 hover:text-white">✕</button>
+        </div>
       </div>
 
-      <div className="overflow-y-auto flex-1 p-2 space-y-1">
+      <div className="overflow-y-auto p-2 space-y-1 custom-scroll" style={{ maxHeight: 'calc(100vh - 210px)' }}>
         {sorted.map(l => (
           <div
             key={l.id}
-            className={`group flex items-center gap-2 px-2 py-1.5 rounded hover:bg-neutral-900 ${!l.visible ? 'opacity-40' : ''}`}
+            className={`group flex items-center gap-2 px-2 py-1.5 rounded-lg border transition-all ${l.visible ? 'border-white/10 bg-white/5 hover:bg-white/10' : 'border-white/5 bg-transparent opacity-50 hover:opacity-80'}`}
           >
             <button
               onClick={() => toggleVisible(l)}
-              className="w-5 h-5 flex items-center justify-center text-neutral-400 hover:text-white"
+              className="w-6 h-6 flex items-center justify-center text-sm hover:bg-white/10 rounded transition"
               title={l.visible ? '숨기기' : '보이기'}
             >
-              {l.visible ? '👁' : '⊘'}
+              {l.visible ? '👁' : <span className="text-neutral-600">⊘</span>}
             </button>
 
-            <div className="relative">
+            <label className="relative cursor-pointer">
+              <div
+                className="w-4 h-4 rounded-md ring-1 ring-white/20 shadow-inner"
+                style={{ background: l.color }}
+              />
               <input
                 type="color"
                 value={l.color}
                 onChange={e => changeColor(l, e.target.value)}
-                className="w-4 h-4 rounded cursor-pointer border border-neutral-700 bg-transparent"
-                style={{ padding: 0 }}
+                className="absolute inset-0 opacity-0 cursor-pointer"
               />
-            </div>
+            </label>
 
             {editingId === l.id ? (
               <input
@@ -83,12 +101,12 @@ export default function LayerPanel({ layers, onClose }: Props) {
                 onChange={e => setEditName(e.target.value)}
                 onBlur={() => renameLayer(l, editName || l.name)}
                 onKeyDown={e => { if (e.key === 'Enter') renameLayer(l, editName || l.name); if (e.key === 'Escape') setEditingId(null); }}
-                className="flex-1 bg-neutral-800 text-xs rounded px-1.5 py-0.5 focus:outline-none border border-sky-500"
+                className="flex-1 bg-neutral-800 text-xs rounded px-2 py-1 focus:outline-none border border-sky-500 text-white"
               />
             ) : (
               <button
                 onClick={() => { setEditingId(l.id); setEditName(l.name); }}
-                className="flex-1 text-left text-xs truncate"
+                className="flex-1 text-left text-xs text-neutral-200 truncate"
               >
                 {l.name}
               </button>
@@ -96,18 +114,18 @@ export default function LayerPanel({ layers, onClose }: Props) {
 
             <button
               onClick={() => deleteLayer(l)}
-              className="w-5 h-5 rounded text-xs text-neutral-600 hover:text-rose-400 opacity-0 group-hover:opacity-100"
+              className="w-6 h-6 rounded text-sm text-neutral-600 hover:text-rose-400 hover:bg-rose-400/10 opacity-0 group-hover:opacity-100 transition"
               title="삭제"
             >×</button>
           </div>
         ))}
       </div>
 
-      <div className="border-t border-neutral-800 p-2">
+      <div className="border-t border-white/10 p-2 bg-gradient-to-t from-purple-500/5 to-transparent">
         <button
           onClick={addLayer}
-          className="w-full py-1.5 text-xs rounded bg-neutral-900 hover:bg-neutral-800 text-neutral-400 hover:text-white border border-dashed border-neutral-700"
-        >＋ 레이어 추가</button>
+          className="w-full py-2 text-xs rounded-lg bg-gradient-to-r from-purple-500/20 to-purple-600/20 hover:from-purple-500/30 hover:to-purple-600/30 text-purple-300 hover:text-purple-200 border border-purple-500/30 transition"
+        >＋ 새 레이어</button>
       </div>
     </div>
   );
