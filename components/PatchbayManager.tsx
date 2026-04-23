@@ -234,8 +234,8 @@ export default function PatchbayManager({ devices, connections, layers, racks, o
             padding: `2px ${innerPadH}px`,
           }}
         >
-          <div className="absolute left-1 top-1 text-[7px] font-bold tracking-[0.1em] text-teal-400/70 leading-none">IN ⬇</div>
-          <div className="absolute left-1 bottom-1 text-[7px] font-bold tracking-[0.1em] text-teal-400/70 leading-none">OUT⬆</div>
+          <div className="absolute left-1 top-1 text-[7px] font-bold tracking-[0.1em] text-teal-400/70 leading-none">IN</div>
+          <div className="absolute left-1 bottom-1 text-[7px] font-bold tracking-[0.1em] text-teal-400/70 leading-none">OUT</div>
 
           {/* IN 행 (상단) — 소스 장비에서 들어오는 신호 */}
           <div className="flex items-center overflow-hidden" style={{ height: rowH, paddingLeft: labelW }}>
@@ -337,7 +337,7 @@ export default function PatchbayManager({ devices, connections, layers, racks, o
           }}
         >
           <div className="flex items-center mb-0.5" style={{ width: railW }}>
-            <div className="text-[8px] font-bold tracking-[0.15em] text-teal-400/70 w-10 shrink-0">IN ⬇</div>
+            <div className="text-[8px] font-bold tracking-[0.15em] text-teal-400/70 w-10 shrink-0">IN</div>
             <div className="flex-1 h-px bg-gradient-to-r from-teal-400/30 to-transparent"></div>
           </div>
 
@@ -414,7 +414,7 @@ export default function PatchbayManager({ devices, connections, layers, racks, o
           </div>
 
           <div className="flex items-center mt-0.5" style={{ width: railW }}>
-            <div className="text-[8px] font-bold tracking-[0.15em] text-teal-400/70 w-10 shrink-0">OUT ⬆</div>
+            <div className="text-[8px] font-bold tracking-[0.15em] text-teal-400/70 w-10 shrink-0">OUT</div>
             <div className="flex-1 h-px bg-gradient-to-r from-teal-400/30 to-transparent"></div>
           </div>
         </div>

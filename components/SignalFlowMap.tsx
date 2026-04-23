@@ -24,10 +24,9 @@ const PB_SIDE_PAD = 10;    // 좌우 여백
 const PB_TOP_PAD = 8;      // 잭 영역 상단 여백
 
 function deviceWidth(d: Device) {
-  // 패치베이는 포트 수 × 잭 너비로 자동
   if (d.role === 'patchbay') {
-    const maxPorts = Math.max(d.inputs.length, d.outputs.length);
-    return Math.max(220, PB_SIDE_PAD * 2 + maxPorts * PB_JACK_W);
+    const { w } = patchbayBBox(d);
+    return w;
   }
   return d.width ?? 200;
 }
@@ -46,9 +45,9 @@ function visiblePorts(d: Device, dir: 'in' | 'out', visibleLayerIds: Set<string>
 
 function deviceHeight(d: Device, visibleLayerIds: Set<string>) {
   if (d.height) return d.height;
-  // 패치베이: 헤더 + 외부패딩(6*2) + 내부패딩(6*2) + OUT행 + 중간라벨 + IN행
   if (d.role === 'patchbay') {
-    return HEADER_H + 12 + 12 + PB_JACK_H + PB_ROW_GAP + PB_JACK_H;
+    const { h } = patchbayBBox(d);
+    return h;
   }
   const vi = visiblePorts(d, 'in', visibleLayerIds).length;
   const vo = visiblePorts(d, 'out', visibleLayerIds).length;
@@ -77,20 +76,48 @@ function portYFromRenderIdx(d: Device, renderIdx: number) {
   return d.y + HEADER_H + PADDING_Y + renderIdx * PORT_H + PORT_H / 2;
 }
 
-// 패치베이 전용: 포트 X/Y 계산 (셀 중앙 좌표)
-// dir: 'out' = 상단 행 / 'in' = 하단 행
+// 패치베이 카드의 base(회전 전) 크기
+function patchbayBaseSize(d: Device) {
+  const ports = Math.max(d.inputs.length, d.outputs.length, 1);
+  const w = ports * PB_JACK_W + 28; // 14px padding 양쪽
+  const h = HEADER_H + 12 + PB_JACK_H + PB_ROW_GAP + PB_JACK_H + 12;
+  return { w, h };
+}
+
+// 회전 고려 bbox
+function patchbayBBox(d: Device) {
+  const { w, h } = patchbayBaseSize(d);
+  const r = d.rotation ?? 0;
+  if (r === 90 || r === 270) return { w: h, h: w, baseW: w, baseH: h };
+  return { w, h, baseW: w, baseH: h };
+}
+
+// 패치베이 전용: 포트 X/Y 계산 (셀 중앙 좌표) - 회전 고려
+// dir: 'in' = 상단 행 / 'out' = 하단 행 (회전 전 기준)
 function patchbayPortXY(d: Device, dir: 'in' | 'out', portIdx: number) {
-  // 바깥패딩 6 + 안쪽패딩 8 = 14, cell center = 14 + portIdx*JACK_W + JACK_W/2
-  const cx = d.x + 14 + portIdx * PB_JACK_W + PB_JACK_W / 2;
-  if (dir === 'in') {
-    // IN 잭은 상단부에 위치 (소스가 꽂히는 자리)
-    const cy = d.y + HEADER_H + 14;
-    return { x: cx, y: cy };
+  // 회전 전 local 좌표 (카드 내부)
+  const localCx = 14 + portIdx * PB_JACK_W + PB_JACK_W / 2;
+  const localCyIn = HEADER_H + 14;
+  const localCyOut = HEADER_H + 14 + PB_JACK_H + PB_ROW_GAP + PB_JACK_H;
+  const lx = localCx;
+  const ly = dir === 'in' ? localCyIn : localCyOut;
+
+  const rot = d.rotation ?? 0;
+  const { baseW, baseH } = patchbayBBox(d);
+  // 회전 변환: 카드 좌상단 기준으로 회전 후 bbox 좌표로 변환
+  let fx: number, fy: number;
+  if (rot === 0) {
+    fx = lx; fy = ly;
+  } else if (rot === 90) {
+    // (x,y) → (baseH - y, x)
+    fx = baseH - ly; fy = lx;
+  } else if (rot === 180) {
+    fx = baseW - lx; fy = baseH - ly;
   } else {
-    // OUT 잭은 하단부에 위치 (여기 꽂으면 normal이 끊기고 신호 교체됨)
-    const cy = d.y + HEADER_H + 14 + PB_JACK_H + PB_ROW_GAP + PB_JACK_H;
-    return { x: cx, y: cy };
+    // 270: (x,y) → (y, baseW - x)
+    fx = ly; fy = baseW - lx;
   }
+  return { x: d.x + fx, y: d.y + fy };
 }
 
 export default function SignalFlowMap() {
@@ -1179,6 +1206,15 @@ export default function SignalFlowMap() {
     setUndoLabel(null);
   };
 
+  // 드래그 중엔 body에 class를 붙여 CSS 애니메이션 일시정지 (성능)
+  // loading 체크 이전에 두어야 Hook 순서 일관 유지
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const b = document.body;
+    if (draggingCursor !== 'none') b.classList.add('is-dragging');
+    else b.classList.remove('is-dragging');
+  }, [draggingCursor]);
+
   if (loading) {
     return (
       <div className="h-screen bg-gradient-to-br from-neutral-950 via-black to-neutral-950 flex items-center justify-center">
@@ -1195,14 +1231,6 @@ export default function SignalFlowMap() {
     : draggingCursor === 'marquee' ? 'cursor-crosshair'
     : draggingCursor === 'device' ? 'cursor-grabbing'
     : 'cursor-grab';
-
-  // 드래그 중엔 body에 class를 붙여 CSS 애니메이션 일시정지 (성능)
-  useEffect(() => {
-    if (typeof document === 'undefined') return;
-    const b = document.body;
-    if (draggingCursor !== 'none') b.classList.add('is-dragging');
-    else b.classList.remove('is-dragging');
-  }, [draggingCursor]);
 
   return (
     <div className="h-screen w-screen bg-gradient-to-br from-neutral-950 via-black to-neutral-950 text-white overflow-hidden relative select-none">
@@ -1758,30 +1786,49 @@ export default function SignalFlowMap() {
                 onMouseEnter={() => setHoveredId(d.id)}
                 onMouseLeave={() => setHoveredId(null)}
                 className={`absolute rounded-xl overflow-hidden transition-[opacity,box-shadow,transform] ${isSelected ? 'device-selected' : ''}`}
-                style={{
-                  left: d.x, top: d.y, width: w, minHeight: h,
-                  background: isPatchbay
-                    ? `linear-gradient(165deg, rgba(20,184,166,0.15) 0%, rgba(8,12,12,0.96) 40%, rgba(4,6,6,0.98) 100%)`
-                    : isWallbox
-                    ? `linear-gradient(165deg, rgba(245,158,11,0.12) 0%, rgba(12,10,6,0.96) 40%, rgba(6,4,2,0.98) 100%)`
-                    : `linear-gradient(165deg, ${color.bg} 0%, rgba(10,10,12,0.96) 40%, rgba(4,4,6,0.98) 100%)`,
-                  border: `${borderWidth}px solid ${isPatchbay && !isSelected && !isTraceTarget ? 'rgba(20,184,166,0.4)' : isWallbox && !isSelected && !isTraceTarget ? 'rgba(245,158,11,0.4)' : borderColor}`,
-                  boxShadow: isSelected
-                    ? `0 0 0 1px rgba(251,191,36,0.4), 0 0 30px rgba(251,191,36,0.45), 0 10px 30px rgba(0,0,0,0.5)`
-                    : isTraceTarget
-                    ? `0 0 0 1px ${color.glow}66, 0 0 35px ${color.glow}55, 0 10px 30px rgba(0,0,0,0.5)`
-                    : isHovered
-                    ? `0 0 24px ${color.glow}30, 0 8px 22px rgba(0,0,0,0.6)`
-                    : isPatchbay
-                    ? `0 0 18px rgba(20,184,166,0.15), 0 4px 16px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04)`
-                    : isWallbox
-                    ? `0 0 18px rgba(245,158,11,0.12), 0 4px 16px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04)`
-                    : `0 4px 16px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04)`,
-                  opacity: isDim ? 0.25 : 1,
-                  cursor: editMode ? 'move' : 'pointer',
-                  backdropFilter: 'blur(8px)',
-                  transform: isHovered && !editMode ? 'translateY(-1px)' : undefined,
-                }}
+                style={(() => {
+                  // 패치베이 회전 지원: base 크기로 렌더 후 transform-rotate 적용
+                  const rot = isPatchbay ? ((d.rotation ?? 0) as 0|90|180|270) : 0;
+                  const baseSize = isPatchbay ? patchbayBBox(d) : { baseW: w, baseH: h };
+                  const useBaseW = isPatchbay ? baseSize.baseW : w;
+                  const useBaseH = isPatchbay ? baseSize.baseH : h;
+
+                  // 회전된 카드가 bbox 안에 맞도록 translate 보정
+                  let extraTransform = '';
+                  if (rot === 90) extraTransform = `translate(${useBaseH}px,0) rotate(90deg)`;
+                  else if (rot === 180) extraTransform = `translate(${useBaseW}px,${useBaseH}px) rotate(180deg)`;
+                  else if (rot === 270) extraTransform = `translate(0,${useBaseW}px) rotate(270deg)`;
+
+                  const baseTransform = isHovered && !editMode ? 'translateY(-1px)' : '';
+                  const finalTransform = [extraTransform, baseTransform].filter(Boolean).join(' ');
+
+                  return {
+                    left: d.x, top: d.y,
+                    width: useBaseW, minHeight: useBaseH,
+                    background: isPatchbay
+                      ? `linear-gradient(165deg, rgba(20,184,166,0.15) 0%, rgba(8,12,12,0.96) 40%, rgba(4,6,6,0.98) 100%)`
+                      : isWallbox
+                      ? `linear-gradient(165deg, rgba(245,158,11,0.12) 0%, rgba(12,10,6,0.96) 40%, rgba(6,4,2,0.98) 100%)`
+                      : `linear-gradient(165deg, ${color.bg} 0%, rgba(10,10,12,0.96) 40%, rgba(4,4,6,0.98) 100%)`,
+                    border: `${borderWidth}px solid ${isPatchbay && !isSelected && !isTraceTarget ? 'rgba(20,184,166,0.4)' : isWallbox && !isSelected && !isTraceTarget ? 'rgba(245,158,11,0.4)' : borderColor}`,
+                    boxShadow: isSelected
+                      ? `0 0 0 1px rgba(251,191,36,0.4), 0 0 30px rgba(251,191,36,0.45), 0 10px 30px rgba(0,0,0,0.5)`
+                      : isTraceTarget
+                      ? `0 0 0 1px ${color.glow}66, 0 0 35px ${color.glow}55, 0 10px 30px rgba(0,0,0,0.5)`
+                      : isHovered
+                      ? `0 0 24px ${color.glow}30, 0 8px 22px rgba(0,0,0,0.6)`
+                      : isPatchbay
+                      ? `0 0 18px rgba(20,184,166,0.15), 0 4px 16px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04)`
+                      : isWallbox
+                      ? `0 0 18px rgba(245,158,11,0.12), 0 4px 16px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04)`
+                      : `0 4px 16px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04)`,
+                    opacity: isDim ? 0.25 : 1,
+                    cursor: editMode ? 'move' : 'pointer',
+                    backdropFilter: 'blur(8px)',
+                    transform: finalTransform || undefined,
+                    transformOrigin: '0 0',
+                  };
+                })()}
               >
                 {/* Header */}
                 <div
@@ -1971,9 +2018,9 @@ export default function SignalFlowMap() {
                           borderBottom: '1px solid rgba(20,184,166,0.15)',
                         }}
                       >
-                        <span>⬇ IN</span>
+                        <span>IN</span>
                         <span className="text-neutral-600 font-mono tracking-normal">{d.inputs.length}CH</span>
-                        <span>OUT ⬆</span>
+                        <span>OUT</span>
                       </div>
 
                       {/* 하단 행: OUT (여기 꽂으면 normal이 끊기고 신호 교체됨) */}
@@ -2034,14 +2081,37 @@ export default function SignalFlowMap() {
                       </div>
                     </div>
 
-                    {/* 관리 페이지 진입 버튼 */}
+                    {/* 관리 + 회전 버튼 */}
                     {editMode && (
-                      <button
-                        onClick={e => { e.stopPropagation(); setShowPatchbayMgr(true); }}
-                        onMouseDown={e => e.stopPropagation()}
-                        className="absolute top-1.5 right-1.5 text-[9px] px-2 py-0.5 rounded bg-teal-500/20 hover:bg-teal-500 text-teal-300 hover:text-white border border-teal-500/40 font-medium transition"
-                        title="패치베이 관리 페이지 열기"
-                      >⊟ 관리</button>
+                      <div
+                        data-ui
+                        className="absolute flex gap-1 items-center"
+                        style={{ top: 6, right: 6, zIndex: 10 }}
+                      >
+                        <button
+                          onClick={async e => {
+                            e.stopPropagation();
+                            const cur = (d.rotation ?? 0) as number;
+                            const next = ((cur + 90) % 360) as 0 | 90 | 180 | 270;
+                            const before = cur;
+                            setDevices(prev => prev.map(x => x.id === d.id ? { ...x, rotation: next } : x));
+                            await (supabase as any).from('devices').update({ rotation: next }).eq('id', d.id);
+                            pushUndo(`"${d.name}" 회전 되돌리기`, async () => {
+                              setDevices(prev => prev.map(x => x.id === d.id ? { ...x, rotation: before as 0|90|180|270 } : x));
+                              await (supabase as any).from('devices').update({ rotation: before }).eq('id', d.id);
+                            });
+                          }}
+                          onMouseDown={e => e.stopPropagation()}
+                          className="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/20 hover:bg-purple-500 text-purple-300 hover:text-white border border-purple-500/40 font-medium transition"
+                          title={`회전 (현재 ${d.rotation ?? 0}°)`}
+                        >↻ {d.rotation ?? 0}°</button>
+                        <button
+                          onClick={e => { e.stopPropagation(); setShowPatchbayMgr(true); }}
+                          onMouseDown={e => e.stopPropagation()}
+                          className="text-[9px] px-2 py-0.5 rounded bg-teal-500/20 hover:bg-teal-500 text-teal-300 hover:text-white border border-teal-500/40 font-medium transition"
+                          title="패치베이 관리 페이지 열기"
+                        >⊟ 관리</button>
+                      </div>
                     )}
                   </div>
                 ) : (
@@ -2088,10 +2158,6 @@ export default function SignalFlowMap() {
                       const portColor = layer?.color ?? color.main;
                       const isPending = pendingFrom?.device === d.id && pendingFrom?.port === p.name;
                       const isPgm = d.role === 'switcher' && d.pgmPort === p.name;
-                      // 이 OUT이 연결된 대상 (precomputed lookup)
-                      const destInfo = destInfoByOutPort.get(`${d.id}:${p.name}`);
-                      const destConn = destInfo?.destConn;
-                      const destDev = destInfo?.destDev;
                       return (
                         <div key={p.name} className="flex items-center justify-end pointer-events-auto" style={{ height: PORT_H }}>
                           <div className="flex-1 flex items-center justify-end gap-1.5 min-w-0 mr-2">

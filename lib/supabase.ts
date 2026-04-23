@@ -70,6 +70,7 @@ export type Device = {
   // 가상 랙 배치 (주로 패치베이에 사용)
   rackId?: string;     // 속한 랙 ID
   rackUnit?: number;   // 랙 내 유닛 번호 (1부터 시작, 위가 1)
+  rotation?: 0 | 90 | 180 | 270;  // 장비 카드 회전 각도 (주로 패치베이)
   // 소스/디스플레이 시뮬레이션
   imageUrl?: string;       // 소스 장비의 재생 이미지 URL
   imageStoragePath?: string; // Supabase Storage path (삭제용)

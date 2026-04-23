@@ -69,6 +69,7 @@ alter table public.devices add column if not exists location text;
 alter table public.devices add column if not exists "roomNumber" text;
 alter table public.devices add column if not exists "rackId" text;
 alter table public.devices add column if not exists "rackUnit" integer;
+alter table public.devices add column if not exists rotation integer default 0;
 alter table public.devices add column if not exists "imageUrl" text;
 alter table public.devices add column if not exists "imageStoragePath" text;
 alter table public.devices add column if not exists "audioUrl" text;
