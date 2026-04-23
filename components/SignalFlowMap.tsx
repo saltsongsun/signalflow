@@ -11,9 +11,9 @@ import BulkEditor from './BulkEditor';
 
 type TraceMode = 'both' | 'upstream' | 'downstream';
 
-const PORT_H = 22;
-const HEADER_H = 50;
-const PADDING_Y = 14;
+const PORT_H = 28;           // 22 → 28 (포트 행 간격 더 여유)
+const HEADER_H = 58;         // 50 → 58 (헤더 여유)
+const PADDING_Y = 18;        // 14 → 18 (세로 내부 패딩)
 const DRAG_THRESHOLD = 4;
 
 // 패치베이 2단 렌더링 치수
@@ -499,6 +499,18 @@ export default function SignalFlowMap() {
     });
     return m;
   }, [connections, devById]);
+
+  // 장비별 visiblePorts 결과 캐시 — 매 렌더마다 여러 번 호출되므로 O(1) lookup
+  const visiblePortsCache = useMemo(() => {
+    const m = new Map<string, { in: ReturnType<typeof visiblePorts>; out: ReturnType<typeof visiblePorts> }>();
+    devices.forEach(d => {
+      m.set(d.id, {
+        in: visiblePorts(d, 'in', visibleLayerIds),
+        out: visiblePorts(d, 'out', visibleLayerIds),
+      });
+    });
+    return m;
+  }, [devices, visibleLayerIds]);
 
   // ===== Global window listeners =====
   useEffect(() => {
@@ -1249,7 +1261,7 @@ export default function SignalFlowMap() {
             </div>
             <div>
               <div className="text-[13px] font-bold tracking-tight leading-tight">Signal Flow Map</div>
-              <div className="text-[9.5px] text-neutral-500 leading-tight font-mono">경남이스포츠 · UHD</div>
+              <div className="text-[10.5px] text-neutral-500 leading-tight font-mono">경남이스포츠 · UHD</div>
             </div>
           </div>
 
@@ -1345,7 +1357,7 @@ export default function SignalFlowMap() {
             <div className="flex items-center gap-0.5 bg-sky-500/10 border border-sky-500/30 rounded-lg p-0.5">
               {(['both','upstream','downstream'] as TraceMode[]).map(m => (
                 <button key={m} onClick={() => setTraceMode(m)}
-                  className={`px-2.5 py-1 text-[10.5px] font-medium rounded-md transition ${traceMode === m ? 'bg-sky-500 text-white' : 'text-sky-300 hover:text-white'}`}
+                  className={`px-2.5 py-1 text-[11.5px] font-medium rounded-md transition ${traceMode === m ? 'bg-sky-500 text-white' : 'text-sky-300 hover:text-white'}`}
                 >{m === 'both' ? '양방향' : m === 'upstream' ? '⬅ 상류' : '하류 ➡'}</button>
               ))}
             </div>
@@ -1462,14 +1474,14 @@ export default function SignalFlowMap() {
       )}
 
       <div data-ui className="absolute bottom-4 left-4 z-20 bg-black/60 backdrop-blur-xl border border-white/10 rounded-xl px-3 py-2.5 shadow-lg">
-        <div className="text-[9.5px] uppercase tracking-[0.12em] text-neutral-500 font-semibold mb-1.5">타입</div>
-        <div className="space-y-1 text-[10.5px]">
+        <div className="text-[10.5px] uppercase tracking-[0.12em] text-neutral-500 font-semibold mb-1.5">타입</div>
+        <div className="space-y-1 text-[11.5px]">
           <div className="flex items-center gap-2"><div className="w-3 h-2.5 rounded-sm bg-gradient-to-r from-sky-400 to-sky-600 shadow-sm shadow-sky-500/50"></div> <span className="text-neutral-300">Video</span></div>
           <div className="flex items-center gap-2"><div className="w-3 h-2.5 rounded-sm bg-gradient-to-r from-rose-400 to-rose-600 shadow-sm shadow-rose-500/50"></div> <span className="text-neutral-300">Audio</span></div>
           <div className="flex items-center gap-2"><div className="w-3 h-2.5 rounded-sm bg-gradient-to-r from-purple-400 to-purple-600 shadow-sm shadow-purple-500/50"></div> <span className="text-neutral-300">V + A</span></div>
         </div>
         {editMode && (
-          <div className="mt-2.5 pt-2 border-t border-white/10 text-[9.5px] text-neutral-500 space-y-0.5">
+          <div className="mt-2.5 pt-2 border-t border-white/10 text-[10.5px] text-neutral-500 space-y-0.5">
             <div><kbd className="px-1 py-0.5 rounded bg-white/5 border border-white/10 text-neutral-400 font-mono text-[9px]">클릭</kbd> 편집</div>
             <div><kbd className="px-1 py-0.5 rounded bg-white/5 border border-white/10 text-neutral-400 font-mono text-[9px]">Shift</kbd> 다중선택</div>
             <div><kbd className="px-1 py-0.5 rounded bg-white/5 border border-white/10 text-neutral-400 font-mono text-[9px]">Shift+드래그</kbd> 박스</div>
@@ -1570,8 +1582,8 @@ export default function SignalFlowMap() {
                 const tracedHere = traceId && traced.connections.has(c.id);
                 if (!inspectedHere && !tracedHere) return null;
               }
-              const outVis = visiblePorts(from, 'out', visibleLayerIds);
-              const inVis = visiblePorts(to, 'in', visibleLayerIds);
+              const outVis = visiblePortsCache.get(from.id)?.out ?? [];
+              const inVis = visiblePortsCache.get(to.id)?.in ?? [];
               const fi = outVis.findIndex(p => p.name === c.from_port);
               const ti = inVis.findIndex(p => p.name === c.to_port);
               if (fi < 0 || ti < 0) return null;
@@ -1734,8 +1746,9 @@ export default function SignalFlowMap() {
             const isHovered = hoveredId === d.id;
             const w = deviceWidth(d);
             const h = deviceHeight(d, visibleLayerIds);
-            const inVis = visiblePorts(d, 'in', visibleLayerIds);
-            const outVis = visiblePorts(d, 'out', visibleLayerIds);
+            const vpCached = visiblePortsCache.get(d.id);
+            const inVis = vpCached?.in ?? [];
+            const outVis = vpCached?.out ?? [];
             const role = d.role ?? 'standard';
             const roleIcon =
               role === 'switcher' ? '⇆'
@@ -1845,7 +1858,7 @@ export default function SignalFlowMap() {
                   ></div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
-                      <div className="text-[13px] font-semibold truncate text-white leading-tight tracking-tight">{d.name}</div>
+                      <div className="text-[14px] font-semibold truncate text-white leading-snug tracking-tight">{d.name}</div>
                       {roleIcon && (
                         <span
                           className="text-[9px] px-1 py-[1px] rounded shrink-0 font-mono font-bold"
@@ -1901,12 +1914,12 @@ export default function SignalFlowMap() {
                         </button>
                       )}
                     </div>
-                    <div className="flex items-center gap-1.5 min-w-0 mt-[1px]">
+                    <div className="flex items-center gap-1.5 min-w-0 mt-1">
                       <span className="text-[9px] text-neutral-500 uppercase tracking-[0.1em] font-medium shrink-0">{d.type}</span>
                       {d.model && (
                         <>
                           <span className="text-neutral-700 text-[8px]">·</span>
-                          <span className="text-[9.5px] font-mono text-neutral-400/90 truncate" title={d.model}>
+                          <span className="text-[10.5px] font-mono text-neutral-400/90 truncate" title={d.model}>
                             {d.model}
                           </span>
                         </>
@@ -1914,7 +1927,7 @@ export default function SignalFlowMap() {
                       {isWallbox && d.location && (
                         <>
                           <span className="text-neutral-700 text-[8px]">·</span>
-                          <span className="text-[9.5px] text-amber-300/90 truncate font-medium" title={`${d.location}${d.roomNumber ? ' · ' + d.roomNumber : ''}`}>
+                          <span className="text-[10.5px] text-amber-300/90 truncate font-medium" title={`${d.location}${d.roomNumber ? ' · ' + d.roomNumber : ''}`}>
                             📍 {d.location}
                           </span>
                         </>
@@ -2135,14 +2148,14 @@ export default function SignalFlowMap() {
                             title={meta?.label ?? p.name}
                           ></button>
                           <div className="ml-2 flex-1 flex items-center gap-1.5 min-w-0">
-                            <span className="text-[10.5px] text-neutral-200 font-mono truncate font-medium">{p.name}</span>
+                            <span className="text-[11.5px] text-neutral-200 font-mono truncate font-medium">{p.name}</span>
                             {ct && (
-                              <span className="text-[8.5px] px-1 py-[1px] rounded font-mono font-semibold"
+                              <span className="text-[9.5px] px-1.5 py-[2px] rounded font-mono font-semibold"
                                 style={{ background: `${portColor}20`, color: portColor, border: `0.5px solid ${portColor}55`, boxShadow: `0 0 4px ${portColor}30` }}>
                                 {ctStyle?.label ?? ct}
                               </span>
                             )}
-                            {meta?.label && <span className="text-[9.5px] text-neutral-500 truncate">{meta.label}</span>}
+                            {meta?.label && <span className="text-[10.5px] text-neutral-500 truncate">{meta.label}</span>}
                           </div>
                         </div>
                       );
@@ -2161,20 +2174,20 @@ export default function SignalFlowMap() {
                       return (
                         <div key={p.name} className="flex items-center justify-end pointer-events-auto" style={{ height: PORT_H }}>
                           <div className="flex-1 flex items-center justify-end gap-1.5 min-w-0 mr-2">
-                            {meta?.label && <span className="text-[9.5px] text-neutral-500 truncate text-right">{meta.label}</span>}
+                            {meta?.label && <span className="text-[10.5px] text-neutral-500 truncate text-right">{meta.label}</span>}
                             {isPgm && (
-                              <span className="text-[8.5px] px-1.5 py-[1px] rounded font-mono font-bold"
+                              <span className="text-[9.5px] px-2 py-[2px] rounded font-mono font-bold"
                                 style={{ background: 'linear-gradient(90deg, #10b981, #059669)', color: 'white', boxShadow: '0 0 8px rgba(16,185,129,0.6)' }}>
                                 PGM
                               </span>
                             )}
                             {ct && (
-                              <span className="text-[8.5px] px-1 py-[1px] rounded font-mono font-semibold"
+                              <span className="text-[9.5px] px-1.5 py-[2px] rounded font-mono font-semibold"
                                 style={{ background: `${portColor}20`, color: portColor, border: `0.5px solid ${portColor}55`, boxShadow: `0 0 4px ${portColor}30` }}>
                                 {ctStyle?.label ?? ct}
                               </span>
                             )}
-                            <span className="text-[10.5px] text-neutral-200 font-mono truncate font-medium">{p.name}</span>
+                            <span className="text-[11.5px] text-neutral-200 font-mono truncate font-medium">{p.name}</span>
                           </div>
                           <button
                             data-port
@@ -2285,11 +2298,11 @@ export default function SignalFlowMap() {
                             />
                           </>
                         ) : currentDisplaySource ? (
-                          <span className="text-[9.5px] text-neutral-600 italic">
+                          <span className="text-[10.5px] text-neutral-600 italic">
                             📡 {currentDisplaySource.name} (음원 없음)
                           </span>
                         ) : (
-                          <span className="text-[9.5px] text-neutral-700 italic font-mono">NO AUDIO</span>
+                          <span className="text-[10.5px] text-neutral-700 italic font-mono">NO AUDIO</span>
                         )}
                       </div>
                     )}

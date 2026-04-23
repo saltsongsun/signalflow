@@ -78,12 +78,24 @@ html, body {
 /* 드래그 중엔 성능을 위해 애니메이션 정지 */
 body.is-dragging .flow-line,
 body.is-dragging .device-selected::after,
-body.is-dragging [style*="animate-pulse"],
+body.is-dragging .animate-pulse,
 body.is-dragging [class*="animate-pulse"] {
   animation-play-state: paused !important;
 }
 body.is-dragging * {
   transition: none !important;
+}
+/* 드래그 중 SVG 필터(glow) 제거 — 가장 비싼 연산 */
+body.is-dragging svg path {
+  filter: none !important;
+}
+body.is-dragging svg g[opacity] {
+  opacity: 1 !important;
+}
+/* 드래그 중 backdrop-filter blur 제거 (GPU 부담) */
+body.is-dragging [class*="backdrop-blur"] {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 /* Signal flow animation — 점선이 출력 → 입력 방향으로 흐름 */
