@@ -356,8 +356,7 @@ export default function SignalFlowMap() {
         origOffset: offset,
       };
       setDraggingCursor('canvas');
-      // 즉시 선택 해제는 mouseup에서 moved 여부 확인 후 처리 (아래 별도 처리 없이 유지)
-      if (!editMode) setTraceId(null);
+      // 편집모드에서 빈 공간 클릭은 다중선택 해제. 보기모드에서는 trace 유지.
       if (editMode && !e.shiftKey) setSelectedIds(new Set());
     }
   };
