@@ -75,6 +75,17 @@ html, body {
   animation: shine 2.5s ease-in-out infinite;
 }
 
+/* 드래그 중엔 성능을 위해 애니메이션 정지 */
+body.is-dragging .flow-line,
+body.is-dragging .device-selected::after,
+body.is-dragging [style*="animate-pulse"],
+body.is-dragging [class*="animate-pulse"] {
+  animation-play-state: paused !important;
+}
+body.is-dragging * {
+  transition: none !important;
+}
+
 /* Signal flow animation — 점선이 출력 → 입력 방향으로 흐름 */
 @keyframes flow {
   from { stroke-dashoffset: 0; }

@@ -425,6 +425,54 @@ export default function SignalFlowMap() {
     return m;
   }, [devices, signalByOutput, devById]);
 
+  // ===== 성능 최적화: connection 인덱스 =====
+  // O(1)로 "이 OUT 포트가 어디로 가는지" 조회
+  const connByFromPort = useMemo(() => {
+    const m = new Map<string, Connection>();  // key: "deviceId:portName"
+    connections.forEach(c => {
+      if (c.from_device === c.to_device && c.is_patch) return;
+      m.set(`${c.from_device}:${c.from_port}`, c);
+    });
+    return m;
+  }, [connections]);
+
+  const connByToPort = useMemo(() => {
+    const m = new Map<string, Connection>();
+    connections.forEach(c => {
+      if (c.from_device === c.to_device && c.is_patch) return;
+      m.set(`${c.to_device}:${c.to_port}`, c);
+    });
+    return m;
+  }, [connections]);
+
+  // 장비별 hub 연결 목록 (배지 바용) — IN 쪽만
+  const hubConnsByDevice = useMemo(() => {
+    const m = new Map<string, Array<{ id: string; hub: Device; myPort: string; hubPort: string }>>();
+    connections.forEach(c => {
+      if (c.from_device === c.to_device && c.is_patch) return;
+      const hub = devById.get(c.from_device);
+      if (!hub || (hub.role !== 'router' && hub.role !== 'patchbay')) return;
+      const me = devById.get(c.to_device);
+      if (!me || me.role === 'router' || me.role === 'patchbay') return;
+      const arr = m.get(me.id) ?? [];
+      arr.push({ id: c.id, hub, myPort: c.to_port, hubPort: c.from_port });
+      m.set(me.id, arr);
+    });
+    return m;
+  }, [connections, devById]);
+
+  // 장비별 OUT 포트의 destination 정보
+  const destInfoByOutPort = useMemo(() => {
+    const m = new Map<string, { destDev: Device; destConn: Connection }>();
+    connections.forEach(c => {
+      if (c.from_device === c.to_device && c.is_patch) return;
+      const destDev = devById.get(c.to_device);
+      if (!destDev) return;
+      m.set(`${c.from_device}:${c.from_port}`, { destDev, destConn: c });
+    });
+    return m;
+  }, [connections, devById]);
+
   // ===== Global window listeners =====
   useEffect(() => {
     // 키보드: Cmd/Ctrl+Z — 편집모드 undo
@@ -445,7 +493,16 @@ export default function SignalFlowMap() {
   }, []);
 
   useEffect(() => {
-    const onMove = (e: MouseEvent) => {
+    // rAF 스로틀 — 연속 이벤트를 프레임당 한 번씩만 처리
+    let rafId: number | null = null;
+    let pendingEvent: { clientX: number; clientY: number } | null = null;
+
+    const processMove = () => {
+      rafId = null;
+      if (!pendingEvent) return;
+      const e = pendingEvent;
+      pendingEvent = null;
+
       const p = pointerRef.current;
       if (p.type === 'none') return;
 
@@ -475,14 +532,23 @@ export default function SignalFlowMap() {
         }
       } else if (p.type === 'marquee' && p.worldStartX !== undefined && p.worldStartY !== undefined) {
         const sc = stateRef.current.scale;
-        const off = stateRef.current.offset;
-        const wx = (e.clientX - off.x) / sc;
-        const wy = (e.clientY - off.y) / sc;
-        const minX = Math.min(p.worldStartX, wx);
-        const minY = Math.min(p.worldStartY, wy);
-        setMarqueeRect({ x: minX, y: minY, w: Math.abs(wx - p.worldStartX), h: Math.abs(wy - p.worldStartY) });
-        p.moved = true;
+        const offs = stateRef.current.offset;
+        const wx = (e.clientX - offs.x) / sc;
+        const wy = (e.clientY - offs.y) / sc;
+        const x = Math.min(p.worldStartX, wx);
+        const y = Math.min(p.worldStartY, wy);
+        const w = Math.abs(wx - p.worldStartX);
+        const h = Math.abs(wy - p.worldStartY);
+        setMarqueeRect({ x, y, w, h });
+        if (!p.moved && (w > DRAG_THRESHOLD || h > DRAG_THRESHOLD)) p.moved = true;
       }
+    };
+
+    const onMove = (e: MouseEvent) => {
+      const p = pointerRef.current;
+      if (p.type === 'none') return;
+      pendingEvent = { clientX: e.clientX, clientY: e.clientY };
+      if (rafId == null) rafId = requestAnimationFrame(processMove);
     };
 
     const onUp = async () => {
@@ -584,6 +650,7 @@ export default function SignalFlowMap() {
     window.addEventListener('touchcancel', onTouchEnd);
 
     return () => {
+      if (rafId != null) cancelAnimationFrame(rafId);
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
       window.removeEventListener('touchmove', onTouchMove);
@@ -1129,6 +1196,14 @@ export default function SignalFlowMap() {
     : draggingCursor === 'device' ? 'cursor-grabbing'
     : 'cursor-grab';
 
+  // 드래그 중엔 body에 class를 붙여 CSS 애니메이션 일시정지 (성능)
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const b = document.body;
+    if (draggingCursor !== 'none') b.classList.add('is-dragging');
+    else b.classList.remove('is-dragging');
+  }, [draggingCursor]);
+
   return (
     <div className="h-screen w-screen bg-gradient-to-br from-neutral-950 via-black to-neutral-950 text-white overflow-hidden relative select-none">
       {/* Top bar */}
@@ -1650,24 +1725,8 @@ export default function SignalFlowMap() {
             const isDisplay = role === 'display';
             const currentDisplaySource = isDisplay ? displaySources.get(d.id) : undefined;
 
-            // 이 장비의 IN 포트에 연결된 hub (라우터/패치베이) — 카드 옆 배지 바용
-            // OUT 방향은 OUT 포트 라벨로 이미 표시됨
-            const hubConnections: Array<{
-              id: string; hub: Device; myPort: string; hubPort: string;
-              dir: 'in';
-            }> = [];
-            if (role !== 'router' && role !== 'patchbay') {
-              connections.forEach(c => {
-                if (c.from_device === c.to_device && c.is_patch) return;
-                // hub → 나 (IN으로 들어오는 연결만)
-                if (c.to_device === d.id) {
-                  const hub = devById.get(c.from_device);
-                  if (hub && (hub.role === 'router' || hub.role === 'patchbay')) {
-                    hubConnections.push({ id: c.id, hub, myPort: c.to_port, hubPort: c.from_port, dir: 'in' });
-                  }
-                }
-              });
-            }
+            // 이 장비의 IN 포트에 연결된 hub (precomputed)
+            const hubConnections = hubConnsByDevice.get(d.id) ?? [];
             // 패치베이 내 포트 번호(1부터 시작) 구하기
             const hubPortIndex = (hub: Device, portName: string, isOutputSide: boolean): number => {
               const list = isOutputSide ? hub.outputs : hub.inputs;
@@ -2029,38 +2088,13 @@ export default function SignalFlowMap() {
                       const portColor = layer?.color ?? color.main;
                       const isPending = pendingFrom?.device === d.id && pendingFrom?.port === p.name;
                       const isPgm = d.role === 'switcher' && d.pgmPort === p.name;
-                      // 이 OUT이 연결된 대상 찾기
-                      const destConn = connections.find(c =>
-                        c.from_device === d.id && c.from_port === p.name &&
-                        !(c.from_device === c.to_device && c.is_patch)
-                      );
-                      const destDev = destConn ? devById.get(destConn.to_device) : undefined;
-                      let destLabel: string | null = null;
-                      let destColor = 'text-neutral-500';
-                      if (destDev && destConn) {
-                        if (destDev.role === 'router') {
-                          // "20x10 R/S 포트명"
-                          destLabel = `→ ${destDev.inputs.length}x${destDev.outputs.length} R/S ${destConn.to_port}`;
-                          destColor = 'text-fuchsia-300';
-                        } else if (destDev.role === 'patchbay') {
-                          // "패치베이명-포트번호"
-                          const idx = destDev.inputs.indexOf(destConn.to_port);
-                          destLabel = `→ ${destDev.name}-${String((idx >= 0 ? idx + 1 : 0)).padStart(2, '0')}`;
-                          destColor = 'text-teal-300';
-                        } else {
-                          // 일반 장비
-                          destLabel = `→ ${destDev.name}·${destConn.to_port}`;
-                          destColor = 'text-neutral-400';
-                        }
-                      }
+                      // 이 OUT이 연결된 대상 (precomputed lookup)
+                      const destInfo = destInfoByOutPort.get(`${d.id}:${p.name}`);
+                      const destConn = destInfo?.destConn;
+                      const destDev = destInfo?.destDev;
                       return (
                         <div key={p.name} className="flex items-center justify-end pointer-events-auto" style={{ height: PORT_H }}>
                           <div className="flex-1 flex items-center justify-end gap-1.5 min-w-0 mr-2">
-                            {destLabel && (
-                              <span className={`text-[8.5px] ${destColor} truncate font-mono opacity-80`} title={`연결됨: ${destDev?.name} / ${destConn?.to_port}`}>
-                                {destLabel}
-                              </span>
-                            )}
                             {meta?.label && <span className="text-[9.5px] text-neutral-500 truncate text-right">{meta.label}</span>}
                             {isPgm && (
                               <span className="text-[8.5px] px-1.5 py-[1px] rounded font-mono font-bold"
@@ -2197,56 +2231,138 @@ export default function SignalFlowMap() {
                 )}
               </div>
 
-              {/* 라우터/패치베이 연결 배지 바 */}
-              {hubConnections.length > 0 && (
+              {/* 왼쪽: IN 쪽 Hub 연결 배지 (각 IN 포트와 y좌표 정렬) */}
+              {hubConnections.length > 0 && !isPatchbay && !isWallbox && role !== 'router' && inVis.length > 0 && (
                 <div
                   data-ui
-                  className="absolute flex flex-col gap-0.5 pointer-events-auto"
+                  className="absolute flex flex-col items-end pointer-events-auto"
                   style={{
-                    left: d.x + w + 6,
-                    top: d.y,
-                    maxWidth: 180,
+                    left: d.x - 160,
+                    width: 154,
+                    top: d.y + HEADER_H + PADDING_Y - 2,
                     zIndex: 6,
                   }}
                 >
-                  {hubConnections.map(hc => {
+                  {inVis.map((p) => {
+                    // 이 IN 포트로 오는 hub connection 찾기
+                    const hc = hubConnections.find(x => x.myPort === p.name);
+                    if (!hc) {
+                      return <div key={p.name} style={{ height: PORT_H }}></div>;
+                    }
                     const isRouter = hc.hub.role === 'router';
                     const isActive = inspectHubs.has(hc.hub.id);
                     let label: string;
                     if (isRouter) {
                       label = `${hc.hub.inputs.length}x${hc.hub.outputs.length} R/S ${hc.hubPort}`;
                     } else {
-                      // hc.dir은 'in' 고정 — hub의 OUT 쪽 포트 인덱스
                       const idx = hubPortIndex(hc.hub, hc.hubPort, true);
                       label = `${hc.hub.name}-${String(idx).padStart(2, '0')}`;
                     }
                     return (
-                      <button
-                        key={hc.id}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setInspectHubs(prev => {
-                            const next = new Set(prev);
-                            if (next.has(hc.hub.id)) next.delete(hc.hub.id);
-                            else next.add(hc.hub.id);
-                            return next;
-                          });
-                        }}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        className={`flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] font-mono font-medium transition text-left ${
-                          isActive
-                            ? isRouter
-                              ? 'bg-fuchsia-500 text-white border border-fuchsia-400 shadow-md shadow-fuchsia-500/40'
-                              : 'bg-teal-500 text-white border border-teal-400 shadow-md shadow-teal-500/40'
-                            : isRouter
-                              ? 'bg-fuchsia-500/15 text-fuchsia-200 border border-fuchsia-500/30 hover:bg-fuchsia-500/30'
-                              : 'bg-teal-500/15 text-teal-200 border border-teal-500/30 hover:bg-teal-500/30'
-                        }`}
-                        title={`수신: ${hc.hub.name}/${hc.hubPort} → ${hc.myPort}${isActive ? '\n(클릭 → 선 숨기기)' : '\n(클릭 → 연결선 표시)'}`}
-                      >
-                        <span className="text-[8px] opacity-75 shrink-0">←</span>
+                      <div key={p.name} className="flex items-center" style={{ height: PORT_H }}>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setInspectHubs(prev => {
+                              const next = new Set(prev);
+                              if (next.has(hc.hub.id)) next.delete(hc.hub.id);
+                              else next.add(hc.hub.id);
+                              return next;
+                            });
+                          }}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          className={`flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] font-mono font-medium transition text-left border ${
+                            isActive
+                              ? isRouter
+                                ? 'bg-fuchsia-500 text-white border-fuchsia-400 shadow-md shadow-fuchsia-500/40'
+                                : 'bg-teal-500 text-white border-teal-400 shadow-md shadow-teal-500/40'
+                              : isRouter
+                                ? 'bg-fuchsia-500/15 text-fuchsia-200 border-fuchsia-500/30 hover:bg-fuchsia-500/30'
+                                : 'bg-teal-500/15 text-teal-200 border-teal-500/30 hover:bg-teal-500/30'
+                          }`}
+                          title={`수신: ${hc.hub.name}/${hc.hubPort} → ${hc.myPort}${isActive ? '\n(클릭 → 선 숨기기)' : '\n(클릭 → 연결선 표시)'}`}
+                        >
+                          <span className="truncate">{label}</span>
+                          <span className="text-[8px] opacity-75 shrink-0">→</span>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* 오른쪽: OUT 포트 옆 dest 라벨 (설계도면 스타일, 각 포트와 y좌표 정렬) */}
+              {!isPatchbay && !isWallbox && role !== 'router' && outVis.length > 0 && (
+                <div
+                  data-ui
+                  className="absolute flex flex-col pointer-events-auto"
+                  style={{
+                    left: d.x + w + 6,
+                    top: d.y + HEADER_H + PADDING_Y - 2,  // OUT 포트 첫 행 시작 위치
+                    zIndex: 6,
+                  }}
+                >
+                  {outVis.map((p) => {
+                    const info = destInfoByOutPort.get(`${d.id}:${p.name}`);
+                    if (!info) {
+                      // 연결 없음 - 빈 자리 유지 (정렬용)
+                      return <div key={p.name} style={{ height: PORT_H }}></div>;
+                    }
+                    const { destDev, destConn } = info;
+                    const isRouter = destDev.role === 'router';
+                    const isPb = destDev.role === 'patchbay';
+                    const isHub = isRouter || isPb;
+                    const isActive = isHub && inspectHubs.has(destDev.id);
+
+                    let label: string;
+                    let bgClass: string;
+                    if (isRouter) {
+                      label = `${destDev.inputs.length}x${destDev.outputs.length} R/S ${destConn.to_port}`;
+                      bgClass = isActive
+                        ? 'bg-fuchsia-500 text-white border-fuchsia-400 shadow-md shadow-fuchsia-500/40'
+                        : 'bg-fuchsia-500/15 text-fuchsia-200 border-fuchsia-500/30 hover:bg-fuchsia-500/30';
+                    } else if (isPb) {
+                      const idx = destDev.inputs.indexOf(destConn.to_port);
+                      label = `${destDev.name}-${String(idx >= 0 ? idx + 1 : 0).padStart(2, '0')}`;
+                      bgClass = isActive
+                        ? 'bg-teal-500 text-white border-teal-400 shadow-md shadow-teal-500/40'
+                        : 'bg-teal-500/15 text-teal-200 border-teal-500/30 hover:bg-teal-500/30';
+                    } else {
+                      label = `${destDev.name}·${destConn.to_port}`;
+                      bgClass = 'bg-white/5 text-neutral-400 border-white/15';
+                    }
+
+                    const content = (
+                      <>
+                        <span className="text-[8px] opacity-75 shrink-0">→</span>
                         <span className="truncate">{label}</span>
-                      </button>
+                      </>
+                    );
+
+                    return (
+                      <div key={p.name} className="flex items-center" style={{ height: PORT_H }}>
+                        {isHub ? (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setInspectHubs(prev => {
+                                const next = new Set(prev);
+                                if (next.has(destDev.id)) next.delete(destDev.id);
+                                else next.add(destDev.id);
+                                return next;
+                              });
+                            }}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            className={`flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] font-mono font-medium transition text-left border ${bgClass}`}
+                            title={`연결됨: ${destDev.name} / ${destConn.to_port}${isActive ? '\n(클릭 → 선 숨기기)' : '\n(클릭 → 연결선 표시)'}`}
+                          >{content}</button>
+                        ) : (
+                          <div
+                            className={`flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] font-mono font-medium text-left border ${bgClass}`}
+                            title={`연결됨: ${destDev.name} / ${destConn.to_port}`}
+                          >{content}</div>
+                        )}
+                      </div>
                     );
                   })}
                 </div>
