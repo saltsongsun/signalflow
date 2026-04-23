@@ -36,7 +36,7 @@ export default function SignalFlowMap() {
   useEffect(() => {
     loadData();
 
-    const devicesChannel = supabase
+    const devicesChannel = (supabase as any)
       .channel('devices-changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'devices' }, (payload: any) => {
         if (payload.eventType === 'INSERT') {
@@ -49,7 +49,7 @@ export default function SignalFlowMap() {
       })
       .subscribe();
 
-    const connectionsChannel = supabase
+    const connectionsChannel = (supabase as any)
       .channel('connections-changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'connections' }, (payload: any) => {
         if (payload.eventType === 'INSERT') {
@@ -58,15 +58,15 @@ export default function SignalFlowMap() {
           setConnections(prev => prev.filter(c => c.id !== payload.old.id));
         }
       })
-      .subscribe((status) => setConnected(status === 'SUBSCRIBED'));
+      .subscribe((status: string) => setConnected(status === 'SUBSCRIBED'));
 
-    const presenceChannel = supabase.channel('presence-room');
+    const presenceChannel = (supabase as any).channel('presence-room');
     presenceChannel
       .on('presence', { event: 'sync' }, () => {
         const state = presenceChannel.presenceState();
         setActiveUsers(Object.keys(state).length);
       })
-      .subscribe(async (status) => {
+      .subscribe(async (status: string) => {
         if (status === 'SUBSCRIBED') {
           await presenceChannel.track({ user_id: crypto.randomUUID(), online_at: new Date().toISOString() });
         }
