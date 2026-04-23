@@ -76,6 +76,33 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onDupli
     else setOutputs(outputs.map(r => ({ ...r, layerId })));
   };
 
+  // 지정 개수로 포트 리스트 맞추기 (증가 시 자동 생성, 감소 시 뒤에서 제거)
+  const setPortCount = (dir: 'in' | 'out', count: number) => {
+    const n = Math.max(0, Math.min(128, Math.floor(count)));
+    const rows = dir === 'in' ? inputs : outputs;
+    const prefix = dir === 'in' ? 'IN' : 'OUT';
+    if (n === rows.length) return;
+    if (n > rows.length) {
+      // 빈 슬롯 채우기 - 연번 번호 01, 02 ... 식으로
+      const next = [...rows];
+      const needsPad = n >= 10;
+      const pad = (i: number) => needsPad ? String(i).padStart(2, '0') : String(i);
+      for (let i = rows.length + 1; i <= n; i++) {
+        let name = `${prefix}-${pad(i)}`;
+        // 충돌 회피
+        while (next.some(r => r.name === name)) name = `${name}_`;
+        next.push({ name, label: '', connType: '', layerId: defaultLayerId });
+      }
+      if (dir === 'in') setInputs(next);
+      else setOutputs(next);
+    } else {
+      // 뒤에서 제거
+      const next = rows.slice(0, n);
+      if (dir === 'in') setInputs(next);
+      else setOutputs(next);
+    }
+  };
+
   const handleSave = () => {
     let finalInputs: PortRow[], finalOutputs: PortRow[];
     if (bulkMode === 'text') {
@@ -408,7 +435,28 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onDupli
               <div className="flex items-center gap-2 mb-2.5">
                 <div className="w-1 h-4 bg-gradient-to-b from-sky-400 to-sky-600 rounded-full"></div>
                 <h3 className="text-[11px] uppercase tracking-[0.12em] text-sky-300 font-bold">입력 포트</h3>
-                <span className="text-[10px] text-neutral-500 font-mono">{inputs.length}개</span>
+                <div className="flex items-center gap-0.5 bg-black/30 border border-sky-500/20 rounded-md p-0.5">
+                  <button
+                    onClick={() => setPortCount('in', inputs.length - 1)}
+                    className="w-5 h-5 text-[11px] rounded hover:bg-sky-500/30 text-sky-300 hover:text-white transition"
+                    title="-1"
+                  >−</button>
+                  <input
+                    type="number"
+                    value={inputs.length}
+                    onChange={e => setPortCount('in', Number(e.target.value))}
+                    min={0}
+                    max={128}
+                    className="w-10 bg-transparent text-center text-[11px] font-mono text-sky-200 font-bold focus:outline-none focus:bg-sky-500/10 rounded"
+                    title="정확한 개수 입력"
+                  />
+                  <button
+                    onClick={() => setPortCount('in', inputs.length + 1)}
+                    className="w-5 h-5 text-[11px] rounded hover:bg-sky-500/30 text-sky-300 hover:text-white transition"
+                    title="+1"
+                  >+</button>
+                </div>
+                <span className="text-[10px] text-neutral-500 font-mono">개</span>
                 <div className="flex-1 border-t border-white/5"></div>
               </div>
               {renderPortList('in', inputs)}
@@ -417,7 +465,28 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onDupli
               <div className="flex items-center gap-2 mb-2.5">
                 <div className="w-1 h-4 bg-gradient-to-b from-orange-400 to-orange-600 rounded-full"></div>
                 <h3 className="text-[11px] uppercase tracking-[0.12em] text-orange-300 font-bold">출력 포트</h3>
-                <span className="text-[10px] text-neutral-500 font-mono">{outputs.length}개</span>
+                <div className="flex items-center gap-0.5 bg-black/30 border border-orange-500/20 rounded-md p-0.5">
+                  <button
+                    onClick={() => setPortCount('out', outputs.length - 1)}
+                    className="w-5 h-5 text-[11px] rounded hover:bg-orange-500/30 text-orange-300 hover:text-white transition"
+                    title="-1"
+                  >−</button>
+                  <input
+                    type="number"
+                    value={outputs.length}
+                    onChange={e => setPortCount('out', Number(e.target.value))}
+                    min={0}
+                    max={128}
+                    className="w-10 bg-transparent text-center text-[11px] font-mono text-orange-200 font-bold focus:outline-none focus:bg-orange-500/10 rounded"
+                    title="정확한 개수 입력"
+                  />
+                  <button
+                    onClick={() => setPortCount('out', outputs.length + 1)}
+                    className="w-5 h-5 text-[11px] rounded hover:bg-orange-500/30 text-orange-300 hover:text-white transition"
+                    title="+1"
+                  >+</button>
+                </div>
+                <span className="text-[10px] text-neutral-500 font-mono">개</span>
                 <div className="flex-1 border-t border-white/5"></div>
               </div>
               {renderPortList('out', outputs)}
