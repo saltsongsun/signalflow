@@ -67,7 +67,12 @@ export default function LayerPanel({ layers, onClose }: Props) {
         </div>
       </div>
 
-      <div className="overflow-y-auto p-2 space-y-1 custom-scroll" style={{ maxHeight: 'calc(100vh - 210px)' }}>
+      <div className="overflow-y-auto p-2 space-y-1 custom-scroll" style={{ maxHeight: 'calc(100vh - 250px)' }}>
+        <div className="text-[10px] text-neutral-500 px-2 py-1.5 bg-white/[0.02] rounded-md mb-1 leading-relaxed">
+          👁 <span className="text-neutral-400">눈</span>으로 표시/숨김 · 
+          ■ <span className="text-neutral-400">색상칩</span>으로 색 변경 · 
+          <span className="text-neutral-400">이름 클릭</span>으로 수정
+        </div>
         {sorted.map(l => (
           <div
             key={l.id}
@@ -101,14 +106,16 @@ export default function LayerPanel({ layers, onClose }: Props) {
                 onChange={e => setEditName(e.target.value)}
                 onBlur={() => renameLayer(l, editName || l.name)}
                 onKeyDown={e => { if (e.key === 'Enter') renameLayer(l, editName || l.name); if (e.key === 'Escape') setEditingId(null); }}
-                className="flex-1 bg-neutral-800 text-xs rounded px-2 py-1 focus:outline-none border border-sky-500 text-white"
+                className="flex-1 bg-neutral-800 text-xs rounded px-2 py-1 focus:outline-none border border-sky-500 text-white font-medium"
               />
             ) : (
               <button
                 onClick={() => { setEditingId(l.id); setEditName(l.name); }}
-                className="flex-1 text-left text-xs text-neutral-200 truncate"
+                className="flex-1 flex items-center gap-1.5 text-left text-xs text-neutral-100 truncate group/name hover:text-white"
+                title="클릭하여 이름 수정"
               >
-                {l.name}
+                <span className="truncate font-medium">{l.name}</span>
+                <span className="text-[10px] text-neutral-500 opacity-0 group-hover/name:opacity-100 transition">✎</span>
               </button>
             )}
 

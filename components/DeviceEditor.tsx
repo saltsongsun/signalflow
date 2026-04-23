@@ -107,69 +107,78 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onClose
   const sortedLayers = [...layers].sort((a, b) => a.sort_order - b.sort_order);
 
   const renderPortList = (dir: 'in' | 'out', rows: PortRow[]) => (
-    <div className="space-y-1.5">
-      <div className="flex items-center gap-1 text-[9.5px] uppercase tracking-wider text-neutral-500 px-1 font-medium">
-        <span className="w-16">포트</span>
-        <span className="flex-1">물리 이름</span>
-        <span className="w-20">방식</span>
-        <span className="w-24">레이어</span>
-        <span className="w-6"></span>
-      </div>
+    <div className="space-y-2">
       {rows.map((r, i) => {
         const layer = sortedLayers.find(l => l.id === r.layerId);
         return (
-          <div key={i} className="flex items-center gap-1 group bg-white/[0.02] hover:bg-white/[0.04] p-1 rounded-md transition">
-            <input
-              value={r.name}
-              onChange={e => updatePort(dir, i, 'name', e.target.value)}
-              placeholder="포트"
-              className="bg-neutral-900 border border-white/10 rounded px-1.5 py-1 text-xs w-16 focus:border-sky-500 focus:ring-1 focus:ring-sky-500/30 focus:outline-none font-mono text-white"
-            />
-            <input
-              value={r.label}
-              onChange={e => updatePort(dir, i, 'label', e.target.value)}
-              placeholder="CCU-1 OP-1"
-              className="bg-neutral-900 border border-white/10 rounded px-1.5 py-1 text-xs flex-1 focus:border-sky-500 focus:ring-1 focus:ring-sky-500/30 focus:outline-none min-w-0 text-neutral-200"
-            />
-            <select
-              value={r.connType}
-              onChange={e => updatePort(dir, i, 'connType', e.target.value)}
-              className="bg-neutral-900 border border-white/10 rounded px-1 py-1 text-xs w-20 focus:border-sky-500 focus:outline-none text-neutral-200"
-            >
-              <option value="">-</option>
-              {CONNECTION_TYPES.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-            <div className="relative w-24">
-              <select
-                value={r.layerId}
-                onChange={e => updatePort(dir, i, 'layerId', e.target.value)}
-                className="w-full bg-neutral-900 border border-white/10 rounded pl-5 pr-1 py-1 text-xs focus:border-sky-500 focus:outline-none text-neutral-200"
-              >
-                {sortedLayers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-              </select>
-              <div className="absolute left-1.5 top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-sm ring-1 ring-white/20" style={{ background: layer?.color ?? '#888' }}></div>
+          <div key={i} className="group bg-white/[0.03] hover:bg-white/[0.05] border border-white/5 hover:border-white/10 rounded-lg p-2 transition">
+            {/* Line 1: port name + phys label + delete */}
+            <div className="flex items-center gap-1.5 mb-1.5">
+              <input
+                value={r.name}
+                onChange={e => updatePort(dir, i, 'name', e.target.value)}
+                placeholder="포트"
+                className="bg-neutral-900 border border-white/10 rounded px-2 py-1.5 text-xs w-20 focus:border-sky-500 focus:ring-1 focus:ring-sky-500/30 focus:outline-none font-mono text-white font-semibold"
+              />
+              <input
+                value={r.label}
+                onChange={e => updatePort(dir, i, 'label', e.target.value)}
+                placeholder="물리 이름 (예: CCU-1 OP-1)"
+                className="bg-neutral-900 border border-white/10 rounded px-2 py-1.5 text-xs flex-1 focus:border-sky-500 focus:ring-1 focus:ring-sky-500/30 focus:outline-none min-w-0 text-neutral-200"
+              />
+              <button
+                onClick={() => removePort(dir, i)}
+                className="w-7 h-7 rounded bg-white/5 hover:bg-rose-500 text-neutral-500 hover:text-white text-sm transition shrink-0"
+                title="포트 삭제"
+              >−</button>
             </div>
-            <button
-              onClick={() => removePort(dir, i)}
-              className="w-6 h-6 rounded bg-white/5 hover:bg-rose-500 text-neutral-500 hover:text-white text-sm transition"
-              title="삭제"
-            >−</button>
+            {/* Line 2: conn type + layer pill */}
+            <div className="flex items-center gap-1.5 pl-1">
+              <div className="flex items-center gap-1 flex-1">
+                <span className="text-[9.5px] text-neutral-600 uppercase tracking-wider font-semibold">방식</span>
+                <select
+                  value={r.connType}
+                  onChange={e => updatePort(dir, i, 'connType', e.target.value)}
+                  className="bg-neutral-900 border border-white/10 rounded px-1.5 py-1 text-[11px] focus:border-sky-500 focus:outline-none text-neutral-200 font-mono"
+                >
+                  <option value="">-</option>
+                  {CONNECTION_TYPES.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-[9.5px] text-neutral-600 uppercase tracking-wider font-semibold">레이어</span>
+                <div className="relative">
+                  <select
+                    value={r.layerId}
+                    onChange={e => updatePort(dir, i, 'layerId', e.target.value)}
+                    className="bg-neutral-900 border border-white/10 rounded pl-6 pr-2 py-1 text-[11px] focus:border-sky-500 focus:outline-none text-neutral-200 font-medium min-w-[120px]"
+                    style={{ borderLeftColor: layer?.color, borderLeftWidth: 3 }}
+                  >
+                    {sortedLayers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                  </select>
+                  <div
+                    className="absolute left-1.5 top-1/2 -translate-y-1/2 w-3 h-3 rounded ring-1 ring-white/20 pointer-events-none"
+                    style={{ background: layer?.color ?? '#888', boxShadow: `0 0 6px ${layer?.color ?? '#888'}88` }}
+                  ></div>
+                </div>
+              </div>
+            </div>
           </div>
         );
       })}
       <div className="flex gap-1.5 pt-1">
         <button
           onClick={() => addPort(dir)}
-          className="flex-1 py-1.5 text-xs text-neutral-400 hover:text-white hover:bg-white/5 rounded-md border border-dashed border-white/15 hover:border-white/30 transition"
+          className="flex-1 py-2 text-xs text-neutral-400 hover:text-white hover:bg-white/5 rounded-md border border-dashed border-white/15 hover:border-white/30 transition font-medium"
         >＋ 포트 추가</button>
         <select
           onChange={e => { if (e.target.value) { applyLayerToAll(dir, e.target.value); e.target.value = ''; } }}
-          className="bg-neutral-900 border border-white/10 rounded px-2 py-1.5 text-[10px] text-neutral-400 focus:outline-none hover:text-white"
+          className="bg-neutral-900 border border-white/10 rounded px-3 py-2 text-[11px] text-neutral-400 focus:outline-none hover:text-white hover:border-white/20"
           defaultValue=""
           title="전체 포트를 선택한 레이어로 일괄 변경"
         >
-          <option value="" disabled>⇔ 전체 →</option>
-          {sortedLayers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+          <option value="" disabled>⇔ 전체 레이어 일괄변경</option>
+          {sortedLayers.map(l => <option key={l.id} value={l.id}>→ {l.name}</option>)}
         </select>
       </div>
     </div>
@@ -178,7 +187,7 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onClose
   return (
     <div
       data-ui
-      className={`fixed inset-y-0 right-0 w-[640px] bg-gradient-to-b from-neutral-950 via-neutral-950 to-black border-l border-white/10 shadow-2xl z-50 overflow-y-auto custom-scroll`}
+      className={`fixed inset-y-0 right-0 w-[720px] bg-gradient-to-b from-neutral-950 via-neutral-950 to-black border-l border-white/10 shadow-2xl z-50 overflow-y-auto custom-scroll`}
     >
       {/* Header */}
       <div className={`sticky top-0 z-10 bg-gradient-to-r ${accent.grad} to-neutral-950 backdrop-blur-xl border-b border-white/10`}>
@@ -300,16 +309,20 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onClose
         {bulkMode === 'list' ? (
           <>
             <div>
-              <div className="flex items-baseline justify-between mb-2">
-                <h3 className="text-[10px] uppercase tracking-[0.12em] text-neutral-400 font-semibold">↓ 입력 포트</h3>
-                <span className="text-[10px] text-neutral-600 font-mono">{inputs.length}</span>
+              <div className="flex items-center gap-2 mb-2.5">
+                <div className="w-1 h-4 bg-gradient-to-b from-sky-400 to-sky-600 rounded-full"></div>
+                <h3 className="text-[11px] uppercase tracking-[0.12em] text-sky-300 font-bold">입력 포트</h3>
+                <span className="text-[10px] text-neutral-500 font-mono">{inputs.length}개</span>
+                <div className="flex-1 border-t border-white/5"></div>
               </div>
               {renderPortList('in', inputs)}
             </div>
             <div className="pt-1">
-              <div className="flex items-baseline justify-between mb-2">
-                <h3 className="text-[10px] uppercase tracking-[0.12em] text-neutral-400 font-semibold">↑ 출력 포트</h3>
-                <span className="text-[10px] text-neutral-600 font-mono">{outputs.length}</span>
+              <div className="flex items-center gap-2 mb-2.5">
+                <div className="w-1 h-4 bg-gradient-to-b from-orange-400 to-orange-600 rounded-full"></div>
+                <h3 className="text-[11px] uppercase tracking-[0.12em] text-orange-300 font-bold">출력 포트</h3>
+                <span className="text-[10px] text-neutral-500 font-mono">{outputs.length}개</span>
+                <div className="flex-1 border-t border-white/5"></div>
               </div>
               {renderPortList('out', outputs)}
             </div>

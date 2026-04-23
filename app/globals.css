@@ -48,3 +48,15 @@ html, body {
   pointer-events: none;
   animation: shine 2.5s ease-in-out infinite;
 }
+
+/* Signal flow animation — 점선이 출력 → 입력 방향으로 흐름 */
+@keyframes flow {
+  from { stroke-dashoffset: 0; }
+  to   { stroke-dashoffset: -36; }   /* -(6+12)*2 = -36 · dasharray 한 주기의 배수 */
+}
+
+.flow-line {
+  animation: flow 2.8s linear infinite;
+  animation-duration: inherit;
+  will-change: stroke-dashoffset;
+}

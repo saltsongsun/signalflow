@@ -622,9 +622,26 @@ export default function SignalFlowMap() {
               return (
                 <g key={c.id} opacity={isDim ? 0.1 : 1}>
                   {(isTraced || isPgm) && <path d={path} stroke={color} strokeWidth={isPgm ? 7 : 6} fill="none" opacity={isPgm ? 0.35 : 0.25} filter="url(#glow-strong)" />}
+                  {/* 베이스 라인 */}
                   <path d={path} stroke={color} strokeWidth={isPgm ? 3 : isTraced ? 2.5 : 1.4}
                         strokeDasharray={style?.dash ?? undefined} fill="none"
+                        opacity={isTraced || isPgm ? 1 : 0.55}
                         filter={isTraced || isPgm ? 'url(#glow)' : undefined} />
+                  {/* 흐름 애니메이션 오버레이 - 선 위를 움직이는 점선 */}
+                  <path
+                    d={path}
+                    stroke={color}
+                    strokeWidth={isPgm ? 3 : isTraced ? 2.5 : 1.4}
+                    fill="none"
+                    strokeLinecap="round"
+                    strokeDasharray="6 12"
+                    className="flow-line"
+                    style={{
+                      filter: isTraced || isPgm ? 'drop-shadow(0 0 3px currentColor)' : undefined,
+                      animationDuration: isTraced || isPgm ? '1.2s' : '2.8s',
+                      opacity: isTraced || isPgm ? 1 : 0.85,
+                    }}
+                  />
                   {ct && (scale > 0.5 || isTraced || isPgm) && (
                     <g>
                       <rect x={mx - 24} y={my - 8.5} width="48" height="15" rx="4" fill="rgba(8,8,10,0.92)" stroke={color} strokeWidth="0.6" />
