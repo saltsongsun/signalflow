@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect } from 'react';
-import { Device, CONNECTION_TYPES, ConnectionType, PortInfo, Layer } from '../lib/supabase';
+import { Device, CONNECTION_TYPES, ConnectionType, PortInfo, Layer, DEVICE_ROLES, DEVICE_ROLE_LABELS, DeviceRole } from '../lib/supabase';
 
 type Props = {
   device: Device;
@@ -21,6 +21,8 @@ const TYPE_ACCENT = {
 export default function DeviceEditor({ device, layers, onSave, onDelete, onClose }: Props) {
   const [name, setName] = useState(device.name);
   const [type, setType] = useState<Device['type']>(device.type);
+  const [role, setRole] = useState<DeviceRole>(device.role ?? 'standard');
+  const [pgmPort, setPgmPort] = useState<string>(device.pgmPort ?? '');
   const [width, setWidth] = useState(device.width ?? 200);
   const [inputs, setInputs] = useState<PortRow[]>([]);
   const [outputs, setOutputs] = useState<PortRow[]>([]);
@@ -32,6 +34,11 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onClose
   const accent = TYPE_ACCENT[type];
 
   useEffect(() => {
+    setName(device.name);
+    setType(device.type);
+    setRole(device.role ?? 'standard');
+    setPgmPort(device.pgmPort ?? '');
+    setWidth(device.width ?? 200);
     const toRows = (arr: string[], meta?: Record<string, PortInfo>): PortRow[] =>
       arr.map(p => ({
         name: p,
@@ -88,7 +95,9 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onClose
     });
     onSave({
       name: name.trim() || device.name,
-      type, width,
+      type, role,
+      pgmPort: role === 'switcher' ? (pgmPort || undefined) : undefined,
+      width,
       inputs: finalInputs.map(r => r.name),
       outputs: finalOutputs.map(r => r.name),
       inputsMeta, outputsMeta, physPorts,
@@ -225,6 +234,58 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onClose
             <input type="range" min="140" max="420" step="10" value={width} onChange={e => setWidth(Number(e.target.value))} className="w-full h-6 accent-sky-500" />
           </div>
         </div>
+
+        {/* Role picker */}
+        <div>
+          <label className="block text-[10px] uppercase tracking-[0.12em] text-neutral-500 mb-2 font-semibold">
+            역할 <span className="text-neutral-600 normal-case tracking-normal ml-1">Device Role</span>
+          </label>
+          <div className="grid grid-cols-4 gap-1 p-1 bg-white/5 rounded-lg border border-white/10">
+            {DEVICE_ROLES.map(r => {
+              const active = role === r;
+              const icon = r === 'switcher' ? '⇆' : r === 'router' ? '⇅' : r === 'splitter' ? '⇶' : '◻';
+              return (
+                <button
+                  key={r}
+                  onClick={() => setRole(r)}
+                  className={`py-1.5 text-[11px] rounded-md font-medium transition flex items-center justify-center gap-1 ${active ? 'bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-md shadow-emerald-500/30' : 'text-neutral-500 hover:text-white'}`}
+                >
+                  <span className="text-[12px]">{icon}</span>
+                  <span>{DEVICE_ROLE_LABELS[r]}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="mt-1.5 text-[10px] text-neutral-600 leading-relaxed">
+            {role === 'switcher' && '⇆ 여러 입력 중 선택된 소스를 출력으로 보냄. PGM 출력 지정 가능.'}
+            {role === 'router' && '⇅ 모든 입력을 모든 출력으로 자유롭게 라우팅.'}
+            {role === 'splitter' && '⇶ 하나의 입력을 여러 출력으로 분배 (VDA/DA).'}
+            {role === 'standard' && '◻ 일반 장비. 1:1 포트 매핑.'}
+          </div>
+        </div>
+
+        {/* PGM Port (switcher only) */}
+        {role === 'switcher' && (
+          <div className="bg-gradient-to-br from-emerald-500/10 to-transparent border border-emerald-500/20 rounded-lg p-3">
+            <label className="block text-[10px] uppercase tracking-[0.12em] text-emerald-400 mb-2 font-semibold">
+              📺 PGM 출력 포트
+              <span className="text-neutral-500 normal-case tracking-normal ml-1 font-normal">현재 송출중인 출력</span>
+            </label>
+            <select
+              value={pgmPort}
+              onChange={e => setPgmPort(e.target.value)}
+              className="w-full bg-neutral-900 border border-emerald-500/30 rounded px-3 py-2 text-sm font-mono text-emerald-200 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500/30 focus:outline-none"
+            >
+              <option value="">(지정 안함)</option>
+              {outputs.map(o => (
+                <option key={o.name} value={o.name}>{o.name}{o.label ? ` — ${o.label}` : ''}</option>
+              ))}
+            </select>
+            <div className="mt-1.5 text-[10px] text-neutral-500">
+              지정하면 장비카드에 「PGM」 뱃지가 붙고, 신호추적시 이 출력이 우선.
+            </div>
+          </div>
+        )}
 
         {/* Mode toggle */}
         <div className="flex items-center gap-1 bg-black/30 p-1 rounded-lg border border-white/5">

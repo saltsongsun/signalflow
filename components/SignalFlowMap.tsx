@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { supabase, Device, Connection, ConnectionType, Layer, DEFAULT_LAYERS } from '../lib/supabase';
+import { supabase, Device, Connection, ConnectionType, Layer, DEFAULT_LAYERS, DEVICE_ROLE_LABELS } from '../lib/supabase';
 import { INITIAL_DEVICES, INITIAL_CONNECTIONS, TYPE_COLORS, CONN_TYPE_STYLES } from '../lib/initialData';
 import DeviceEditor from './DeviceEditor';
 import LayerPanel from './LayerPanel';
@@ -57,25 +57,38 @@ export default function SignalFlowMap() {
   const [scale, setScale] = useState(0.7);
   const [offset, setOffset] = useState({ x: 40, y: 70 });
 
-  // Drag state managed via refs (to avoid stale closures in window listeners)
-  const dragRef = useRef<
-    | { kind: 'none' }
-    | { kind: 'canvas'; startX: number; startY: number; origOffset: { x: number; y: number } }
-    | { kind: 'device'; ids: string[]; startX: number; startY: number; origPositions: Record<string, { x: number; y: number }>; moved: boolean; clickedId: string; shiftKey: boolean }
-    | { kind: 'marquee'; startX: number; startY: number; curX: number; curY: number; worldStart: { x: number; y: number } }
-  >({ kind: 'none' });
-  const [dragKind, setDragKind] = useState<'none' | 'canvas' | 'device' | 'marquee'>('none');
+  // ===== Pointer tracking =====
+  // 드래그가 실제로 일어났는지 장비/캔버스마다 판단하기 위한 상태
+  const pointerRef = useRef<{
+    type: 'none' | 'canvas' | 'device' | 'marquee';
+    downX: number;
+    downY: number;
+    clickedDeviceId?: string;
+    shiftKey: boolean;
+    moved: boolean;
+    // device drag 전용
+    origPositions?: Record<string, { x: number; y: number }>;
+    dragIds?: string[];
+    // canvas 전용
+    origOffset?: { x: number; y: number };
+    // marquee 전용
+    worldStartX?: number;
+    worldStartY?: number;
+  }>({ type: 'none', downX: 0, downY: 0, shiftKey: false, moved: false });
+
+  const [draggingCursor, setDraggingCursor] = useState<'none' | 'canvas' | 'marquee' | 'device'>('none');
   const [marqueeRect, setMarqueeRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
 
-  // Latest state mirror for window listeners
-  const stateRef = useRef({ scale, offset, editMode, devices, selectedIds, visibleLayerIds: new Set<string>() });
+  // state mirror
+  const stateRef = useRef({ scale, offset, editMode, devices, selectedIds, visibleLayerIds: new Set<string>(), layers });
   stateRef.current.scale = scale;
   stateRef.current.offset = offset;
   stateRef.current.editMode = editMode;
   stateRef.current.devices = devices;
   stateRef.current.selectedIds = selectedIds;
+  stateRef.current.layers = layers;
 
-  // Load data
+  // ===== Load data =====
   useEffect(() => {
     (async () => {
       const [devRes, connRes, layerRes] = await Promise.all([
@@ -119,13 +132,11 @@ export default function SignalFlowMap() {
         else if (p.eventType === 'DELETE') setLayers(prev => prev.filter(l => l.id !== p.old.id));
       });
     ch.on('presence', { event: 'sync' }, () => {
-      const state = ch.presenceState();
-      setOnline(Object.keys(state).length || 1);
+      setOnline(Object.keys(ch.presenceState()).length || 1);
     });
     ch.subscribe(async (status: string) => {
       if (status === 'SUBSCRIBED') await ch.track({ user_id: crypto.randomUUID() });
     });
-
     return () => { (supabase as any).removeChannel(ch); };
   }, []);
 
@@ -139,7 +150,6 @@ export default function SignalFlowMap() {
     if (!hasAny) return true;
     return visiblePorts(d, 'in', visibleLayerIds).length + visiblePorts(d, 'out', visibleLayerIds).length > 0;
   };
-
   const isConnVisible = (c: Connection): boolean => {
     const from = devById.get(c.from_device);
     const to = devById.get(c.to_device);
@@ -174,89 +184,105 @@ export default function SignalFlowMap() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [traceId, connections, traceMode, visibleLayerIds, devices]);
 
-  // ===== Window-level drag listeners (reliable for click-vs-drag) =====
+  // ===== Global window listeners =====
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
-      const d = dragRef.current;
-      if (d.kind === 'canvas') {
-        setOffset({ x: d.origOffset.x + (e.clientX - d.startX), y: d.origOffset.y + (e.clientY - d.startY) });
-      } else if (d.kind === 'device') {
-        const dx = (e.clientX - d.startX) / stateRef.current.scale;
-        const dy = (e.clientY - d.startY) / stateRef.current.scale;
-        const movedEnough = Math.abs(e.clientX - d.startX) > DRAG_THRESHOLD || Math.abs(e.clientY - d.startY) > DRAG_THRESHOLD;
-        if (movedEnough) {
-          if (!d.moved) { d.moved = true; setDragKind('device'); }
+      const p = pointerRef.current;
+      if (p.type === 'none') return;
+
+      const dx = e.clientX - p.downX;
+      const dy = e.clientY - p.downY;
+
+      if (p.type === 'canvas' && p.origOffset) {
+        setOffset({ x: p.origOffset.x + dx, y: p.origOffset.y + dy });
+        if (!p.moved && (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD)) {
+          p.moved = true;
+        }
+      } else if (p.type === 'device' && p.origPositions) {
+        if (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD) {
+          if (!p.moved) {
+            p.moved = true;
+            setDraggingCursor('device');
+          }
+          const sc = stateRef.current.scale;
+          const worldDx = dx / sc;
+          const worldDy = dy / sc;
+          const origs = p.origPositions;
           setDevices(prev => prev.map(dev => {
-            const orig = d.origPositions[dev.id];
-            if (orig) return { ...dev, x: orig.x + dx, y: orig.y + dy };
+            const orig = origs[dev.id];
+            if (orig) return { ...dev, x: orig.x + worldDx, y: orig.y + worldDy };
             return dev;
           }));
         }
-      } else if (d.kind === 'marquee') {
+      } else if (p.type === 'marquee' && p.worldStartX !== undefined && p.worldStartY !== undefined) {
         const sc = stateRef.current.scale;
         const off = stateRef.current.offset;
-        const cx = (e.clientX - off.x) / sc;
-        const cy = (e.clientY - off.y) / sc;
-        d.curX = cx; d.curY = cy;
-        const minX = Math.min(d.worldStart.x, cx);
-        const minY = Math.min(d.worldStart.y, cy);
-        setMarqueeRect({ x: minX, y: minY, w: Math.abs(cx - d.worldStart.x), h: Math.abs(cy - d.worldStart.y) });
+        const wx = (e.clientX - off.x) / sc;
+        const wy = (e.clientY - off.y) / sc;
+        const minX = Math.min(p.worldStartX, wx);
+        const minY = Math.min(p.worldStartY, wy);
+        setMarqueeRect({ x: minX, y: minY, w: Math.abs(wx - p.worldStartX), h: Math.abs(wy - p.worldStartY) });
+        p.moved = true;
       }
     };
 
-    const onUp = async (e: MouseEvent) => {
-      const d = dragRef.current;
-      if (d.kind === 'device') {
-        if (d.moved) {
-          // persist all moved
+    const onUp = async () => {
+      const p = pointerRef.current;
+      if (p.type === 'none') return;
+
+      if (p.type === 'device') {
+        if (p.moved) {
+          // 저장
           const latestDevices = stateRef.current.devices;
-          const saves = d.ids.map(id => {
+          const ids = p.dragIds ?? [];
+          const saves = ids.map(id => {
             const latest = latestDevices.find(x => x.id === id);
             return latest ? (supabase as any).from('devices').update({ x: latest.x, y: latest.y }).eq('id', id) : null;
           }).filter(Boolean);
           await Promise.all(saves);
         } else {
-          // it's a click
-          const clickedDev = stateRef.current.devices.find(x => x.id === d.clickedId);
+          // 클릭으로 판정
+          const clickedId = p.clickedDeviceId!;
+          const clickedDev = stateRef.current.devices.find(x => x.id === clickedId);
           if (clickedDev) {
             if (stateRef.current.editMode) {
-              if (d.shiftKey) {
+              if (p.shiftKey) {
                 setSelectedIds(prev => {
                   const next = new Set(prev);
-                  if (next.has(d.clickedId)) next.delete(d.clickedId);
-                  else next.add(d.clickedId);
+                  if (next.has(clickedId)) next.delete(clickedId);
+                  else next.add(clickedId);
                   return next;
                 });
               } else {
-                setSelectedIds(new Set([d.clickedId]));
+                setSelectedIds(new Set([clickedId]));
                 setEditingDevice(clickedDev);
               }
             } else {
-              setTraceId(t => t === d.clickedId ? null : d.clickedId);
+              setTraceId(t => t === clickedId ? null : clickedId);
             }
           }
         }
-      } else if (d.kind === 'marquee') {
-        const minX = Math.min(d.worldStart.x, d.curX);
-        const maxX = Math.max(d.worldStart.x, d.curX);
-        const minY = Math.min(d.worldStart.y, d.curY);
-        const maxY = Math.max(d.worldStart.y, d.curY);
-        const vis = stateRef.current.visibleLayerIds;
-        const inside = stateRef.current.devices.filter(dev => {
-          if (dev.inputs.length + dev.outputs.length > 0) {
-            const vi = visiblePorts(dev, 'in', vis).length;
-            const vo = visiblePorts(dev, 'out', vis).length;
-            if (vi + vo === 0) return false;
-          }
-          const w = deviceWidth(dev);
-          const h = deviceHeight(dev, vis);
-          return dev.x < maxX && dev.x + w > minX && dev.y < maxY && dev.y + h > minY;
-        }).map(dev => dev.id);
-        setSelectedIds(new Set(inside));
+      } else if (p.type === 'marquee' && p.worldStartX !== undefined && p.worldStartY !== undefined) {
+        if (p.moved && marqueeRect) {
+          const vis = stateRef.current.visibleLayerIds;
+          const inside = stateRef.current.devices.filter(dev => {
+            if (dev.inputs.length + dev.outputs.length > 0) {
+              const vi = visiblePorts(dev, 'in', vis).length;
+              const vo = visiblePorts(dev, 'out', vis).length;
+              if (vi + vo === 0) return false;
+            }
+            const w = deviceWidth(dev);
+            const h = deviceHeight(dev, vis);
+            return dev.x < marqueeRect.x + marqueeRect.w && dev.x + w > marqueeRect.x
+                && dev.y < marqueeRect.y + marqueeRect.h && dev.y + h > marqueeRect.y;
+          }).map(dev => dev.id);
+          setSelectedIds(new Set(inside));
+        }
         setMarqueeRect(null);
       }
-      dragRef.current = { kind: 'none' };
-      setDragKind('none');
+
+      pointerRef.current = { type: 'none', downX: 0, downY: 0, shiftKey: false, moved: false };
+      setDraggingCursor('none');
     };
 
     window.addEventListener('mousemove', onMove);
@@ -265,9 +291,9 @@ export default function SignalFlowMap() {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
-  }, []);
+  }, [marqueeRect]);
 
-  // Canvas background mousedown
+  // ===== Canvas mousedown =====
   const onCanvasMouseDown = (e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
     if (target.closest('[data-device-id], [data-port], [data-ui]')) return;
@@ -275,12 +301,23 @@ export default function SignalFlowMap() {
     if (editMode && e.shiftKey) {
       const wx = (e.clientX - offset.x) / scale;
       const wy = (e.clientY - offset.y) / scale;
-      dragRef.current = { kind: 'marquee', startX: e.clientX, startY: e.clientY, curX: wx, curY: wy, worldStart: { x: wx, y: wy } };
-      setDragKind('marquee');
+      pointerRef.current = {
+        type: 'marquee',
+        downX: e.clientX, downY: e.clientY,
+        shiftKey: true, moved: false,
+        worldStartX: wx, worldStartY: wy,
+      };
+      setDraggingCursor('marquee');
       setMarqueeRect({ x: wx, y: wy, w: 0, h: 0 });
     } else {
-      dragRef.current = { kind: 'canvas', startX: e.clientX, startY: e.clientY, origOffset: offset };
-      setDragKind('canvas');
+      pointerRef.current = {
+        type: 'canvas',
+        downX: e.clientX, downY: e.clientY,
+        shiftKey: e.shiftKey, moved: false,
+        origOffset: offset,
+      };
+      setDraggingCursor('canvas');
+      // 즉시 선택 해제는 mouseup에서 moved 여부 확인 후 처리 (아래 별도 처리 없이 유지)
       if (!editMode) setTraceId(null);
       if (editMode && !e.shiftKey) setSelectedIds(new Set());
     }
@@ -299,12 +336,17 @@ export default function SignalFlowMap() {
     setOffset({ x: mx - wx * newScale, y: my - wy * newScale });
   };
 
+  // ===== Device mousedown =====
   const onDeviceMouseDown = (e: React.MouseEvent, d: Device) => {
     e.stopPropagation();
+    e.preventDefault();
+
     if (!editMode) {
-      // in view mode, let click handler handle trace
+      // 보기 모드 — 장비 click으로 trace (onClick 사용)
       return;
     }
+
+    // 편집 모드: 드래그 후보로 등록
     const isInSelection = selectedIds.has(d.id);
     const idsToMove = isInSelection && selectedIds.size > 0 ? Array.from(selectedIds) : [d.id];
     const origPositions: Record<string, { x: number; y: number }> = {};
@@ -312,18 +354,16 @@ export default function SignalFlowMap() {
       const dev = devById.get(id);
       if (dev) origPositions[id] = { x: dev.x, y: dev.y };
     });
-    dragRef.current = {
-      kind: 'device',
-      ids: idsToMove,
-      startX: e.clientX, startY: e.clientY,
-      origPositions, moved: false,
-      clickedId: d.id,
-      shiftKey: e.shiftKey,
+    pointerRef.current = {
+      type: 'device',
+      downX: e.clientX, downY: e.clientY,
+      shiftKey: e.shiftKey, moved: false,
+      clickedDeviceId: d.id,
+      origPositions, dragIds: idsToMove,
     };
-    // don't set dragKind yet — wait until actual movement, so we don't show "dragging" cursor for simple click
   };
 
-  // View mode click on device → trace
+  // 보기모드에서만 사용
   const onDeviceClickView = (e: React.MouseEvent, d: Device) => {
     if (editMode) return;
     e.stopPropagation();
@@ -354,11 +394,16 @@ export default function SignalFlowMap() {
     }
   };
 
+  // 포트 버튼 mousedown에서 stopPropagation — 포트 클릭이 장비 드래그로 이어지지 않도록
+  const onPortMouseDown = (e: React.MouseEvent) => {
+    e.stopPropagation();
+  };
+
   const handleAddDevice = async () => {
     const id = `dev_${Date.now().toString(36)}`;
     const defaultLayer = layers[0]?.id ?? 'layer_video';
     const d: Device = {
-      id, name: '새 장비', type: 'video',
+      id, name: '새 장비', type: 'video', role: 'standard',
       x: (-offset.x + 400) / scale, y: (-offset.y + 200) / scale,
       width: 200, inputs: ['IN-1'], outputs: ['OUT-1'],
       inputsMeta: { 'IN-1': { name: 'IN-1', layerId: defaultLayer } },
@@ -383,15 +428,14 @@ export default function SignalFlowMap() {
   const handleDeleteSelected = async () => {
     if (selectedIds.size === 0) return;
     if (!confirm(`${selectedIds.size}개 장비 삭제?`)) return;
-    const ids = Array.from(selectedIds);
-    for (const id of ids) {
+    for (const id of Array.from(selectedIds)) {
       await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
       await (supabase as any).from('devices').delete().eq('id', id);
     }
     setSelectedIds(new Set());
   };
   const handleResetAll = async () => {
-    if (!confirm('모든 데이터 삭제 후 도면 초기 데이터로 재시드?')) return;
+    if (!confirm('모든 데이터 삭제 후 초기 데이터로 재시드?')) return;
     await (supabase as any).from('connections').delete().neq('id', '00000000-0000-0000-0000-000000000000');
     await (supabase as any).from('devices').delete().neq('id', '__nope__');
     await (supabase as any).from('layers').delete().neq('id', '__nope__');
@@ -415,15 +459,17 @@ export default function SignalFlowMap() {
     );
   }
 
+  const cursorClass =
+    draggingCursor === 'canvas' ? 'cursor-grabbing'
+    : draggingCursor === 'marquee' ? 'cursor-crosshair'
+    : draggingCursor === 'device' ? 'cursor-grabbing'
+    : 'cursor-grab';
+
   return (
     <div className="h-screen w-screen bg-gradient-to-br from-neutral-950 via-black to-neutral-950 text-white overflow-hidden relative select-none">
       {/* Top bar */}
-      <div
-        data-ui
-        className="absolute top-0 left-0 right-0 z-30 h-14 bg-black/60 backdrop-blur-2xl border-b border-white/10 shadow-xl shadow-black/40"
-      >
+      <div data-ui className="absolute top-0 left-0 right-0 z-30 h-14 bg-black/60 backdrop-blur-2xl border-b border-white/10 shadow-xl shadow-black/40">
         <div className="h-full flex items-center gap-3 px-4">
-          {/* Logo */}
           <div className="flex items-center gap-2.5">
             <div className="relative w-7 h-7 rounded-lg bg-gradient-to-br from-sky-400 to-purple-600 flex items-center justify-center shadow-lg shadow-sky-500/30">
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -442,7 +488,6 @@ export default function SignalFlowMap() {
 
           <div className="w-px h-7 bg-white/10"></div>
 
-          {/* Mode toggle */}
           <div className="flex items-center gap-0.5 bg-white/5 rounded-lg p-0.5 border border-white/10">
             <button
               onClick={() => { setEditMode(false); setPendingFrom(null); setSelectedIds(new Set()); }}
@@ -454,13 +499,11 @@ export default function SignalFlowMap() {
             >✎ 편집</button>
           </div>
 
-          {/* Layer toggle — always visible */}
           <button
             onClick={() => setShowLayerPanel(s => !s)}
             className={`px-3 py-1.5 text-[11px] font-medium rounded-lg border transition-all ${showLayerPanel ? 'bg-gradient-to-r from-purple-500 to-purple-600 text-white border-purple-400 shadow-md shadow-purple-500/30' : 'bg-white/5 border-white/10 text-neutral-300 hover:text-white hover:bg-white/10'}`}
           >⧉ 레이어 <span className="font-mono opacity-70">{layers.filter(l => l.visible).length}/{layers.length}</span></button>
 
-          {/* Trace mode (view mode only) */}
           {!editMode && traceId && (
             <div className="flex items-center gap-0.5 bg-sky-500/10 border border-sky-500/30 rounded-lg p-0.5">
               {(['both','upstream','downstream'] as TraceMode[]).map(m => (
@@ -471,7 +514,6 @@ export default function SignalFlowMap() {
             </div>
           )}
 
-          {/* Edit mode actions */}
           {editMode && (
             <>
               <button onClick={handleAddDevice}
@@ -501,10 +543,8 @@ export default function SignalFlowMap() {
         </div>
       </div>
 
-      {/* Layer Panel */}
       {showLayerPanel && <LayerPanel layers={layers} onClose={() => setShowLayerPanel(false)} />}
 
-      {/* Pending banner */}
       {pendingFrom && (
         <div data-ui className="absolute top-[68px] left-1/2 -translate-x-1/2 z-30 px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500/20 to-orange-500/20 backdrop-blur-xl border border-amber-500/40 shadow-2xl shadow-amber-500/20">
           <div className="flex items-center gap-3 text-xs">
@@ -519,7 +559,6 @@ export default function SignalFlowMap() {
         </div>
       )}
 
-      {/* Legend */}
       <div data-ui className="absolute bottom-4 left-4 z-20 bg-black/60 backdrop-blur-xl border border-white/10 rounded-xl px-3 py-2.5 shadow-lg">
         <div className="text-[9.5px] uppercase tracking-[0.12em] text-neutral-500 font-semibold mb-1.5">타입</div>
         <div className="space-y-1 text-[10.5px]">
@@ -538,7 +577,7 @@ export default function SignalFlowMap() {
 
       {/* Canvas */}
       <div
-        className={`absolute inset-0 pt-14 ${dragKind === 'canvas' ? 'cursor-grabbing' : dragKind === 'marquee' ? 'cursor-crosshair' : 'cursor-grab'}`}
+        className={`absolute inset-0 pt-14 ${cursorClass}`}
         onMouseDown={onCanvasMouseDown}
         onWheel={onWheel}
         style={{
@@ -548,7 +587,7 @@ export default function SignalFlowMap() {
         }}
       >
         <div style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`, transformOrigin: '0 0', width: '4000px', height: '3000px', position: 'relative' }}>
-          {/* Connections SVG */}
+          {/* Connections */}
           <svg width="4000" height="3000" className="absolute inset-0 pointer-events-none" style={{ overflow: 'visible' }}>
             <defs>
               <filter id="glow"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
@@ -576,16 +615,17 @@ export default function SignalFlowMap() {
               const fromLayerId = from.outputsMeta?.[c.from_port]?.layerId;
               const layerColor = fromLayerId ? layerById.get(fromLayerId)?.color : undefined;
               const color = layerColor ?? (from.type === 'audio' ? TYPE_COLORS.audio.main : from.type === 'combined' ? TYPE_COLORS.combined.main : TYPE_COLORS.video.main);
+              const isPgm = from.role === 'switcher' && from.pgmPort === c.from_port;
               const mx = (x1 + x2) / 2;
               const my = (y1 + y2) / 2;
 
               return (
                 <g key={c.id} opacity={isDim ? 0.1 : 1}>
-                  {isTraced && <path d={path} stroke={color} strokeWidth={6} fill="none" opacity={0.25} filter="url(#glow-strong)" />}
-                  <path d={path} stroke={color} strokeWidth={isTraced ? 2.5 : 1.4}
+                  {(isTraced || isPgm) && <path d={path} stroke={color} strokeWidth={isPgm ? 7 : 6} fill="none" opacity={isPgm ? 0.35 : 0.25} filter="url(#glow-strong)" />}
+                  <path d={path} stroke={color} strokeWidth={isPgm ? 3 : isTraced ? 2.5 : 1.4}
                         strokeDasharray={style?.dash ?? undefined} fill="none"
-                        filter={isTraced ? 'url(#glow)' : undefined} />
-                  {ct && (scale > 0.5 || isTraced) && (
+                        filter={isTraced || isPgm ? 'url(#glow)' : undefined} />
+                  {ct && (scale > 0.5 || isTraced || isPgm) && (
                     <g>
                       <rect x={mx - 24} y={my - 8.5} width="48" height="15" rx="4" fill="rgba(8,8,10,0.92)" stroke={color} strokeWidth="0.6" />
                       <text x={mx} y={my + 2.8} textAnchor="middle" fontSize="9.5" fill={color} fontFamily="var(--font-mono)" fontWeight="700" letterSpacing="0.02em">
@@ -597,7 +637,6 @@ export default function SignalFlowMap() {
               );
             })}
 
-            {/* Marquee */}
             {marqueeRect && (
               <rect
                 x={marqueeRect.x} y={marqueeRect.y}
@@ -622,6 +661,8 @@ export default function SignalFlowMap() {
             const h = deviceHeight(d, visibleLayerIds);
             const inVis = visiblePorts(d, 'in', visibleLayerIds);
             const outVis = visiblePorts(d, 'out', visibleLayerIds);
+            const role = d.role ?? 'standard';
+            const roleIcon = role === 'switcher' ? '⇆' : role === 'router' ? '⇅' : role === 'splitter' ? '⇶' : null;
 
             const borderColor = isSelected ? '#fbbf24' : isTraceTarget ? color.glow : editMode ? 'rgba(251,191,36,0.35)' : color.border;
             const borderWidth = isSelected || isTraceTarget ? 2 : 1.2;
@@ -652,9 +693,9 @@ export default function SignalFlowMap() {
                   transform: isHovered && !editMode ? 'translateY(-1px)' : undefined,
                 }}
               >
-                {/* Header with gradient */}
+                {/* Header */}
                 <div
-                  className="px-3.5 flex items-center gap-2.5 relative"
+                  className="px-3.5 flex items-center gap-2 relative"
                   style={{
                     height: HEADER_H,
                     background: `linear-gradient(90deg, ${color.main}22 0%, transparent 60%)`,
@@ -662,21 +703,33 @@ export default function SignalFlowMap() {
                   }}
                 >
                   <div
-                    className="w-1 h-5 rounded-full"
+                    className="w-1 h-5 rounded-full shrink-0"
                     style={{ background: `linear-gradient(180deg, ${color.glow}, ${color.main})`, boxShadow: `0 0 8px ${color.glow}` }}
                   ></div>
                   <div className="flex-1 min-w-0">
-                    <div className="text-[13px] font-semibold truncate text-white leading-tight tracking-tight">{d.name}</div>
+                    <div className="flex items-center gap-1.5">
+                      <div className="text-[13px] font-semibold truncate text-white leading-tight tracking-tight">{d.name}</div>
+                      {roleIcon && (
+                        <span
+                          className="text-[9px] px-1 py-[1px] rounded shrink-0 font-mono font-bold"
+                          style={{
+                            background: 'rgba(16,185,129,0.15)',
+                            color: '#34D399',
+                            border: '0.5px solid rgba(52,211,153,0.4)',
+                          }}
+                          title={DEVICE_ROLE_LABELS[role]}
+                        >{roleIcon} {DEVICE_ROLE_LABELS[role]}</span>
+                      )}
+                    </div>
                     <div className="text-[9px] text-neutral-500 uppercase tracking-[0.1em] font-medium">{d.type}</div>
                   </div>
                   {editMode && (
-                    <div className="text-[9px] text-neutral-600 font-mono opacity-60">{w}×{Math.round(h)}</div>
+                    <div className="text-[9px] text-neutral-600 font-mono opacity-60 shrink-0">{w}×{Math.round(h)}</div>
                   )}
                 </div>
 
                 {/* Ports */}
                 <div className="py-3.5 relative">
-                  {/* inputs */}
                   <div className="pr-3">
                     {inVis.map((p, renderIdx) => {
                       const meta = d.inputsMeta?.[p.name];
@@ -689,6 +742,7 @@ export default function SignalFlowMap() {
                         <div key={p.name} className="flex items-center" style={{ height: PORT_H }}>
                           <button
                             data-port
+                            onMouseDown={onPortMouseDown}
                             onClick={e => onPortClick(e, d.id, p.name, false)}
                             className="w-3 h-3 rounded-full -ml-[6px] hover:scale-[1.6] transition-transform ring-2 ring-black/40"
                             style={{ background: portColor, boxShadow: `0 0 8px ${portColor}, inset 0 1px 1px rgba(255,255,255,0.3)` }}
@@ -708,7 +762,6 @@ export default function SignalFlowMap() {
                       );
                     })}
                   </div>
-                  {/* outputs */}
                   <div className="absolute top-3.5 right-0 pl-3 w-full pointer-events-none">
                     {outVis.map((p, renderIdx) => {
                       const meta = d.outputsMeta?.[p.name];
@@ -718,10 +771,17 @@ export default function SignalFlowMap() {
                       const layer = lid ? layerById.get(lid) : undefined;
                       const portColor = layer?.color ?? color.main;
                       const isPending = pendingFrom?.device === d.id && pendingFrom?.port === p.name;
+                      const isPgm = d.role === 'switcher' && d.pgmPort === p.name;
                       return (
                         <div key={p.name} className="flex items-center justify-end pointer-events-auto" style={{ height: PORT_H }}>
                           <div className="flex-1 flex items-center justify-end gap-1.5 min-w-0 mr-2">
                             {meta?.label && <span className="text-[9.5px] text-neutral-500 truncate text-right">{meta.label}</span>}
+                            {isPgm && (
+                              <span className="text-[8.5px] px-1.5 py-[1px] rounded font-mono font-bold"
+                                style={{ background: 'linear-gradient(90deg, #10b981, #059669)', color: 'white', boxShadow: '0 0 8px rgba(16,185,129,0.6)' }}>
+                                PGM
+                              </span>
+                            )}
                             {ct && (
                               <span className="text-[8.5px] px-1 py-[1px] rounded font-mono font-semibold"
                                 style={{ background: `${portColor}20`, color: portColor, border: `0.5px solid ${portColor}55`, boxShadow: `0 0 4px ${portColor}30` }}>
@@ -732,13 +792,14 @@ export default function SignalFlowMap() {
                           </div>
                           <button
                             data-port
+                            onMouseDown={onPortMouseDown}
                             onClick={e => onPortClick(e, d.id, p.name, true)}
-                            className={`w-3 h-3 rounded-full -mr-[6px] hover:scale-[1.6] transition-transform ring-2 ${isPending ? 'ring-amber-300/60 animate-pulse' : 'ring-black/40'}`}
+                            className={`w-3 h-3 rounded-full -mr-[6px] hover:scale-[1.6] transition-transform ring-2 ${isPending ? 'ring-amber-300/60 animate-pulse' : isPgm ? 'ring-emerald-400/60' : 'ring-black/40'}`}
                             style={{
-                              background: isPending ? '#fbbf24' : portColor,
-                              boxShadow: `0 0 8px ${isPending ? '#fbbf24' : portColor}, inset 0 1px 1px rgba(255,255,255,0.3)`,
+                              background: isPending ? '#fbbf24' : isPgm ? '#10b981' : portColor,
+                              boxShadow: `0 0 ${isPgm ? '12px' : '8px'} ${isPending ? '#fbbf24' : isPgm ? '#10b981' : portColor}, inset 0 1px 1px rgba(255,255,255,0.3)`,
                             }}
-                            title={meta?.label ?? p.name}
+                            title={isPgm ? `${p.name} (PGM)` : (meta?.label ?? p.name)}
                           ></button>
                         </div>
                       );

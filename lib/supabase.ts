@@ -24,10 +24,23 @@ export type PortInfo = {
   layerId?: string;  // 포트가 속한 레이어
 };
 
+// 장비 역할 (기본 / 스위처 / 라우터 / 스플리터)
+export const DEVICE_ROLES = ['standard', 'switcher', 'router', 'splitter'] as const;
+export type DeviceRole = typeof DEVICE_ROLES[number];
+
+export const DEVICE_ROLE_LABELS: Record<DeviceRole, string> = {
+  standard: '일반',
+  switcher: '스위처',
+  router:   '라우터',
+  splitter: '스플리터',
+};
+
 export type Device = {
   id: string;
   name: string;
   type: 'video' | 'audio' | 'combined';
+  role?: DeviceRole;     // 기본: 'standard'
+  pgmPort?: string;      // 스위처의 PGM 출력 포트 이름
   x: number;
   y: number;
   width?: number;

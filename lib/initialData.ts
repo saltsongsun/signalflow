@@ -88,10 +88,10 @@ const videoDevices: DeviceSeed[] = [
     outputsMeta: { 'OP': { connType: '12G-SDI' } } },
   { id: 'vmix', name: 'V-MIX', type: 'video', x: 500, y: 400, inputs: ['IN'], outputs: ['OP'],
     outputsMeta: { 'OP': { label: 'R/S IP-14', connType: 'SDI' } } },
-  { id: 'vda1_1a', name: 'UHD VDA 1-1A', type: 'video', x: 500, y: 500, inputs: ['IP'], outputs: ['OP-1','OP-2','OP-3','OP-4'],
+  { id: 'vda1_1a', name: 'UHD VDA 1-1A', type: 'video', role: 'splitter', x: 500, y: 500, inputs: ['IP'], outputs: ['OP-1','OP-2','OP-3','OP-4'],
     inputsMeta: { 'IP': { label: 'CCU-1 12G OP-1', connType: '12G-SDI' } },
     outputsMeta: { 'OP-1':{connType:'12G-SDI'},'OP-2':{connType:'12G-SDI'},'OP-3':{connType:'12G-SDI'},'OP-4':{connType:'12G-SDI'} } },
-  { id: 'vda2_1a', name: 'UHD VDA 2-1A', type: 'video', x: 500, y: 620, inputs: ['IP'], outputs: ['OP-1','OP-2','OP-3','OP-4'],
+  { id: 'vda2_1a', name: 'UHD VDA 2-1A', type: 'video', role: 'splitter', x: 500, y: 620, inputs: ['IP'], outputs: ['OP-1','OP-2','OP-3','OP-4'],
     inputsMeta: { 'IP': { connType: '12G-SDI' } },
     outputsMeta: { 'OP-1':{connType:'12G-SDI'},'OP-2':{connType:'12G-SDI'},'OP-3':{connType:'12G-SDI'},'OP-4':{connType:'12G-SDI'} } },
   { id: 'demux1', name: 'DEMUX-1', type: 'combined', x: 500, y: 760, inputs: ['UHD SDI'], outputs: ['AES1-4','VIDEO OUT'],
@@ -107,7 +107,7 @@ const videoDevices: DeviceSeed[] = [
     } },
 
   // Col 4: 32x32 Router (big)
-  { id: 'router', name: '32x32 Routing Switcher', type: 'video', x: 740, y: 40, width: 200,
+  { id: 'router', name: '32x32 Routing Switcher', type: 'video', role: 'router', x: 740, y: 40, width: 200,
     inputs: Array.from({length:32},(_,i)=>`IP${i+1}`),
     outputs: Array.from({length:32},(_,i)=>`OP${i+1}`),
     inputsMeta: {
@@ -155,7 +155,7 @@ const videoDevices: DeviceSeed[] = [
     } },
 
   // Col 5: Main / Sub Switcher
-  { id: 'mvs', name: 'Main Video Switcher (XVS-G1)', type: 'video', x: 980, y: 40, width: 210,
+  { id: 'mvs', name: 'Main Video Switcher (XVS-G1)', type: 'video', role: 'switcher', pgmPort: 'PGM 1', x: 980, y: 40, width: 210,
     inputs: Array.from({length:20},(_,i)=>`IP${i+1}`),
     outputs: ['PGM 1','PGM 2','CLEAN 1','CLEAN 2','PVW 1','AUX 1','AUX 2','AUX 3','AUX 4','AUX 5','AUX 6','M/V 1','M/V 2'],
     inputsMeta: {
@@ -182,7 +182,7 @@ const videoDevices: DeviceSeed[] = [
       'AUX 5': { connType: '12G-SDI' }, 'AUX 6': { connType: '12G-SDI' },
       'M/V 1': { connType: '12G-SDI' }, 'M/V 2': { connType: '12G-SDI' },
     } },
-  { id: 'svs', name: 'Sub Video Switcher (ATEM 4M/E)', type: 'video', x: 980, y: 580, width: 210,
+  { id: 'svs', name: 'Sub Video Switcher (ATEM 4M/E)', type: 'video', role: 'switcher', pgmPort: 'PGM', x: 980, y: 580, width: 210,
     inputs: Array.from({length:12},(_,i)=>`IP${i+1}`),
     outputs: ['PGM','CLEAN','PVW','AUX1','AUX2','AUX3','AUX4','AUX5'],
     inputsMeta: {
@@ -327,7 +327,7 @@ const audioDevices: DeviceSeed[] = [
     outputsMeta: Object.fromEntries(['AES OUT-1','AES OUT-2','AES OUT-3','AES OUT-4','AES OUT-5','AES OUT-6','AES OUT-7','AES OUT-8'].map(p=>[p,{connType:'AES' as ConnectionType}])) },
 
   // Col 4 Audio: Digital Audio Mixer AVANTIS 48CH
-  { id: 'amu', name: 'Digital Audio Mixer (AVANTIS 48/16)', type: 'audio', x: 740, y: 1460, width: 260,
+  { id: 'amu', name: 'Digital Audio Mixer (AVANTIS 48/16)', type: 'audio', role: 'switcher', pgmPort: 'PGM L', x: 740, y: 1460, width: 260,
     inputs: Array.from({length:48},(_,i)=>`CH${i+1}`),
     outputs: ['BUS1','BUS2','BUS3','BUS4','BUS5','BUS6','BUS7','BUS8','AUX1','AUX2','AUX3','AUX4','PGM L','PGM R','CLEAN L','CLEAN R','MON L','MON R'],
     inputsMeta: {

@@ -4,6 +4,8 @@ create table if not exists public.devices (
   id text primary key,
   name text not null,
   type text not null check (type in ('video', 'audio', 'combined')),
+  role text default 'standard',
+  "pgmPort" text,
   x double precision not null default 0,
   y double precision not null default 0,
   width double precision,
@@ -42,6 +44,8 @@ alter table public.devices add column if not exists width double precision;
 alter table public.devices add column if not exists height double precision;
 alter table public.devices add column if not exists "inputsMeta" jsonb not null default '{}'::jsonb;
 alter table public.devices add column if not exists "outputsMeta" jsonb not null default '{}'::jsonb;
+alter table public.devices add column if not exists role text default 'standard';
+alter table public.devices add column if not exists "pgmPort" text;
 alter table public.connections add column if not exists conn_type text;
 
 -- Realtime
