@@ -69,16 +69,20 @@ http://localhost:3000 접속
 - **출력 포트(●)** → **입력 포트(○)** 클릭: 연결 생성
 - **연결선 클릭**: 삭제
 - **장비 ⚙ 아이콘**: 입출력, 물리 포트, 라우팅 편집
-- **출력 장비 클릭**: 해당 신호의 역추적 경로 전체 하이라이트
+- **장비 클릭 (어디든)**: 해당 장비 기준 신호 경로 추적
+  - 소스 장비 클릭 → 하류(downstream, 어디로 가는지) 표시
+  - 출력 장비 클릭 → 상류(upstream, 어디서 오는지) 표시
+  - 중간 경유 장비 클릭 → 상/하류 모두 표시, 우상단에서 방향 전환 가능
 
-## 데이터 초기화
+## 데이터 초기화 / 리셋
 
-최초 접속 시 방송시스템 샘플 데이터(CAM, MIC, Router, Switcher, Embedder, LED 등)가 자동 시드됩니다.
-모두 지우고 새로 시작하려면 Supabase SQL Editor에서:
+최초 접속 시 방송시스템 샘플 데이터(CAM, CCU, PTZ, UHD VDA, DEMUX, Router, Main/Sub Switcher, Audio Mixer, Embedder, MCU, LED, PA 등 약 50개 장비)가 자동 시드됩니다.
+
+새 버전으로 초기 데이터가 바뀌었거나 모두 지우고 싶을 땐 Supabase SQL Editor에서 실행:
 
 ```sql
 delete from public.connections;
 delete from public.devices;
 ```
 
-실행 후 브라우저 새로고침.
+이후 어느 접속자가 브라우저 새로고침하면 새 샘플 데이터가 다시 시드됩니다.

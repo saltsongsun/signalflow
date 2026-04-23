@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { Plus, Trash2, X, Save, Upload, Wifi, WifiOff } from 'lucide-react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { Plus, Trash2, X, Save, Upload, Wifi, WifiOff, ArrowUpToLine, ArrowDownToLine } from 'lucide-react';
 import { supabase, type Device, type Connection } from '@/lib/supabase';
 import { INITIAL_DEVICES, INITIAL_CONNECTIONS, TYPE_COLORS } from '@/lib/initialData';
 
@@ -12,16 +12,19 @@ const getEdgeType = (fromDevice: Device | undefined, toDevice: Device | undefine
   return 'combined';
 };
 
+type TraceMode = 'both' | 'upstream' | 'downstream';
+
 export default function SignalFlowMap() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
-  const [selectedOutput, setSelectedOutput] = useState<{ deviceId: string } | null>(null);
+  const [selectedDevice, setSelectedDevice] = useState<string | null>(null);
+  const [traceMode, setTraceMode] = useState<TraceMode>('both');
   const [editingDevice, setEditingDevice] = useState<Device | null>(null);
   const [showAddDevice, setShowAddDevice] = useState(false);
   const [pendingConnection, setPendingConnection] = useState<{ deviceId: string; port: string } | null>(null);
   const [draggingDevice, setDraggingDevice] = useState<{ id: string; offsetX: number; offsetY: number } | null>(null);
   const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState(0.75);
   const [isPanning, setIsPanning] = useState(false);
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -35,11 +38,11 @@ export default function SignalFlowMap() {
 
     const devicesChannel = supabase
       .channel('devices-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'devices' }, (payload) => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'devices' }, (payload: any) => {
         if (payload.eventType === 'INSERT') {
-          setDevices(prev => [...prev.filter(d => d.id !== payload.new.id), payload.new as Device]);
+          setDevices(prev => [...prev.filter(d => d.id !== payload.new.id), payload.new]);
         } else if (payload.eventType === 'UPDATE') {
-          setDevices(prev => prev.map(d => d.id === payload.new.id ? payload.new as Device : d));
+          setDevices(prev => prev.map(d => d.id === payload.new.id ? payload.new : d));
         } else if (payload.eventType === 'DELETE') {
           setDevices(prev => prev.filter(d => d.id !== payload.old.id));
         }
@@ -48,18 +51,15 @@ export default function SignalFlowMap() {
 
     const connectionsChannel = supabase
       .channel('connections-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'connections' }, (payload) => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'connections' }, (payload: any) => {
         if (payload.eventType === 'INSERT') {
-          setConnections(prev => [...prev.filter(c => c.id !== payload.new.id), payload.new as Connection]);
+          setConnections(prev => [...prev.filter(c => c.id !== payload.new.id), payload.new]);
         } else if (payload.eventType === 'DELETE') {
           setConnections(prev => prev.filter(c => c.id !== payload.old.id));
         }
       })
-      .subscribe((status) => {
-        setConnected(status === 'SUBSCRIBED');
-      });
+      .subscribe((status) => setConnected(status === 'SUBSCRIBED'));
 
-    // Presence - 현재 접속자 수
     const presenceChannel = supabase.channel('presence-room');
     presenceChannel
       .on('presence', { event: 'sync' }, () => {
@@ -84,12 +84,10 @@ export default function SignalFlowMap() {
       const { data: deviceData } = await supabase.from('devices').select('*');
       const { data: connData } = await supabase.from('connections').select('*');
 
-      // 데이터가 전혀 없으면 초기 시드
       if (!deviceData || deviceData.length === 0) {
         await supabase.from('devices').insert(INITIAL_DEVICES);
-        const { data: seededDevices } = await supabase.from('devices').select('*');
-        setDevices(seededDevices || INITIAL_DEVICES);
-
+        const { data: seeded } = await supabase.from('devices').select('*');
+        setDevices(seeded || INITIAL_DEVICES);
         const connsWithId = INITIAL_CONNECTIONS.map(c => ({ ...c, id: crypto.randomUUID() }));
         await supabase.from('connections').insert(connsWithId);
         const { data: seededConns } = await supabase.from('connections').select('*');
@@ -100,7 +98,6 @@ export default function SignalFlowMap() {
       }
     } catch (err) {
       console.error('Load failed:', err);
-      // Supabase 연결 실패 시 로컬 데이터로 폴백
       setDevices(INITIAL_DEVICES);
       setConnections(INITIAL_CONNECTIONS.map(c => ({ ...c, id: crypto.randomUUID() })));
     } finally {
@@ -108,7 +105,6 @@ export default function SignalFlowMap() {
     }
   };
 
-  // ----- 장비 크기 -----
   const getDeviceSize = (d: Device) => {
     const portCount = Math.max(d.inputs.length, d.outputs.length, 1);
     return { w: 180, h: 50 + portCount * 22 };
@@ -119,42 +115,73 @@ export default function SignalFlowMap() {
     const ports = isOutput ? device.outputs : device.inputs;
     const idx = ports.indexOf(port);
     if (idx === -1) return { x: device.x + w / 2, y: device.y + h / 2 };
-    return {
-      x: isOutput ? device.x + w : device.x,
-      y: device.y + 42 + idx * 22 + 8,
-    };
+    return { x: isOutput ? device.x + w : device.x, y: device.y + 42 + idx * 22 + 8 };
   };
 
-  // ----- 활성 경로 -----
+  // ===== 경로 추적: upstream + downstream =====
   const activePath = useMemo(() => {
-    if (!selectedOutput) return { devices: new Set<string>(), connections: new Set<string>() };
-    const activeDevices = new Set<string>();
-    const activeConns = new Set<string>();
-    const trace = (deviceId: string) => {
-      if (activeDevices.has(deviceId)) return;
-      activeDevices.add(deviceId);
-      connections.forEach((c) => {
-        if (c.to_device === deviceId) {
-          activeConns.add(c.id);
-          trace(c.from_device);
-        }
-      });
+    if (!selectedDevice) return {
+      upstreamDevices: new Set<string>(),
+      downstreamDevices: new Set<string>(),
+      upstreamConns: new Set<string>(),
+      downstreamConns: new Set<string>(),
     };
-    trace(selectedOutput.deviceId);
-    return { devices: activeDevices, connections: activeConns };
-  }, [selectedOutput, connections]);
 
-  const isOutputDevice = (d: Device) => d.inputs.length > 0 && d.outputs.length === 0;
+    const upDev = new Set<string>();
+    const downDev = new Set<string>();
+    const upConn = new Set<string>();
+    const downConn = new Set<string>();
 
-  // ----- 장비 클릭 -----
+    // Upstream: 이 장비로 들어오는 경로 역추적
+    if (traceMode !== 'downstream') {
+      const traceUp = (deviceId: string) => {
+        if (upDev.has(deviceId)) return;
+        upDev.add(deviceId);
+        connections.forEach((c) => {
+          if (c.to_device === deviceId) {
+            upConn.add(c.id);
+            traceUp(c.from_device);
+          }
+        });
+      };
+      traceUp(selectedDevice);
+    }
+
+    // Downstream: 이 장비에서 나가는 경로 순추적
+    if (traceMode !== 'upstream') {
+      const traceDown = (deviceId: string) => {
+        if (downDev.has(deviceId)) return;
+        downDev.add(deviceId);
+        connections.forEach((c) => {
+          if (c.from_device === deviceId) {
+            downConn.add(c.id);
+            traceDown(c.to_device);
+          }
+        });
+      };
+      traceDown(selectedDevice);
+    }
+
+    return { upstreamDevices: upDev, downstreamDevices: downDev, upstreamConns: upConn, downstreamConns: downConn };
+  }, [selectedDevice, traceMode, connections]);
+
+  // ===== 장비 클릭 =====
   const handleDeviceClick = (device: Device) => {
     if (draggingDevice) return;
-    if (isOutputDevice(device)) {
-      setSelectedOutput(selectedOutput?.deviceId === device.id ? null : { deviceId: device.id });
+    // 입출력 모두 없으면 선택 불가
+    if (device.inputs.length === 0 && device.outputs.length === 0) return;
+    if (selectedDevice === device.id) {
+      setSelectedDevice(null);
+    } else {
+      setSelectedDevice(device.id);
+      // 자동 모드 결정: 입력만=upstream, 출력만=downstream, 둘 다=both
+      if (device.inputs.length === 0) setTraceMode('downstream');
+      else if (device.outputs.length === 0) setTraceMode('upstream');
+      else setTraceMode('both');
     }
   };
 
-  // ----- 포트 클릭 (연결) -----
+  // ===== 포트 클릭 (연결) =====
   const handlePortClick = async (deviceId: string, port: string, isOutput: boolean, e: React.MouseEvent) => {
     e.stopPropagation();
     if (isOutput) {
@@ -169,7 +196,7 @@ export default function SignalFlowMap() {
           to_device: deviceId,
           to_port: port,
         };
-        setConnections(prev => [...prev, newConn]); // optimistic
+        setConnections(prev => [...prev, newConn]);
         await supabase.from('connections').insert(newConn);
       }
       setPendingConnection(null);
@@ -177,11 +204,10 @@ export default function SignalFlowMap() {
   };
 
   const deleteConnection = async (id: string) => {
-    setConnections(prev => prev.filter(c => c.id !== id)); // optimistic
+    setConnections(prev => prev.filter(c => c.id !== id));
     await supabase.from('connections').delete().eq('id', id);
   };
 
-  // ----- 드래그 -----
   const handleDeviceMouseDown = (device: Device, e: React.MouseEvent) => {
     const target = e.target as Element;
     if (target.closest('.port-dot') || target.closest('.device-action')) return;
@@ -198,8 +224,6 @@ export default function SignalFlowMap() {
       const x = (e.clientX - svgRect.left) / zoom - pan.x - draggingDevice.offsetX;
       const y = (e.clientY - svgRect.top) / zoom - pan.y - draggingDevice.offsetY;
       setDevices(prev => prev.map(d => d.id === draggingDevice.id ? { ...d, x, y } : d));
-
-      // Throttle DB update
       if (dragUpdateTimer.current) clearTimeout(dragUpdateTimer.current);
       dragUpdateTimer.current = setTimeout(() => {
         supabase.from('devices').update({ x, y }).eq('id', draggingDevice.id);
@@ -225,7 +249,7 @@ export default function SignalFlowMap() {
     const target = e.target as Element;
     if (target === svgRef.current || target.classList.contains('canvas-bg')) {
       if (e.button === 0 && !pendingConnection) setIsPanning(true);
-      setSelectedOutput(null);
+      setSelectedDevice(null);
       setPendingConnection(null);
     }
   };
@@ -233,13 +257,12 @@ export default function SignalFlowMap() {
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault();
     const delta = e.deltaY > 0 ? 0.9 : 1.1;
-    setZoom(Math.max(0.3, Math.min(2.5, zoom * delta)));
+    setZoom(Math.max(0.2, Math.min(2.5, zoom * delta)));
   };
 
-  // ----- 장비 CRUD -----
   const addDevice = async (newDevice: Omit<Device, 'id'>) => {
     const device = { ...newDevice, id: `dev_${Date.now()}`, x: 300, y: 300 };
-    setDevices(prev => [...prev, device]); // optimistic
+    setDevices(prev => [...prev, device]);
     await supabase.from('devices').insert(device);
     setShowAddDevice(false);
   };
@@ -258,7 +281,6 @@ export default function SignalFlowMap() {
     setEditingDevice(null);
   };
 
-  // ----- 저장/불러오기 (파일) -----
   const saveConfig = () => {
     const data = JSON.stringify({ devices, connections }, null, 2);
     const blob = new Blob([data], { type: 'application/json' });
@@ -297,6 +319,8 @@ export default function SignalFlowMap() {
     );
   }
 
+  const selectedDev = selectedDevice ? devices.find(d => d.id === selectedDevice) : null;
+
   return (
     <div className="w-full h-screen bg-neutral-950 text-neutral-100 flex flex-col overflow-hidden font-mono">
       {/* 상단 바 */}
@@ -328,20 +352,37 @@ export default function SignalFlowMap() {
         </div>
       </div>
 
+      {/* 경로 추적 모드 선택 (선택된 장비가 있을 때만) */}
+      {selectedDev && selectedDev.inputs.length > 0 && selectedDev.outputs.length > 0 && (
+        <div className="absolute top-16 left-5 z-20 flex items-center gap-1 bg-neutral-900/95 backdrop-blur border border-neutral-700 rounded p-1">
+          <button onClick={() => setTraceMode('upstream')}
+            className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10px] ${traceMode === 'upstream' ? 'bg-blue-600' : 'hover:bg-neutral-800'}`}>
+            <ArrowUpToLine size={11}/> 상류
+          </button>
+          <button onClick={() => setTraceMode('both')}
+            className={`px-2 py-1 rounded text-[10px] ${traceMode === 'both' ? 'bg-blue-600' : 'hover:bg-neutral-800'}`}>
+            양방향
+          </button>
+          <button onClick={() => setTraceMode('downstream')}
+            className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10px] ${traceMode === 'downstream' ? 'bg-blue-600' : 'hover:bg-neutral-800'}`}>
+            <ArrowDownToLine size={11}/> 하류
+          </button>
+        </div>
+      )}
+
       {/* 상태 바 */}
       <div className="absolute bottom-3 left-5 z-10 flex items-center gap-3 text-[10px] text-neutral-500">
         <span>{devices.length} devices</span>
         <span>·</span>
         <span>{connections.length} links</span>
-        {selectedOutput && (<><span>·</span><span className="text-emerald-400">TRACING: {devices.find(d=>d.id===selectedOutput.deviceId)?.name}</span></>)}
+        {selectedDev && (<><span>·</span><span className="text-emerald-400">TRACING: {selectedDev.name}</span></>)}
         {pendingConnection && (<><span>·</span><span className="text-amber-400">연결 대기... 입력 포트 클릭</span><button onClick={()=>setPendingConnection(null)} className="text-neutral-500 hover:text-white">취소</button></>)}
       </div>
 
       <div className="absolute bottom-3 right-5 z-10 text-[10px] text-neutral-500">
-        {Math.round(zoom * 100)}%  ·  드래그=이동  ·  휠=줌  ·  출력장비 클릭=경로추적
+        {Math.round(zoom * 100)}%  ·  장비 클릭=경로추적  ·  드래그=이동  ·  휠=줌
       </div>
 
-      {/* SVG */}
       <svg
         ref={svgRef}
         className="flex-1 cursor-grab active:cursor-grabbing"
@@ -387,19 +428,25 @@ export default function SignalFlowMap() {
             const to = getPortPosition(toDev, conn.to_port, false);
             const edgeType = getEdgeType(fromDev, toDev);
             const color = TYPE_COLORS[edgeType];
-            const isActive = activePath.connections.has(conn.id);
-            const dimmed = !!selectedOutput && !isActive;
+
+            const isUpstream = activePath.upstreamConns.has(conn.id);
+            const isDownstream = activePath.downstreamConns.has(conn.id);
+            const isActive = isUpstream || isDownstream;
+            const dimmed = !!selectedDevice && !isActive;
+
             const dx = Math.abs(to.x - from.x);
             const cp = Math.min(dx * 0.5, 120);
             const pathD = `M ${from.x} ${from.y} C ${from.x + cp} ${from.y}, ${to.x - cp} ${to.y}, ${to.x} ${to.y}`;
 
             return (
-              <g key={conn.id} style={{ opacity: dimmed ? 0.15 : 1, transition: 'opacity 0.3s' }}>
-                <path d={pathD} fill="none" stroke={color.main} strokeWidth={isActive ? 2.5 : 1.5} opacity={isActive ? 1 : 0.7}
+              <g key={conn.id} style={{ opacity: dimmed ? 0.12 : 1, transition: 'opacity 0.3s' }}>
+                <path d={pathD} fill="none" stroke={color.main} strokeWidth={isActive ? 2.5 : 1.2} opacity={isActive ? 1 : 0.6}
                   markerEnd={`url(#arrow-${isActive ? 'active-' : ''}${edgeType})`} filter={isActive ? 'url(#glow)' : undefined}/>
                 {isActive && (
                   <path d={pathD} fill="none" stroke={color.glow} strokeWidth="3" strokeDasharray="6 14" strokeLinecap="round" opacity="0.9">
-                    <animate attributeName="stroke-dashoffset" from="0" to="-40" dur="1s" repeatCount="indefinite"/>
+                    <animate attributeName="stroke-dashoffset"
+                      from="0" to={isUpstream && !isDownstream ? "40" : "-40"}
+                      dur="1s" repeatCount="indefinite"/>
                   </path>
                 )}
                 <path d={pathD} fill="none" stroke="transparent" strokeWidth="14" style={{ cursor: 'pointer' }}
@@ -421,22 +468,26 @@ export default function SignalFlowMap() {
           {devices.map(device => {
             const { w, h } = getDeviceSize(device);
             const color = TYPE_COLORS[device.type];
-            const isActive = activePath.devices.has(device.id);
-            const dimmed = !!selectedOutput && !isActive;
-            const isOut = isOutputDevice(device);
-            const isSelected = selectedOutput?.deviceId === device.id;
+            const isUp = activePath.upstreamDevices.has(device.id);
+            const isDown = activePath.downstreamDevices.has(device.id);
+            const isActive = isUp || isDown;
+            const isSelected = selectedDevice === device.id;
+            const dimmed = !!selectedDevice && !isActive;
 
             return (
               <g key={device.id} transform={`translate(${device.x}, ${device.y})`}
-                style={{ opacity: dimmed ? 0.25 : 1, transition: 'opacity 0.3s', cursor: isOut ? 'pointer' : 'move' }}
+                style={{ opacity: dimmed ? 0.2 : 1, transition: 'opacity 0.3s', cursor: 'pointer' }}
                 onMouseDown={(e) => handleDeviceMouseDown(device, e)}
                 onClick={() => handleDeviceClick(device)}>
                 <rect width={w} height={h} rx="4" fill={color.bg}
-                  stroke={isSelected ? color.glow : color.border} strokeWidth={isSelected ? 2 : 1}
+                  stroke={isSelected ? '#FBBF24' : color.border}
+                  strokeWidth={isSelected ? 2.5 : 1}
                   filter={isActive ? 'url(#glow)' : undefined}/>
                 <rect width={w} height="28" rx="4" fill={color.main} opacity="0.9"/>
                 <rect y="24" width={w} height="5" fill={color.main} opacity="0.9"/>
-                <text x="10" y="19" fill="#fff" fontSize="11" fontWeight="600" letterSpacing="0.5">{device.name}</text>
+                <text x="10" y="19" fill="#fff" fontSize="11" fontWeight="600" letterSpacing="0.5">
+                  {device.name.length > 22 ? device.name.slice(0, 22) + '…' : device.name}
+                </text>
                 <text x={w - 12} y="19" fill="#fff" fontSize="9" opacity="0.7" textAnchor="end" letterSpacing="1">
                   {device.type === 'video' ? 'V' : device.type === 'audio' ? 'A' : 'V+A'}
                 </text>
@@ -463,10 +514,9 @@ export default function SignalFlowMap() {
                     <text x="-10" y="3" fill="#a3a3a3" fontSize="9" textAnchor="end">{port}</text>
                   </g>
                 ))}
-                {isOut && (
-                  <rect x="4" y={h - 14} width={w - 8} height="2"
-                    fill={isSelected ? color.glow : color.main} opacity={isSelected ? 1 : 0.4} rx="1">
-                    {isSelected && <animate attributeName="opacity" from="1" to="0.3" dur="1s" repeatCount="indefinite"/>}
+                {isSelected && (
+                  <rect x="-2" y="-2" width={w + 4} height={h + 4} rx="5" fill="none" stroke="#FBBF24" strokeWidth="1.5" opacity="0.6">
+                    <animate attributeName="opacity" from="0.6" to="0.2" dur="1.5s" repeatCount="indefinite"/>
                   </rect>
                 )}
               </g>
@@ -482,15 +532,14 @@ export default function SignalFlowMap() {
         <DeviceEditor device={{ id: '', name: '새 장비', type: 'video', x: 0, y: 0, inputs: ['IN'], outputs: ['OUT'], physPorts: {}, routing: {} }}
           onSave={addDevice as any} onClose={() => setShowAddDevice(false)} isNew/>
       )}
-      {selectedOutput && (
-        <SignalPathPanel device={devices.find(d => d.id === selectedOutput.deviceId)!}
-          devices={devices} connections={connections} onClose={() => setSelectedOutput(null)}/>
+      {selectedDev && (
+        <SignalPathPanel device={selectedDev} devices={devices} connections={connections}
+          traceMode={traceMode} onClose={() => setSelectedDevice(null)}/>
       )}
     </div>
   );
 }
 
-// ============================================================
 function LegendDot({ color, label }: { color: string; label: string }) {
   return (
     <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-neutral-800/60">
@@ -500,7 +549,6 @@ function LegendDot({ color, label }: { color: string; label: string }) {
   );
 }
 
-// ============================================================
 function DeviceEditor({ device, onSave, onDelete, onClose, isNew }: {
   device: Device; onSave: (d: Device) => void; onDelete?: (id: string) => void; onClose: () => void; isNew?: boolean;
 }) {
@@ -595,23 +643,42 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-// ============================================================
-function SignalPathPanel({ device, devices, connections, onClose }: {
-  device: Device; devices: Device[]; connections: Connection[]; onClose: () => void;
+function SignalPathPanel({ device, devices, connections, traceMode, onClose }: {
+  device: Device; devices: Device[]; connections: Connection[]; traceMode: TraceMode; onClose: () => void;
 }) {
-  const paths = useMemo(() => {
+  // Upstream paths
+  const upstreamPaths = useMemo(() => {
+    if (traceMode === 'downstream') return [];
     const result: any[] = [];
     const trace = (deviceId: string, path: any[]) => {
       const incoming = connections.filter(c => c.to_device === deviceId);
       if (incoming.length === 0) { result.push([...path].reverse()); return; }
       incoming.forEach(c => {
         const from = devices.find(d => d.id === c.from_device);
+        if (!from) return;
         trace(c.from_device, [...path, { device: from, port: c.from_port, toPort: c.to_port, toDevice: devices.find(d => d.id === c.to_device) }]);
       });
     };
     trace(device.id, []);
     return result;
-  }, [device, devices, connections]);
+  }, [device, devices, connections, traceMode]);
+
+  // Downstream paths
+  const downstreamPaths = useMemo(() => {
+    if (traceMode === 'upstream') return [];
+    const result: any[] = [];
+    const trace = (deviceId: string, path: any[]) => {
+      const outgoing = connections.filter(c => c.from_device === deviceId);
+      if (outgoing.length === 0) { result.push([...path]); return; }
+      outgoing.forEach(c => {
+        const to = devices.find(d => d.id === c.to_device);
+        if (!to) return;
+        trace(c.to_device, [...path, { device: to, fromPort: c.from_port, toPort: c.to_port, fromDevice: devices.find(d => d.id === c.from_device) }]);
+      });
+    };
+    trace(device.id, []);
+    return result;
+  }, [device, devices, connections, traceMode]);
 
   return (
     <div className="absolute top-16 right-4 w-80 bg-neutral-900/95 backdrop-blur border border-neutral-700 rounded-lg shadow-2xl z-20 max-h-[80vh] overflow-hidden flex flex-col">
@@ -623,26 +690,61 @@ function SignalPathPanel({ device, devices, connections, onClose }: {
         <button onClick={onClose} className="text-neutral-500 hover:text-white"><X size={16}/></button>
       </div>
       <div className="overflow-y-auto flex-1 p-3 space-y-3 text-xs">
-        {paths.length === 0 && <div className="text-neutral-500 text-center py-4">입력 연결 없음</div>}
-        {paths.map((path, i) => (
-          <div key={i} className="border border-neutral-800 rounded p-2 bg-neutral-950/50">
-            <div className="text-[9px] text-neutral-500 mb-1.5 uppercase tracking-widest">경로 {i+1}</div>
-            {path.map((step: any, j: number) => (
-              <div key={j} className="flex items-center gap-2 py-1">
-                <div className="w-1 h-1 rounded-full" style={{ background: TYPE_COLORS[step.device.type as keyof typeof TYPE_COLORS].main }}></div>
-                <div className="flex-1">
-                  <div className="text-neutral-200">{step.device.name}</div>
-                  <div className="text-[10px] text-neutral-500">{step.port} → {step.toDevice.name}:{step.toPort}</div>
+        {upstreamPaths.length > 0 && (
+          <div>
+            <div className="text-[9px] uppercase tracking-widest text-emerald-400 mb-2 flex items-center gap-1">
+              <ArrowUpToLine size={11}/> 상류 (입력 경로)
+            </div>
+            {upstreamPaths.map((path, i) => (
+              <div key={i} className="border border-neutral-800 rounded p-2 bg-neutral-950/50 mb-2">
+                <div className="text-[9px] text-neutral-500 mb-1.5">경로 {i+1}</div>
+                {path.map((step: any, j: number) => (
+                  <div key={j} className="flex items-center gap-2 py-1">
+                    <div className="w-1 h-1 rounded-full" style={{ background: TYPE_COLORS[step.device.type as keyof typeof TYPE_COLORS].main }}></div>
+                    <div className="flex-1">
+                      <div className="text-neutral-200">{step.device.name}</div>
+                      <div className="text-[10px] text-neutral-500">{step.port} → {step.toDevice?.name}:{step.toPort}</div>
+                    </div>
+                  </div>
+                ))}
+                <div className="flex items-center gap-2 py-1 pt-1.5 border-t border-neutral-800 mt-1">
+                  <div className="w-1.5 h-1.5 rounded-full" style={{ background: '#FBBF24' }}></div>
+                  <div className="text-amber-400 font-semibold">{device.name} (선택됨)</div>
                 </div>
-                {j < path.length - 1 && <span className="text-neutral-700">↓</span>}
               </div>
             ))}
-            <div className="flex items-center gap-2 py-1 pt-1.5 border-t border-neutral-800 mt-1">
-              <div className="w-1 h-1 rounded-full" style={{ background: TYPE_COLORS[device.type].glow, boxShadow: `0 0 4px ${TYPE_COLORS[device.type].glow}` }}></div>
-              <div className="text-neutral-200">{device.name} <span className="text-neutral-500">(목적지)</span></div>
-            </div>
           </div>
-        ))}
+        )}
+
+        {downstreamPaths.length > 0 && (
+          <div>
+            <div className="text-[9px] uppercase tracking-widest text-sky-400 mb-2 flex items-center gap-1">
+              <ArrowDownToLine size={11}/> 하류 (출력 경로)
+            </div>
+            {downstreamPaths.map((path, i) => (
+              <div key={i} className="border border-neutral-800 rounded p-2 bg-neutral-950/50 mb-2">
+                <div className="text-[9px] text-neutral-500 mb-1.5">경로 {i+1}</div>
+                <div className="flex items-center gap-2 py-1">
+                  <div className="w-1.5 h-1.5 rounded-full" style={{ background: '#FBBF24' }}></div>
+                  <div className="text-amber-400 font-semibold">{device.name} (선택됨)</div>
+                </div>
+                {path.map((step: any, j: number) => (
+                  <div key={j} className="flex items-center gap-2 py-1">
+                    <div className="w-1 h-1 rounded-full" style={{ background: TYPE_COLORS[step.device.type as keyof typeof TYPE_COLORS].main }}></div>
+                    <div className="flex-1">
+                      <div className="text-neutral-200">{step.device.name}</div>
+                      <div className="text-[10px] text-neutral-500">{step.fromDevice?.name}:{step.fromPort} → {step.toPort}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {upstreamPaths.length === 0 && downstreamPaths.length === 0 && (
+          <div className="text-neutral-500 text-center py-4">연결 없음</div>
+        )}
       </div>
     </div>
   );
