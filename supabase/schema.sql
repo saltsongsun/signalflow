@@ -1,9 +1,4 @@
--- ============================================================
--- Signal Flow Map v2 Schema
--- ============================================================
-
--- 기존 테이블이 있으면 컬럼만 추가 (데이터 보존)
--- 처음 설치라면 이 block 전체 실행
+-- Signal Flow Map v3 Schema (with Layers)
 
 create table if not exists public.devices (
   id text primary key,
@@ -33,29 +28,37 @@ create table if not exists public.connections (
   unique (to_device, to_port)
 );
 
--- 기존 테이블 있으면 컬럼만 추가 (idempotent)
+create table if not exists public.layers (
+  id text primary key,
+  name text not null,
+  color text not null default '#3B82F6',
+  visible boolean not null default true,
+  sort_order integer not null default 0,
+  created_at timestamp with time zone default now()
+);
+
+-- idempotent column additions
 alter table public.devices add column if not exists width double precision;
 alter table public.devices add column if not exists height double precision;
 alter table public.devices add column if not exists "inputsMeta" jsonb not null default '{}'::jsonb;
 alter table public.devices add column if not exists "outputsMeta" jsonb not null default '{}'::jsonb;
 alter table public.connections add column if not exists conn_type text;
 
--- Realtime 활성화 (이미 활성인 경우는 무시됨)
+-- Realtime
 do $$
 begin
   perform 1 from pg_publication_tables where pubname='supabase_realtime' and tablename='devices';
-  if not found then
-    alter publication supabase_realtime add table public.devices;
-  end if;
+  if not found then alter publication supabase_realtime add table public.devices; end if;
   perform 1 from pg_publication_tables where pubname='supabase_realtime' and tablename='connections';
-  if not found then
-    alter publication supabase_realtime add table public.connections;
-  end if;
+  if not found then alter publication supabase_realtime add table public.connections; end if;
+  perform 1 from pg_publication_tables where pubname='supabase_realtime' and tablename='layers';
+  if not found then alter publication supabase_realtime add table public.layers; end if;
 end $$;
 
 -- RLS
 alter table public.devices enable row level security;
 alter table public.connections enable row level security;
+alter table public.layers enable row level security;
 
 drop policy if exists "Public read devices" on public.devices;
 drop policy if exists "Public insert devices" on public.devices;
@@ -65,6 +68,10 @@ drop policy if exists "Public read connections" on public.connections;
 drop policy if exists "Public insert connections" on public.connections;
 drop policy if exists "Public update connections" on public.connections;
 drop policy if exists "Public delete connections" on public.connections;
+drop policy if exists "Public read layers" on public.layers;
+drop policy if exists "Public insert layers" on public.layers;
+drop policy if exists "Public update layers" on public.layers;
+drop policy if exists "Public delete layers" on public.layers;
 
 create policy "Public read devices" on public.devices for select using (true);
 create policy "Public insert devices" on public.devices for insert with check (true);
@@ -74,3 +81,7 @@ create policy "Public read connections" on public.connections for select using (
 create policy "Public insert connections" on public.connections for insert with check (true);
 create policy "Public update connections" on public.connections for update using (true);
 create policy "Public delete connections" on public.connections for delete using (true);
+create policy "Public read layers" on public.layers for select using (true);
+create policy "Public insert layers" on public.layers for insert with check (true);
+create policy "Public update layers" on public.layers for update using (true);
+create policy "Public delete layers" on public.layers for delete using (true);

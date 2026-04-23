@@ -4,14 +4,9 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  realtime: {
-    params: {
-      eventsPerSecond: 20,
-    },
-  },
+  realtime: { params: { eventsPerSecond: 20 } },
 });
 
-// 연결(케이블) 방식
 export const CONNECTION_TYPES = [
   'SDI', '12G-SDI', 'HDMI', 'DVI',
   'FIBER', 'NDI', 'SMPTE-2110', 'IP',
@@ -23,9 +18,10 @@ export const CONNECTION_TYPES = [
 export type ConnectionType = typeof CONNECTION_TYPES[number];
 
 export type PortInfo = {
-  name: string;          // 포트 식별자 (예: "OP-1")
-  label?: string;        // 물리 포트 이름 (예: "CCU-1 12G OP-1")
-  connType?: ConnectionType; // 이 포트의 케이블 방식
+  name: string;
+  label?: string;
+  connType?: ConnectionType;
+  layerId?: string;  // 포트가 속한 레이어
 };
 
 export type Device = {
@@ -34,14 +30,14 @@ export type Device = {
   type: 'video' | 'audio' | 'combined';
   x: number;
   y: number;
-  width?: number;   // 기본 180
-  height?: number;  // 자동 계산 or 커스텀
-  inputs: string[];                       // 기존 호환 - 포트 이름들
-  outputs: string[];                      // 기존 호환
-  inputsMeta?: Record<string, PortInfo>;  // 포트별 메타 (label, connType)
+  width?: number;
+  height?: number;
+  inputs: string[];
+  outputs: string[];
+  inputsMeta?: Record<string, PortInfo>;
   outputsMeta?: Record<string, PortInfo>;
-  physPorts: Record<string, string>;      // legacy - label 용도로 유지
-  routing: Record<string, string>;        // legacy - 라우팅명
+  physPorts: Record<string, string>;
+  routing: Record<string, string>;
 };
 
 export type Connection = {
@@ -50,5 +46,21 @@ export type Connection = {
   from_port: string;
   to_device: string;
   to_port: string;
-  conn_type?: ConnectionType;  // 이 케이블의 연결 방식
+  conn_type?: ConnectionType;
 };
+
+export type Layer = {
+  id: string;
+  name: string;
+  color: string;
+  visible: boolean;
+  sort_order: number;
+};
+
+// 기본 레이어 (초기 시드용)
+export const DEFAULT_LAYERS: Layer[] = [
+  { id: 'layer_video',  name: 'Video',    color: '#3B82F6', visible: true, sort_order: 1 },
+  { id: 'layer_audio',  name: 'Audio',    color: '#EF4444', visible: true, sort_order: 2 },
+  { id: 'layer_tie',    name: 'Tie-Line', color: '#A855F7', visible: true, sort_order: 3 },
+  { id: 'layer_control',name: 'Control',  color: '#10B981', visible: true, sort_order: 4 },
+];

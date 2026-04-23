@@ -555,6 +555,20 @@ export const INITIAL_CONNECTIONS = [
   { from_device: 'dante_sw1', from_port: 'AMU IN', to_device: 'dante_sw2', to_port: 'IP PRIMARY', conn_type: 'LAN' as ConnectionType },
 ];
 
+// connType을 기반으로 자동 layerId 매핑
+const VIDEO_TYPES = new Set(['SDI','12G-SDI','HDMI','DVI','FIBER','NDI','SMPTE-2110','IP']);
+const AUDIO_TYPES = new Set(['AES','DANTE','MADI','AoIP','XLR','ANALOG']);
+const CONTROL_TYPES = new Set(['USB','GPIO','LAN','RS-422']);
+
+function layerFromConnType(ct?: ConnectionType, deviceType?: string): string {
+  if (!ct) return deviceType === 'audio' ? 'layer_audio' : deviceType === 'combined' ? 'layer_video' : 'layer_video';
+  if (ct === 'TIE') return 'layer_tie';
+  if (CONTROL_TYPES.has(ct)) return 'layer_control';
+  if (AUDIO_TYPES.has(ct)) return 'layer_audio';
+  if (VIDEO_TYPES.has(ct)) return 'layer_video';
+  return 'layer_video';
+}
+
 function toDevice(d: DeviceSeed): Device {
   const physPorts: Record<string, string> = {};
   const routing: Record<string, string> = {};
@@ -562,15 +576,22 @@ function toDevice(d: DeviceSeed): Device {
   const outputsMeta: Record<string, any> = {};
   if (d.inputsMeta) {
     for (const [k, v] of Object.entries(d.inputsMeta)) {
-      inputsMeta[k] = v;
+      inputsMeta[k] = { ...v, layerId: layerFromConnType(v.connType as ConnectionType, d.type) };
       if (v.label) physPorts[k] = v.label;
     }
   }
+  // inputs 배열에 있지만 meta가 없는 경우도 기본 layerId 부여
+  for (const p of d.inputs) {
+    if (!inputsMeta[p]) inputsMeta[p] = { layerId: d.type === 'audio' ? 'layer_audio' : 'layer_video' };
+  }
   if (d.outputsMeta) {
     for (const [k, v] of Object.entries(d.outputsMeta)) {
-      outputsMeta[k] = v;
+      outputsMeta[k] = { ...v, layerId: layerFromConnType(v.connType as ConnectionType, d.type) };
       if (v.label) routing[k] = v.label;
     }
+  }
+  for (const p of d.outputs) {
+    if (!outputsMeta[p]) outputsMeta[p] = { layerId: d.type === 'audio' ? 'layer_audio' : 'layer_video' };
   }
   return { ...d, inputsMeta, outputsMeta, physPorts, routing };
 }
