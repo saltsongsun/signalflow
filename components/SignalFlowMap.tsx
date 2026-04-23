@@ -7,6 +7,7 @@ import LayerPanel from './LayerPanel';
 import CableEditor from './CableEditor';
 import PatchbayManager from './PatchbayManager';
 import WallboxManager from './WallboxManager';
+import BulkEditor from './BulkEditor';
 
 type TraceMode = 'both' | 'upstream' | 'downstream';
 
@@ -92,6 +93,7 @@ export default function SignalFlowMap() {
   const [showLayerPanel, setShowLayerPanel] = useState(false);
   const [showPatchbayMgr, setShowPatchbayMgr] = useState(false);
   const [showWallboxMgr, setShowWallboxMgr] = useState(false);
+  const [showBulkEditor, setShowBulkEditor] = useState(false);
   const [pendingFrom, setPendingFrom] = useState<{ device: string; port: string; connType?: ConnectionType } | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
@@ -287,15 +289,20 @@ export default function SignalFlowMap() {
           const clickedDev = stateRef.current.devices.find(x => x.id === clickedId);
           if (clickedDev) {
             if (stateRef.current.editMode) {
+              // 그룹에 속한 경우 동일 그룹의 모든 장비 id 수집
+              const groupMates = clickedDev.groupId
+                ? stateRef.current.devices.filter(x => x.groupId === clickedDev.groupId).map(x => x.id)
+                : [clickedId];
               if (p.shiftKey) {
                 setSelectedIds(prev => {
                   const next = new Set(prev);
-                  if (next.has(clickedId)) next.delete(clickedId);
-                  else next.add(clickedId);
+                  const allIn = groupMates.every(id => next.has(id));
+                  if (allIn) groupMates.forEach(id => next.delete(id));
+                  else groupMates.forEach(id => next.add(id));
                   return next;
                 });
               } else {
-                setSelectedIds(new Set([clickedId]));
+                setSelectedIds(new Set(groupMates));
                 setEditingDevice(clickedDev);
               }
             } else {
@@ -388,7 +395,29 @@ export default function SignalFlowMap() {
 
     // 편집 모드: 드래그 후보로 등록
     const isInSelection = selectedIds.has(d.id);
-    const idsToMove = isInSelection && selectedIds.size > 0 ? Array.from(selectedIds) : [d.id];
+
+    // 드래그 대상 결정:
+    // 1) 이미 선택에 포함되면 선택 전체
+    // 2) 선택에 없다면 이 장비(+ 같은 그룹 메이트)
+    let idsToMove: string[];
+    if (isInSelection && selectedIds.size > 0) {
+      idsToMove = Array.from(selectedIds);
+    } else if (d.groupId) {
+      idsToMove = devices.filter(x => x.groupId === d.groupId).map(x => x.id);
+    } else {
+      idsToMove = [d.id];
+    }
+
+    // 그룹 메이트까지 포함되도록 확장
+    const allGroupIds = new Set(idsToMove);
+    idsToMove.forEach(id => {
+      const dev = devById.get(id);
+      if (dev?.groupId) {
+        devices.filter(x => x.groupId === dev.groupId).forEach(gm => allGroupIds.add(gm.id));
+      }
+    });
+    idsToMove = Array.from(allGroupIds);
+
     const origPositions: Record<string, { x: number; y: number }> = {};
     idsToMove.forEach(id => {
       const dev = devById.get(id);
@@ -464,8 +493,10 @@ export default function SignalFlowMap() {
       name: `${src.name} 복사`,
       x: src.x + 40,
       y: src.y + 40,
-      // 연결은 복제 안함 (Connection은 장비에 종속이고, from/to 모두 src를 가리키기 때문)
-      // 포트 정보, 레이어, 역할, normals, pgmPort 등은 다 복사 — 그대로 깊은 복사
+      // 그룹은 승계하지 않음 (복제본은 독립)
+      groupId: undefined,
+      groupName: undefined,
+      // 연결은 복제 안함
       inputs: [...src.inputs],
       outputs: [...src.outputs],
       inputsMeta: src.inputsMeta ? JSON.parse(JSON.stringify(src.inputsMeta)) : {},
@@ -531,6 +562,49 @@ export default function SignalFlowMap() {
     }
     setSelectedIds(new Set());
   };
+
+  // ========== 그룹화 ==========
+  const handleGroupSelected = async () => {
+    if (selectedIds.size < 2) return;
+    const ids = Array.from(selectedIds);
+    const sel = ids.map(id => devices.find(d => d.id === id)).filter(Boolean) as Device[];
+    const existingGroup = sel.find(d => d.groupName)?.groupName ?? '';
+    const name = prompt('그룹 이름을 입력하세요:', existingGroup || 'Group 1');
+    if (!name) return;
+    const groupId = `grp_${Date.now().toString(36)}`;
+    // 낙관적 업데이트
+    setDevices(prev => prev.map(d =>
+      ids.includes(d.id) ? { ...d, groupId, groupName: name.trim() } : d
+    ));
+    // DB 저장
+    const updates = ids.map(id =>
+      (supabase as any).from('devices').update({ groupId, groupName: name.trim() }).eq('id', id)
+    );
+    await Promise.all(updates);
+  };
+
+  const handleUngroupSelected = async () => {
+    if (selectedIds.size === 0) return;
+    const ids = Array.from(selectedIds);
+    setDevices(prev => prev.map(d =>
+      ids.includes(d.id) ? { ...d, groupId: undefined, groupName: undefined } : d
+    ));
+    const updates = ids.map(id =>
+      (supabase as any).from('devices').update({ groupId: null, groupName: null }).eq('id', id)
+    );
+    await Promise.all(updates);
+  };
+
+  // 선택된 장비가 속한 그룹 이름 (모두 같은 그룹일 때만)
+  const selectedGroupInfo = (() => {
+    if (selectedIds.size === 0) return null;
+    const sel = Array.from(selectedIds).map(id => devices.find(d => d.id === id)).filter(Boolean) as Device[];
+    const grpIds = new Set(sel.map(d => d.groupId).filter(Boolean));
+    if (grpIds.size === 1 && sel.every(d => d.groupId)) {
+      return { id: Array.from(grpIds)[0], name: sel[0].groupName ?? '(이름없음)', count: sel.length };
+    }
+    return null;
+  })();
 
   // ========== 정렬 기능 ==========
   type AlignType = 'left' | 'right' | 'top' | 'bottom' | 'center-x' | 'center-y' | 'dist-x' | 'dist-y';
@@ -713,7 +787,43 @@ export default function SignalFlowMap() {
                 <>
                   <div className="px-2.5 py-1 text-[11px] rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 font-medium">
                     {selectedIds.size}개 선택
+                    {selectedGroupInfo && (
+                      <span className="ml-1.5 text-[10px] px-1 rounded bg-fuchsia-500/20 text-fuchsia-200 border border-fuchsia-500/30 font-mono">
+                        ⬢ {selectedGroupInfo.name}
+                      </span>
+                    )}
                   </div>
+
+                  {/* 일괄편집 */}
+                  <button
+                    onClick={() => setShowBulkEditor(true)}
+                    className="px-2.5 py-1 text-[11px] rounded-lg bg-purple-500/15 hover:bg-purple-500 text-purple-200 hover:text-white border border-purple-500/30 hover:border-purple-400 font-medium transition"
+                    title="선택된 장비에 공통 필드 일괄 적용"
+                  >✎ 일괄편집</button>
+
+                  {/* 그룹화/해제 */}
+                  {selectedIds.size >= 2 && !selectedGroupInfo && (
+                    <button
+                      onClick={handleGroupSelected}
+                      className="px-2.5 py-1 text-[11px] rounded-lg bg-fuchsia-500/15 hover:bg-fuchsia-500 text-fuchsia-200 hover:text-white border border-fuchsia-500/30 hover:border-fuchsia-400 font-medium transition"
+                      title="선택된 장비를 하나의 그룹으로 묶기"
+                    >⬢ 그룹화</button>
+                  )}
+                  {selectedGroupInfo && (
+                    <>
+                      <button
+                        onClick={handleGroupSelected}
+                        className="px-2.5 py-1 text-[11px] rounded-lg bg-fuchsia-500/10 hover:bg-fuchsia-500/30 text-fuchsia-300 border border-fuchsia-500/30 font-medium transition"
+                        title="그룹 이름 변경"
+                      >✎ 이름</button>
+                      <button
+                        onClick={handleUngroupSelected}
+                        className="px-2.5 py-1 text-[11px] rounded-lg bg-white/5 hover:bg-rose-500/60 text-neutral-400 hover:text-white border border-white/10 transition"
+                        title="그룹 해제"
+                      >⬡ 해제</button>
+                    </>
+                  )}
+
                   <button onClick={handleDeleteSelected}
                     className="px-2.5 py-1 text-[11px] rounded-lg bg-rose-500/15 hover:bg-rose-500 text-rose-300 hover:text-white border border-rose-500/30 hover:border-rose-400 font-medium transition">삭제</button>
                 </>
@@ -803,6 +913,55 @@ export default function SignalFlowMap() {
               <filter id="glow"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
               <filter id="glow-strong"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
             </defs>
+
+            {/* 그룹 경계 박스 (연결선보다 뒤에) */}
+            {(() => {
+              const groups = new Map<string, { name: string; devs: Device[] }>();
+              devices.forEach(d => {
+                if (!d.groupId || !isDeviceVisible(d)) return;
+                const g = groups.get(d.groupId);
+                if (g) g.devs.push(d);
+                else groups.set(d.groupId, { name: d.groupName ?? '그룹', devs: [d] });
+              });
+              const PAD = 18;
+              return Array.from(groups.entries()).map(([gid, { name, devs }]) => {
+                if (devs.length === 0) return null;
+                const minX = Math.min(...devs.map(d => d.x)) - PAD;
+                const minY = Math.min(...devs.map(d => d.y)) - PAD - 18;
+                const maxX = Math.max(...devs.map(d => d.x + deviceWidth(d))) + PAD;
+                const maxY = Math.max(...devs.map(d => d.y + deviceHeight(d, visibleLayerIds))) + PAD;
+                const w = maxX - minX, h = maxY - minY;
+                return (
+                  <g key={gid}>
+                    <rect
+                      x={minX} y={minY} width={w} height={h}
+                      fill="rgba(217,70,239,0.04)"
+                      stroke="rgba(217,70,239,0.38)"
+                      strokeWidth="1.2"
+                      strokeDasharray="8 5"
+                      rx="10"
+                    />
+                    {/* 그룹 라벨 탭 */}
+                    <rect
+                      x={minX + 8} y={minY - 2} width={Math.min(160, 6 + name.length * 7.5)} height="18"
+                      rx="4"
+                      fill="rgba(217,70,239,0.25)"
+                      stroke="rgba(217,70,239,0.55)"
+                      strokeWidth="0.8"
+                    />
+                    <text
+                      x={minX + 15} y={minY + 10}
+                      fontSize="10.5"
+                      fill="#F5D0FE"
+                      fontWeight="700"
+                      fontFamily="var(--font-sans)"
+                      dominantBaseline="middle"
+                    >⬢ {name} · {devs.length}</text>
+                  </g>
+                );
+              });
+            })()}
+
             {connections.map(c => {
               if (!isConnVisible(c)) return null;
               // self-loop 패치(패치베이 내부 패치)는 메인 캔버스에 렌더 안함
@@ -1336,11 +1495,38 @@ export default function SignalFlowMap() {
         />
       )}
 
+      {showBulkEditor && selectedIds.size > 0 && (
+        <BulkEditor
+          devices={devices.filter(d => selectedIds.has(d.id))}
+          layers={layers}
+          onClose={() => setShowBulkEditor(false)}
+        />
+      )}
+
       {editingDevice && (
         <DeviceEditor
           device={editingDevice}
           layers={layers}
+          selectionCount={selectedIds.size}
           onSave={handleSaveDevice}
+          onSaveToSelection={async (updates) => {
+            const ids = Array.from(selectedIds);
+            // undefined 제거
+            const clean: any = {};
+            Object.entries(updates).forEach(([k, v]) => { if (v !== undefined) clean[k] = v; });
+            // 낙관적 업데이트
+            setDevices(prev => prev.map(d => ids.includes(d.id) ? { ...d, ...updates } : d));
+            setEditingDevice(null);
+            // 병렬 저장
+            const results = await Promise.all(
+              ids.map(id => (supabase as any).from('devices').update(clean).eq('id', id))
+            );
+            const errs = results.filter(r => r.error);
+            if (errs.length > 0) {
+              console.error('[Bulk apply errors]', errs);
+              alert(`일괄 적용 중 ${errs.length}개 장비 실패. Console 확인.`);
+            }
+          }}
           onDelete={handleDeleteDevice}
           onDuplicate={handleDuplicateDevice}
           onClose={() => setEditingDevice(null)}

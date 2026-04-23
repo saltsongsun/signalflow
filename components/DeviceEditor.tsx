@@ -5,7 +5,9 @@ import { Device, CONNECTION_TYPES, ConnectionType, PortInfo, Layer, DEVICE_ROLES
 type Props = {
   device: Device;
   layers: Layer[];
+  selectionCount?: number;  // 현재 다중선택된 장비 수
   onSave: (updates: Partial<Device>) => void;
+  onSaveToSelection?: (updates: Partial<Device>) => void;
   onDelete: () => void;
   onDuplicate: () => void;
   onClose: () => void;
@@ -19,7 +21,7 @@ const TYPE_ACCENT = {
   combined: { grad: 'from-purple-500/20 to-purple-600/5', ring: 'ring-purple-500/40', dot: '#A855F7' },
 };
 
-export default function DeviceEditor({ device, layers, onSave, onDelete, onDuplicate, onClose }: Props) {
+export default function DeviceEditor({ device, layers, selectionCount, onSave, onSaveToSelection, onDelete, onDuplicate, onClose }: Props) {
   const [name, setName] = useState(device.name);
   const [model, setModel] = useState(device.model ?? '');
   const [location, setLocation] = useState(device.location ?? '');
@@ -107,7 +109,7 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onDupli
     }
   };
 
-  const handleSave = () => {
+  const buildUpdates = (): Partial<Device> => {
     let finalInputs: PortRow[], finalOutputs: PortRow[];
     if (bulkMode === 'text') {
       finalInputs = bulkInputs.split(',').map(s => s.trim()).filter(Boolean)
@@ -129,7 +131,7 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onDupli
       outputsMeta[r.name] = { name: r.name, label: r.label || undefined, connType: r.connType || undefined, layerId: r.layerId };
       if (r.label) physPorts[r.name] = r.label;
     });
-    onSave({
+    return {
       name: name.trim() || device.name,
       model: model.trim() || undefined,
       location: role === 'wallbox' ? (location.trim() || undefined) : undefined,
@@ -141,7 +143,24 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onDupli
       inputs: finalInputs.map(r => r.name),
       outputs: finalOutputs.map(r => r.name),
       inputsMeta, outputsMeta, physPorts,
-    });
+    };
+  };
+
+  const handleSave = () => {
+    onSave(buildUpdates());
+  };
+
+  const handleApplyToSelection = () => {
+    if (!onSaveToSelection) return;
+    // 장비 고유 식별 정보(name, groupId 등)은 제외하고 "공통 설정"만 전파
+    const u = buildUpdates();
+    const common: Partial<Device> = {
+      type: u.type, role: u.role, width: u.width,
+      model: u.model,
+      pgmPort: u.pgmPort, normals: u.normals,
+      location: u.location, roomNumber: u.roomNumber,
+    };
+    onSaveToSelection(common);
   };
 
   const sortedLayers = [...layers].sort((a, b) => a.sort_order - b.sort_order);
@@ -569,6 +588,14 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onDupli
         <div className="flex gap-2 pt-3 border-t border-white/5">
           <button onClick={handleSave}
             className="flex-1 bg-gradient-to-r from-sky-500 to-sky-600 hover:from-sky-400 hover:to-sky-500 text-white py-2.5 text-sm rounded-lg font-semibold shadow-lg shadow-sky-500/30 transition">저장</button>
+          {selectionCount && selectionCount > 1 && onSaveToSelection && (
+            <button onClick={handleApplyToSelection}
+              className="px-3 bg-purple-500/15 hover:bg-purple-500 text-purple-300 hover:text-white py-2.5 text-sm rounded-lg font-medium border border-purple-500/30 hover:border-purple-400 transition flex items-center gap-1"
+              title={`이 설정을 선택된 ${selectionCount}개 장비에 적용 (이름·그룹 제외)`}>
+              <span>📤</span>
+              <span className="text-[11px] leading-none">선택 {selectionCount}개에<br/>적용</span>
+            </button>
+          )}
           <button onClick={onDuplicate}
             className="px-4 bg-purple-500/15 hover:bg-purple-500 text-purple-300 hover:text-white py-2.5 text-sm rounded-lg font-medium border border-purple-500/30 hover:border-purple-400 transition flex items-center gap-1.5"
             title="같은 속성으로 장비 복제 (연결은 제외)">

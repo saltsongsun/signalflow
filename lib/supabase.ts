@@ -51,6 +51,9 @@ export type Device = {
   // wallbox 전용: 설치 장소 + 방번호
   location?: string;   // 예: '주경기장', '중계석#1', 'PC 존', '선수대기실-1'
   roomNumber?: string; // 예: 'WB-101', 'OBS-01'
+  // 그룹화
+  groupId?: string;    // 같은 그룹끼리는 동일 id
+  groupName?: string;  // 그룹 표시명 (같은 groupId면 동일)
   x: number;
   y: number;
   width?: number;
