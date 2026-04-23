@@ -5,6 +5,7 @@ import { INITIAL_DEVICES, INITIAL_CONNECTIONS, TYPE_COLORS, CONN_TYPE_STYLES } f
 import DeviceEditor from './DeviceEditor';
 import LayerPanel from './LayerPanel';
 import CableEditor from './CableEditor';
+import PatchbayManager from './PatchbayManager';
 
 type TraceMode = 'both' | 'upstream' | 'downstream';
 
@@ -43,9 +44,9 @@ function visiblePorts(d: Device, dir: 'in' | 'out', visibleLayerIds: Set<string>
 
 function deviceHeight(d: Device, visibleLayerIds: Set<string>) {
   if (d.height) return d.height;
-  // 패치베이: 헤더 + 상단(OUT) 행 + 간격 + 하단(IN) 행 + 하단 여백
+  // 패치베이: 헤더 + 외부패딩(6*2) + 내부패딩(6*2) + OUT행 + 중간라벨 + IN행
   if (d.role === 'patchbay') {
-    return HEADER_H + PB_TOP_PAD + PB_JACK_H + PB_ROW_GAP + PB_JACK_H + PB_TOP_PAD;
+    return HEADER_H + 12 + 12 + PB_JACK_H + PB_ROW_GAP + PB_JACK_H;
   }
   const vi = visiblePorts(d, 'in', visibleLayerIds).length;
   const vo = visiblePorts(d, 'out', visibleLayerIds).length;
@@ -61,14 +62,15 @@ function portYFromRenderIdx(d: Device, renderIdx: number) {
 // 패치베이 전용: 포트 X/Y 계산 (셀 중앙 좌표)
 // dir: 'out' = 상단 행 / 'in' = 하단 행
 function patchbayPortXY(d: Device, dir: 'in' | 'out', portIdx: number) {
-  const cx = d.x + PB_SIDE_PAD + portIdx * PB_JACK_W + PB_JACK_W / 2;
+  // 바깥패딩 6 + 안쪽패딩 8 = 14, cell center = 14 + portIdx*JACK_W + JACK_W/2
+  const cx = d.x + 14 + portIdx * PB_JACK_W + PB_JACK_W / 2;
   if (dir === 'out') {
-    // 상단 행 - OUT은 셀 상단에서 나감
-    const cy = d.y + HEADER_H + PB_TOP_PAD;
+    // OUT 잭 상단부 ≈ 헤더 아래 + 6(바깥) + 6(안쪽) + 2 (잭 margintop) = HEADER_H + 14
+    const cy = d.y + HEADER_H + 14;
     return { x: cx, y: cy };
   } else {
-    // 하단 행 - IN은 셀 하단에서 들어옴
-    const cy = d.y + HEADER_H + PB_TOP_PAD + PB_JACK_H + PB_ROW_GAP + PB_JACK_H;
+    // IN 잭 하단부 ≈ HEADER_H + 14 + JACK_H + ROW_GAP + JACK_H
+    const cy = d.y + HEADER_H + 14 + PB_JACK_H + PB_ROW_GAP + PB_JACK_H;
     return { x: cx, y: cy };
   }
 }
@@ -87,6 +89,7 @@ export default function SignalFlowMap() {
   const [editingDevice, setEditingDevice] = useState<Device | null>(null);
   const [editingCable, setEditingCable] = useState<Connection | null>(null);
   const [showLayerPanel, setShowLayerPanel] = useState(false);
+  const [showPatchbayMgr, setShowPatchbayMgr] = useState(false);
   const [pendingFrom, setPendingFrom] = useState<{ device: string; port: string; connType?: ConnectionType } | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
@@ -646,6 +649,12 @@ export default function SignalFlowMap() {
             className={`px-3 py-1.5 text-[11px] font-medium rounded-lg border transition-all ${showLayerPanel ? 'bg-gradient-to-r from-purple-500 to-purple-600 text-white border-purple-400 shadow-md shadow-purple-500/30' : 'bg-white/5 border-white/10 text-neutral-300 hover:text-white hover:bg-white/10'}`}
           >⧉ 레이어 <span className="font-mono opacity-70">{layers.filter(l => l.visible).length}/{layers.length}</span></button>
 
+          <button
+            onClick={() => setShowPatchbayMgr(true)}
+            className="px-3 py-1.5 text-[11px] font-medium rounded-lg border bg-white/5 border-teal-500/30 text-teal-300 hover:text-white hover:bg-teal-500/20 transition-all"
+            title="패치베이 관리 페이지"
+          >⊟ 패치베이 <span className="font-mono opacity-70">{devices.filter(d => d.role === 'patchbay').length}</span></button>
+
           {!editMode && traceId && (
             <div className="flex items-center gap-0.5 bg-sky-500/10 border border-sky-500/30 rounded-lg p-0.5">
               {(['both','upstream','downstream'] as TraceMode[]).map(m => (
@@ -756,6 +765,8 @@ export default function SignalFlowMap() {
             </defs>
             {connections.map(c => {
               if (!isConnVisible(c)) return null;
+              // self-loop 패치(패치베이 내부 패치)는 메인 캔버스에 렌더 안함
+              if (c.from_device === c.to_device && c.is_patch) return null;
               const from = devById.get(c.from_device)!;
               const to = devById.get(c.to_device)!;
               const outVis = visiblePorts(from, 'out', visibleLayerIds);
@@ -997,107 +1008,163 @@ export default function SignalFlowMap() {
 
                 {/* Ports */}
                 {isPatchbay ? (
-                  // === 패치베이 2단 렌더링 ===
-                  <div className="relative" style={{ paddingTop: PB_TOP_PAD, paddingBottom: PB_TOP_PAD }}>
-                    {/* 상단 행: OUT (출력) — 신호 나감 */}
-                    <div className="flex items-center justify-center" style={{ paddingLeft: PB_SIDE_PAD, paddingRight: PB_SIDE_PAD, height: PB_JACK_H }}>
-                      {d.outputs.map((portName, idx) => {
-                        const meta = d.outputsMeta?.[portName];
-                        const lid = meta?.layerId;
-                        const layer = lid ? layerById.get(lid) : undefined;
-                        const portColor = layer?.color ?? color.main;
-                        const isPending = pendingFrom?.device === d.id && pendingFrom?.port === portName;
-                        const isPgm = d.role === 'switcher' && d.pgmPort === portName;
-                        // normal 매핑이 있으면 살짝 강조
-                        const hasNormal = d.normals && Object.values(d.normals).includes(portName);
-                        return (
-                          <div
-                            key={portName}
-                            className="flex flex-col items-center justify-start relative shrink-0"
-                            style={{ width: PB_JACK_W, height: PB_JACK_H }}
-                            title={`OUT ${portName}${meta?.label ? ` — ${meta.label}` : ''}`}
-                          >
-                            {/* 잭 플러그 형태 */}
-                            <button
-                              data-port
-                              onMouseDown={onPortMouseDown}
-                              onClick={e => onPortClick(e, d.id, portName, true)}
-                              className={`relative rounded-full transition-transform hover:scale-[1.25] ${isPending ? 'ring-2 ring-amber-300 animate-pulse' : isPgm ? 'ring-2 ring-emerald-400' : ''}`}
-                              style={{
-                                width: 20, height: 20,
-                                marginTop: -6, // 셀 상단에 맞춰서 살짝 올라가게
-                                background: `radial-gradient(circle at 35% 35%, ${isPending ? '#fbbf24' : isPgm ? '#10b981' : portColor} 20%, rgba(0,0,0,0.6) 100%)`,
-                                boxShadow: `0 0 ${isPgm ? '10px' : '6px'} ${isPending ? '#fbbf24' : isPgm ? '#10b981' : portColor}, inset 0 -1px 2px rgba(0,0,0,0.5), inset 0 1px 1px rgba(255,255,255,0.4)`,
-                                border: `1px solid ${portColor}88`,
-                              }}
+                  // === 패치베이 1U 랙 바 렌더링 ===
+                  <div
+                    className="relative"
+                    style={{
+                      padding: '6px',
+                      background: 'linear-gradient(180deg, #2e2e32 0%, #1e1e20 45%, #0e0e10 55%, #1e1e20 100%)',
+                      borderTop: '1px solid rgba(255,255,255,0.1)',
+                    }}
+                  >
+                    {/* 내부 검은 잭 영역 */}
+                    <div
+                      className="relative rounded-sm"
+                      style={{
+                        padding: '6px 8px',
+                        background: 'linear-gradient(180deg, #0a0a0c 0%, #111113 50%, #0a0a0c 100%)',
+                        boxShadow: 'inset 0 2px 3px rgba(0,0,0,0.8)',
+                        border: '1px solid rgba(0,0,0,0.9)',
+                      }}
+                    >
+                      {/* 상단 행: OUT */}
+                      <div className="flex items-center justify-center" style={{ height: PB_JACK_H }}>
+                        {d.outputs.map((portName, idx) => {
+                          const meta = d.outputsMeta?.[portName];
+                          const lid = meta?.layerId;
+                          const layer = lid ? layerById.get(lid) : undefined;
+                          const portColor = layer?.color ?? color.main;
+                          const isPending = pendingFrom?.device === d.id && pendingFrom?.port === portName;
+                          const isPgm = d.role === 'switcher' && d.pgmPort === portName;
+                          const hasNormal = d.normals && Object.values(d.normals).includes(portName);
+                          return (
+                            <div
+                              key={portName}
+                              className="flex flex-col items-center justify-start relative shrink-0"
+                              style={{ width: PB_JACK_W, height: PB_JACK_H }}
+                              title={`OUT ${idx + 1}: ${portName}${meta?.label ? ` — ${meta.label}` : ''}`}
                             >
-                              {/* 잭 구멍 */}
-                              <div className="absolute inset-0 m-auto rounded-full" style={{ width: 7, height: 7, background: 'radial-gradient(circle, #000 30%, #222 100%)', boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.9)' }}></div>
-                            </button>
-                            {/* normal 인디케이터 */}
-                            {hasNormal && !isPgm && (
-                              <div className="absolute top-0 right-1 w-1 h-1 rounded-full bg-teal-400" title="Normal 매핑됨"></div>
-                            )}
-                            {/* 번호 */}
-                            <div className="absolute bottom-0 left-0 right-0 text-center text-[8.5px] font-mono font-bold text-neutral-300 leading-none" style={{ textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}>
-                              {idx + 1}
+                              <button
+                                data-port
+                                onMouseDown={onPortMouseDown}
+                                onClick={e => onPortClick(e, d.id, portName, true)}
+                                className={`relative rounded-full transition-transform hover:scale-[1.2] ${isPending ? 'ring-2 ring-amber-300 animate-pulse' : isPgm ? 'ring-2 ring-emerald-400' : ''}`}
+                                style={{
+                                  width: 20, height: 20,
+                                  marginTop: 2,
+                                  background: `radial-gradient(circle at 35% 30%, ${isPending ? '#fbbf24' : isPgm ? '#10b981' : portColor} 25%, #000 85%)`,
+                                  boxShadow: `
+                                    0 0 ${isPgm ? '10px' : '5px'} ${isPending ? '#fbbf24' : isPgm ? '#10b981' : portColor}aa,
+                                    inset 0 -1px 2px rgba(0,0,0,0.7),
+                                    inset 0 1px 1.5px rgba(255,255,255,0.35)
+                                  `,
+                                  border: `1px solid ${portColor}aa`,
+                                }}
+                              >
+                                <div
+                                  className="absolute inset-0 m-auto rounded-full"
+                                  style={{
+                                    width: 7, height: 7,
+                                    background: 'radial-gradient(circle, #000 35%, #0a0a0a 100%)',
+                                    boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.95)',
+                                  }}
+                                ></div>
+                              </button>
+                              {hasNormal && (
+                                <div className="absolute top-0 right-0.5 w-1 h-1 rounded-full bg-teal-400"></div>
+                              )}
+                              <div
+                                className="text-center text-[7.5px] font-mono font-bold text-neutral-400 leading-none mt-0.5"
+                                style={{ textShadow: '0 1px 1px rgba(0,0,0,0.9)' }}
+                              >
+                                {String(idx + 1).padStart(2, '0')}
+                              </div>
                             </div>
-                          </div>
-                        );
-                      })}
-                    </div>
+                          );
+                        })}
+                      </div>
 
-                    {/* 중간 라벨 "OUT / IN" */}
-                    <div className="flex justify-between px-2 text-[8.5px] font-bold tracking-widest text-neutral-500" style={{ height: PB_ROW_GAP, lineHeight: `${PB_ROW_GAP}px` }}>
-                      <span className="text-teal-400/70">⬆ OUT</span>
-                      <span className="text-teal-400/70">IN ⬇</span>
-                    </div>
+                      {/* 중간 라벨 스트립 */}
+                      <div
+                        className="flex items-center justify-between text-[7.5px] font-bold tracking-[0.15em] px-1"
+                        style={{
+                          height: PB_ROW_GAP,
+                          color: 'rgba(20,184,166,0.6)',
+                          background: 'linear-gradient(90deg, rgba(20,184,166,0.05), rgba(20,184,166,0.12), rgba(20,184,166,0.05))',
+                          borderTop: '1px solid rgba(20,184,166,0.15)',
+                          borderBottom: '1px solid rgba(20,184,166,0.15)',
+                        }}
+                      >
+                        <span>⬆ OUT</span>
+                        <span className="text-neutral-600 font-mono tracking-normal">{d.outputs.length}CH</span>
+                        <span>IN ⬇</span>
+                      </div>
 
-                    {/* 하단 행: IN (입력) — 신호 들어옴 */}
-                    <div className="flex items-center justify-center" style={{ paddingLeft: PB_SIDE_PAD, paddingRight: PB_SIDE_PAD, height: PB_JACK_H }}>
-                      {d.inputs.map((portName, idx) => {
-                        const meta = d.inputsMeta?.[portName];
-                        const lid = meta?.layerId;
-                        const layer = lid ? layerById.get(lid) : undefined;
-                        const portColor = layer?.color ?? color.main;
-                        const hasNormal = d.normals?.[portName];
-                        return (
-                          <div
-                            key={portName}
-                            className="flex flex-col items-center justify-end relative shrink-0"
-                            style={{ width: PB_JACK_W, height: PB_JACK_H }}
-                            title={`IN ${portName}${meta?.label ? ` — ${meta.label}` : ''}${hasNormal ? ` · normal → ${hasNormal}` : ''}`}
-                          >
-                            {/* 번호 */}
-                            <div className="absolute top-0 left-0 right-0 text-center text-[8.5px] font-mono font-bold text-neutral-300 leading-none" style={{ textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}>
-                              {idx + 1}
-                            </div>
-                            {/* 잭 플러그 */}
-                            <button
-                              data-port
-                              onMouseDown={onPortMouseDown}
-                              onClick={e => onPortClick(e, d.id, portName, false)}
-                              className="relative rounded-full transition-transform hover:scale-[1.25]"
-                              style={{
-                                width: 20, height: 20,
-                                marginBottom: -6,
-                                background: `radial-gradient(circle at 35% 35%, ${portColor} 20%, rgba(0,0,0,0.6) 100%)`,
-                                boxShadow: `0 0 6px ${portColor}, inset 0 -1px 2px rgba(0,0,0,0.5), inset 0 1px 1px rgba(255,255,255,0.4)`,
-                                border: `1px solid ${portColor}88`,
-                              }}
+                      {/* 하단 행: IN */}
+                      <div className="flex items-center justify-center" style={{ height: PB_JACK_H }}>
+                        {d.inputs.map((portName, idx) => {
+                          const meta = d.inputsMeta?.[portName];
+                          const lid = meta?.layerId;
+                          const layer = lid ? layerById.get(lid) : undefined;
+                          const portColor = layer?.color ?? color.main;
+                          const hasNormal = d.normals?.[portName];
+                          return (
+                            <div
+                              key={portName}
+                              className="flex flex-col items-center justify-end relative shrink-0"
+                              style={{ width: PB_JACK_W, height: PB_JACK_H }}
+                              title={`IN ${idx + 1}: ${portName}${meta?.label ? ` — ${meta.label}` : ''}${hasNormal ? ` · normal → ${hasNormal}` : ''}`}
                             >
-                              <div className="absolute inset-0 m-auto rounded-full" style={{ width: 7, height: 7, background: 'radial-gradient(circle, #000 30%, #222 100%)', boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.9)' }}></div>
-                            </button>
-                            {hasNormal && (
-                              <div className="absolute bottom-0 right-1 w-1 h-1 rounded-full bg-teal-400" title={`normal → ${hasNormal}`}></div>
-                            )}
-                          </div>
-                        );
-                      })}
+                              <div
+                                className="text-center text-[7.5px] font-mono font-bold text-neutral-400 leading-none mb-0.5"
+                                style={{ textShadow: '0 1px 1px rgba(0,0,0,0.9)' }}
+                              >
+                                {String(idx + 1).padStart(2, '0')}
+                              </div>
+                              <button
+                                data-port
+                                onMouseDown={onPortMouseDown}
+                                onClick={e => onPortClick(e, d.id, portName, false)}
+                                className="relative rounded-full transition-transform hover:scale-[1.2]"
+                                style={{
+                                  width: 20, height: 20,
+                                  marginBottom: 2,
+                                  background: `radial-gradient(circle at 35% 30%, ${portColor} 25%, #000 85%)`,
+                                  boxShadow: `
+                                    0 0 5px ${portColor}aa,
+                                    inset 0 -1px 2px rgba(0,0,0,0.7),
+                                    inset 0 1px 1.5px rgba(255,255,255,0.35)
+                                  `,
+                                  border: `1px solid ${portColor}aa`,
+                                }}
+                              >
+                                <div
+                                  className="absolute inset-0 m-auto rounded-full"
+                                  style={{
+                                    width: 7, height: 7,
+                                    background: 'radial-gradient(circle, #000 35%, #0a0a0a 100%)',
+                                    boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.95)',
+                                  }}
+                                ></div>
+                              </button>
+                              {hasNormal && (
+                                <div className="absolute bottom-0 right-0.5 w-1 h-1 rounded-full bg-teal-400"></div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
 
-                    {/* Rack 홈 (하단 레일 느낌) */}
-                    <div className="absolute left-0 right-0 h-[1px] pointer-events-none" style={{ top: HEADER_H + PB_TOP_PAD + PB_JACK_H - HEADER_H + 2, background: 'linear-gradient(90deg, transparent, rgba(20,184,166,0.3), transparent)' }}></div>
+                    {/* 관리 페이지 진입 버튼 */}
+                    {editMode && (
+                      <button
+                        onClick={e => { e.stopPropagation(); setShowPatchbayMgr(true); }}
+                        onMouseDown={e => e.stopPropagation()}
+                        className="absolute top-1.5 right-1.5 text-[9px] px-2 py-0.5 rounded bg-teal-500/20 hover:bg-teal-500 text-teal-300 hover:text-white border border-teal-500/40 font-medium transition"
+                        title="패치베이 관리 페이지 열기"
+                      >⊟ 관리</button>
+                    )}
                   </div>
                 ) : (
                   <div className="py-3.5 relative">
@@ -1191,6 +1258,15 @@ export default function SignalFlowMap() {
           <button onClick={() => { setScale(0.7); setOffset({ x: 40, y: 70 }); }} className="w-8 h-8 hover:bg-white/10 rounded-lg text-[10px] transition" title="초기화">⊡</button>
         </div>
       </div>
+
+      {showPatchbayMgr && (
+        <PatchbayManager
+          devices={devices}
+          connections={connections}
+          layers={layers}
+          onClose={() => setShowPatchbayMgr(false)}
+        />
+      )}
 
       {editingDevice && (
         <DeviceEditor
