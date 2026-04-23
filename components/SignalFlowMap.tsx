@@ -105,8 +105,6 @@ export default function SignalFlowMap() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [traceId, setTraceId] = useState<string | null>(null);
   const [traceMode, setTraceMode] = useState<TraceMode>('both');
-  // 라우터/패치베이 연결선 표시 토글 — 이 Set에 포함된 장비만 라인 표시
-  const [inspectHubs, setInspectHubs] = useState<Set<string>>(new Set());
   const [editingDevice, setEditingDevice] = useState<Device | null>(null);
   const [editingCable, setEditingCable] = useState<Connection | null>(null);
   const [showLayerPanel, setShowLayerPanel] = useState(false);
@@ -1074,17 +1072,6 @@ export default function SignalFlowMap() {
             title="월박스 관리 페이지"
           >▦ 월박스 <span className="font-mono opacity-70">{devices.filter(d => d.role === 'wallbox').length}</span></button>
 
-          {inspectHubs.size > 0 && (
-            <button
-              onClick={() => setInspectHubs(new Set())}
-              className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg border bg-fuchsia-500/15 border-fuchsia-500/40 text-fuchsia-200 hover:bg-fuchsia-500/30 hover:text-white transition-all flex items-center gap-1.5"
-              title="모든 라우터/패치베이 연결선 숨기기"
-            >
-              <span className="font-mono text-[13px]">👁</span>
-              <span>선 숨기기 ({inspectHubs.size})</span>
-            </button>
-          )}
-
           {(() => {
             const activeSources = devices.filter(d => d.role === 'source' && (d.imageUrl || d.audioUrl)).length;
             const liveDisplays = Array.from(displaySources.values()).length;
@@ -1314,18 +1301,6 @@ export default function SignalFlowMap() {
               if (c.from_device === c.to_device && c.is_patch) return null;
               const from = devById.get(c.from_device)!;
               const to = devById.get(c.to_device)!;
-              // 라우터/패치베이와 연결된 선은 기본 숨김 — "inspectHubs"에 그 hub가 있을 때만 표시
-              // (trace 중이면 traced 연결은 예외로 보여줌)
-              const fromIsHub = from.role === 'router' || from.role === 'patchbay';
-              const toIsHub = to.role === 'router' || to.role === 'patchbay';
-              const hubConn = fromIsHub || toIsHub;
-              if (hubConn) {
-                const inspectedHere =
-                  (fromIsHub && inspectHubs.has(from.id)) ||
-                  (toIsHub && inspectHubs.has(to.id));
-                const tracedHere = traceId && traced.connections.has(c.id);
-                if (!inspectedHere && !tracedHere) return null;
-              }
               const outVis = visiblePorts(from, 'out', visibleLayerIds);
               const inVis = visiblePorts(to, 'in', visibleLayerIds);
               const fi = outVis.findIndex(p => p.name === c.from_port);
@@ -1508,44 +1483,12 @@ export default function SignalFlowMap() {
             const isDisplay = role === 'display';
             const currentDisplaySource = isDisplay ? displaySources.get(d.id) : undefined;
 
-            // 이 장비가 라우터/패치베이에 연결된 지점들 (배지 목록용)
-            // self-patch는 제외. 자기 자신이 hub면 배지 안 보임.
-            const hubConnections: Array<{
-              id: string; hub: Device; myPort: string; hubPort: string;
-              dir: 'in' | 'out';  // in=hub→me, out=me→hub
-            }> = [];
-            if (role !== 'router' && role !== 'patchbay') {
-              connections.forEach(c => {
-                if (c.from_device === c.to_device && c.is_patch) return;
-                // 나 → hub
-                if (c.from_device === d.id) {
-                  const hub = devById.get(c.to_device);
-                  if (hub && (hub.role === 'router' || hub.role === 'patchbay')) {
-                    hubConnections.push({ id: c.id, hub, myPort: c.from_port, hubPort: c.to_port, dir: 'out' });
-                  }
-                }
-                // hub → 나
-                if (c.to_device === d.id) {
-                  const hub = devById.get(c.from_device);
-                  if (hub && (hub.role === 'router' || hub.role === 'patchbay')) {
-                    hubConnections.push({ id: c.id, hub, myPort: c.to_port, hubPort: c.from_port, dir: 'in' });
-                  }
-                }
-              });
-            }
-            // 패치베이 내 포트 번호(1부터 시작) 구하기
-            const hubPortIndex = (hub: Device, portName: string, isOutputSide: boolean): number => {
-              const list = isOutputSide ? hub.outputs : hub.inputs;
-              const idx = list.indexOf(portName);
-              return idx >= 0 ? idx + 1 : 0;
-            };
-
             const borderColor = isSelected ? '#fbbf24' : isTraceTarget ? color.glow : editMode ? 'rgba(251,191,36,0.35)' : color.border;
             const borderWidth = isSelected || isTraceTarget ? 2 : 1.2;
 
             return (
-              <div key={d.id} style={{ display: 'contents' }}>
               <div
+                key={d.id}
                 data-device-id={d.id}
                 onMouseDown={e => onDeviceMouseDown(e, d)}
                 onClick={e => onDeviceClickView(e, d)}
@@ -1622,30 +1565,6 @@ export default function SignalFlowMap() {
                           }}
                           title={DEVICE_ROLE_LABELS[role]}
                         >{roleIcon} {DEVICE_ROLE_LABELS[role]}</span>
-                      )}
-                      {/* 라우터/패치베이: 연결선 표시 토글 */}
-                      {(role === 'router' || role === 'patchbay') && (
-                        <button
-                          data-ui
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setInspectHubs(prev => {
-                              const next = new Set(prev);
-                              if (next.has(d.id)) next.delete(d.id);
-                              else next.add(d.id);
-                              return next;
-                            });
-                          }}
-                          onMouseDown={(e) => e.stopPropagation()}
-                          className={`text-[9px] px-1.5 py-[1px] rounded shrink-0 font-mono font-bold transition ${
-                            inspectHubs.has(d.id)
-                              ? 'bg-sky-500 text-white shadow-md shadow-sky-500/40 border border-sky-400'
-                              : 'bg-white/5 text-neutral-400 border border-white/15 hover:bg-sky-500/20 hover:text-sky-200 hover:border-sky-500/40'
-                          }`}
-                          title={inspectHubs.has(d.id) ? '연결선 숨기기' : '연결선 확인'}
-                        >
-                          {inspectHubs.has(d.id) ? '👁 ON' : '👁'}
-                        </button>
                       )}
                     </div>
                     <div className="flex items-center gap-1.5 min-w-0 mt-[1px]">
@@ -2019,65 +1938,6 @@ export default function SignalFlowMap() {
                     )}
                   </div>
                 )}
-              </div>
-
-              {/* 라우터/패치베이 연결 배지 바 */}
-              {hubConnections.length > 0 && (
-                <div
-                  data-ui
-                  className="absolute flex flex-col gap-0.5 pointer-events-auto"
-                  style={{
-                    left: d.x + w + 6,
-                    top: d.y,
-                    maxWidth: 180,
-                    zIndex: 6,
-                  }}
-                >
-                  {hubConnections.map(hc => {
-                    const isRouter = hc.hub.role === 'router';
-                    const isActive = inspectHubs.has(hc.hub.id);
-                    let label: string;
-                    if (isRouter) {
-                      // "20x10 R/S 포트명"
-                      label = `${hc.hub.inputs.length}x${hc.hub.outputs.length} R/S ${hc.hubPort}`;
-                    } else {
-                      // 패치베이: "패치베이이름-포트번호"
-                      const idx = hubPortIndex(hc.hub, hc.hubPort, hc.dir === 'out');
-                      label = `${hc.hub.name}-${String(idx).padStart(2, '0')}`;
-                    }
-                    const arrow = hc.dir === 'in' ? '←' : '→';
-                    return (
-                      <button
-                        key={hc.id}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setInspectHubs(prev => {
-                            const next = new Set(prev);
-                            if (next.has(hc.hub.id)) next.delete(hc.hub.id);
-                            else next.add(hc.hub.id);
-                            return next;
-                          });
-                        }}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        className={`flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] font-mono font-medium transition text-left ${
-                          isActive
-                            ? isRouter
-                              ? 'bg-fuchsia-500 text-white border border-fuchsia-400 shadow-md shadow-fuchsia-500/40'
-                              : 'bg-teal-500 text-white border border-teal-400 shadow-md shadow-teal-500/40'
-                            : isRouter
-                              ? 'bg-fuchsia-500/15 text-fuchsia-200 border border-fuchsia-500/30 hover:bg-fuchsia-500/30'
-                              : 'bg-teal-500/15 text-teal-200 border border-teal-500/30 hover:bg-teal-500/30'
-                        }`}
-                        title={`${hc.dir === 'in' ? '수신' : '송신'}: ${hc.myPort} ${arrow} ${hc.hub.name} / ${hc.hubPort}${isActive ? '\n(클릭 → 선 숨기기)' : '\n(클릭 → 연결선 표시)'}`}
-                      >
-                        <span className="text-[8px] opacity-75 shrink-0">{hc.myPort}</span>
-                        <span className="text-[8px] opacity-75 shrink-0">{arrow}</span>
-                        <span className="truncate">{label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
               </div>
             );
           })}
