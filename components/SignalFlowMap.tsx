@@ -141,6 +141,16 @@ export default function SignalFlowMap() {
   const [draggingCursor, setDraggingCursor] = useState<'none' | 'canvas' | 'marquee' | 'device'>('none');
   const [marqueeRect, setMarqueeRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
 
+  // 터치/핀치 상태
+  const pinchRef = useRef<{
+    active: boolean;
+    startDist: number;
+    startScale: number;
+    startMidX: number;
+    startMidY: number;
+    startOffset: { x: number; y: number };
+  }>({ active: false, startDist: 0, startScale: 1, startMidX: 0, startMidY: 0, startOffset: { x: 0, y: 0 } });
+
   // state mirror
   const stateRef = useRef({ scale, offset, editMode, devices, selectedIds, visibleLayerIds: new Set<string>(), layers });
 
@@ -555,9 +565,30 @@ export default function SignalFlowMap() {
 
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
+
+    // 터치 이벤트: 핀치가 아닐 때(단일 터치)만 mouse로 매핑하여 팬/드래그/마키 동작
+    const onTouchMove = (e: TouchEvent) => {
+      if (pinchRef.current.active) return;
+      if (e.touches.length !== 1) return;
+      const t = e.touches[0];
+      // 캔버스 또는 장비 위 팬/드래그 중이면 기본 스크롤 방지
+      if (pointerRef.current.type !== 'none') e.preventDefault();
+      onMove({ clientX: t.clientX, clientY: t.clientY } as unknown as MouseEvent);
+    };
+    const onTouchEnd = (_e: TouchEvent) => {
+      if (pinchRef.current.active) return;
+      onUp();
+    };
+    window.addEventListener('touchmove', onTouchMove, { passive: false });
+    window.addEventListener('touchend', onTouchEnd);
+    window.addEventListener('touchcancel', onTouchEnd);
+
     return () => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', onTouchEnd);
+      window.removeEventListener('touchcancel', onTouchEnd);
     };
   }, [marqueeRect]);
 
@@ -601,6 +632,81 @@ export default function SignalFlowMap() {
     const wy = (my - offset.y) / scale;
     setScale(newScale);
     setOffset({ x: mx - wx * newScale, y: my - wy * newScale });
+  };
+
+  // ===== 터치/핀치 핸들러 (캔버스 레벨) =====
+  const onCanvasTouchStart = (e: React.TouchEvent) => {
+    const target = e.target as HTMLElement;
+    // UI/버튼/오디오 위는 무시
+    if (target.closest('[data-ui], [data-port], [data-device-id], input, textarea, select, audio, video, button')) return;
+    if (e.touches.length === 2) {
+      // 핀치 시작
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+      const dx = t2.clientX - t1.clientX;
+      const dy = t2.clientY - t1.clientY;
+      const dist = Math.hypot(dx, dy);
+      const midX = (t1.clientX + t2.clientX) / 2;
+      const midY = (t1.clientY + t2.clientY) / 2;
+      pinchRef.current = {
+        active: true,
+        startDist: dist,
+        startScale: scale,
+        startMidX: midX, startMidY: midY,
+        startOffset: { ...offset },
+      };
+    } else if (e.touches.length === 1) {
+      // 한 손가락 팬 - canvas mousedown처럼 처리 (synthesized MouseEvent로 재활용하지 않고 직접)
+      const t = e.touches[0];
+      pointerRef.current = {
+        type: 'canvas',
+        downX: t.clientX, downY: t.clientY,
+        shiftKey: false, moved: false,
+        origOffset: { ...offset },
+      };
+      setDraggingCursor('canvas');
+      if (editMode) setSelectedIds(new Set());
+    }
+  };
+
+  const onCanvasTouchMove = (e: React.TouchEvent) => {
+    if (pinchRef.current.active && e.touches.length === 2) {
+      e.preventDefault();
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+      const dx = t2.clientX - t1.clientX;
+      const dy = t2.clientY - t1.clientY;
+      const dist = Math.hypot(dx, dy);
+      const midX = (t1.clientX + t2.clientX) / 2;
+      const midY = (t1.clientY + t2.clientY) / 2;
+
+      const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
+      const factor = dist / pinchRef.current.startDist;
+      const newScale = Math.min(2, Math.max(0.15, pinchRef.current.startScale * factor));
+
+      // 핀치 중심점을 기준으로 zoom
+      const mx0 = pinchRef.current.startMidX - rect.left;
+      const my0 = pinchRef.current.startMidY - rect.top;
+      const wx = (mx0 - pinchRef.current.startOffset.x) / pinchRef.current.startScale;
+      const wy = (my0 - pinchRef.current.startOffset.y) / pinchRef.current.startScale;
+
+      // + 두 손가락 팬(중심점 이동)도 반영
+      const panDx = midX - pinchRef.current.startMidX;
+      const panDy = midY - pinchRef.current.startMidY;
+      const mx = mx0 + panDx;
+      const my = my0 + panDy;
+
+      setScale(newScale);
+      setOffset({ x: mx - wx * newScale, y: my - wy * newScale });
+      return;
+    }
+    // 단일 터치 팬은 window-level move가 처리함 (Touch → Mouse 에뮬레이션)
+  };
+
+  const onCanvasTouchEnd = () => {
+    if (pinchRef.current.active) {
+      pinchRef.current.active = false;
+    }
   };
 
   // ===== Device mousedown =====
@@ -1027,7 +1133,7 @@ export default function SignalFlowMap() {
     <div className="h-screen w-screen bg-gradient-to-br from-neutral-950 via-black to-neutral-950 text-white overflow-hidden relative select-none">
       {/* Top bar */}
       <div data-ui className="absolute top-0 left-0 right-0 z-30 h-14 bg-black/60 backdrop-blur-2xl border-b border-white/10 shadow-xl shadow-black/40">
-        <div className="h-full flex items-center gap-3 px-4">
+        <div className="h-full flex items-center gap-3 px-4 overflow-x-auto overflow-y-hidden scrollbar-thin" style={{ scrollbarWidth: 'thin' }}>
           <div className="flex items-center gap-2.5">
             <div className="relative w-7 h-7 rounded-lg bg-gradient-to-br from-sky-400 to-purple-600 flex items-center justify-center shadow-lg shadow-sky-500/30">
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -1274,10 +1380,17 @@ export default function SignalFlowMap() {
         className={`absolute inset-0 pt-14 ${cursorClass}`}
         onMouseDown={onCanvasMouseDown}
         onWheel={onWheel}
+        onTouchStart={onCanvasTouchStart}
+        onTouchMove={onCanvasTouchMove}
+        onTouchEnd={onCanvasTouchEnd}
         style={{
           backgroundImage: 'radial-gradient(circle at 50% 50%, rgba(168,85,247,0.015) 0%, transparent 50%), radial-gradient(circle, rgba(255,255,255,0.035) 1px, transparent 1px)',
           backgroundSize: `auto, ${24 * scale}px ${24 * scale}px`,
           backgroundPosition: `0 0, ${offset.x}px ${offset.y}px`,
+          touchAction: 'none',                        // 브라우저 기본 팬/줌 차단 → 우리가 처리
+          WebkitUserSelect: 'none',
+          userSelect: 'none',
+          WebkitTouchCallout: 'none',
         }}
       >
         <div style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`, transformOrigin: '0 0', width: '4000px', height: '3000px', position: 'relative' }}>
@@ -1570,6 +1683,18 @@ export default function SignalFlowMap() {
               <div
                 data-device-id={d.id}
                 onMouseDown={e => onDeviceMouseDown(e, d)}
+                onTouchStart={e => {
+                  if (e.touches.length !== 1) return;
+                  const t = e.touches[0];
+                  // 동일 로직을 React.MouseEvent shape으로 합성
+                  onDeviceMouseDown({
+                    target: e.target,
+                    clientX: t.clientX, clientY: t.clientY,
+                    shiftKey: false,
+                    stopPropagation: () => e.stopPropagation(),
+                    preventDefault: () => e.preventDefault(),
+                  } as unknown as React.MouseEvent, d);
+                }}
                 onClick={e => onDeviceClickView(e, d)}
                 onMouseEnter={() => setHoveredId(d.id)}
                 onMouseLeave={() => setHoveredId(null)}
