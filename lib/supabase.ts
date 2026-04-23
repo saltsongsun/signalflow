@@ -73,6 +73,8 @@ export type Device = {
   // 소스/디스플레이 시뮬레이션
   imageUrl?: string;       // 소스 장비의 재생 이미지 URL
   imageStoragePath?: string; // Supabase Storage path (삭제용)
+  audioUrl?: string;       // 소스 장비의 재생 오디오 URL
+  audioStoragePath?: string;
   selectedInput?: string;  // 스위처/라우터가 현재 OUT으로 보내는 IN 포트
   // 그룹화
   groupId?: string;    // 같은 그룹끼리는 동일 id

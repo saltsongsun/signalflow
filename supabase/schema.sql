@@ -71,6 +71,8 @@ alter table public.devices add column if not exists "rackId" text;
 alter table public.devices add column if not exists "rackUnit" integer;
 alter table public.devices add column if not exists "imageUrl" text;
 alter table public.devices add column if not exists "imageStoragePath" text;
+alter table public.devices add column if not exists "audioUrl" text;
+alter table public.devices add column if not exists "audioStoragePath" text;
 alter table public.devices add column if not exists "selectedInput" text;
 alter table public.devices add column if not exists "groupId" text;
 alter table public.devices add column if not exists "groupName" text;

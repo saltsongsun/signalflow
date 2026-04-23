@@ -54,14 +54,20 @@ function deviceHeight(d: Device, visibleLayerIds: Set<string>) {
   const vo = visiblePorts(d, 'out', visibleLayerIds).length;
   const portCount = Math.max(vi, vo, 1);
   let h = HEADER_H + PADDING_Y * 2 + portCount * PORT_H;
-  // source/display 이미지 영역 (16:9, width-20 기준)
-  if (d.role === 'source' && d.imageUrl) {
-    const w = d.width ?? 200;
-    h += Math.round((w - 20) * 9 / 16) + 10; // aspect + margin
+  const w = d.width ?? 200;
+  const videoBoxH = Math.round((w - 20) * 9 / 16);
+  const audioRowH = 34;
+  // source: 이미지(video/combined) + 오디오(audio/combined)
+  if (d.role === 'source') {
+    if (d.imageUrl && (d.type === 'video' || d.type === 'combined')) h += videoBoxH + 6;
+    if (d.audioUrl && (d.type === 'audio' || d.type === 'combined')) h += audioRowH + 6;
+    if ((d.imageUrl || d.audioUrl)) h += 6; // outer margin
   }
+  // display: type에 따라 비디오 영역 + 오디오 영역
   if (d.role === 'display') {
-    const w = d.width ?? 200;
-    h += Math.round((w - 20) * 9 / 16) + 10;
+    if (d.type === 'video' || d.type === 'combined') h += videoBoxH + 6;
+    if (d.type === 'audio' || d.type === 'combined') h += audioRowH + 6;
+    h += 6;
   }
   return h;
 }
@@ -99,6 +105,8 @@ export default function SignalFlowMap() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [traceId, setTraceId] = useState<string | null>(null);
   const [traceMode, setTraceMode] = useState<TraceMode>('both');
+  // 라우터/패치베이 연결선 표시 토글 — 이 Set에 포함된 장비만 라인 표시
+  const [inspectHubs, setInspectHubs] = useState<Set<string>>(new Set());
   const [editingDevice, setEditingDevice] = useState<Device | null>(null);
   const [editingCable, setEditingCable] = useState<Connection | null>(null);
   const [showLayerPanel, setShowLayerPanel] = useState(false);
@@ -135,6 +143,32 @@ export default function SignalFlowMap() {
 
   // state mirror
   const stateRef = useRef({ scale, offset, editMode, devices, selectedIds, visibleLayerIds: new Set<string>(), layers });
+
+  // ===== Undo stack =====
+  // 편집 모드에서 Cmd/Ctrl+Z로 마지막 동작을 되돌림.
+  // 각 항목은 "되돌리는 async 함수"와 사람 읽을 수 있는 라벨.
+  type UndoEntry = { label: string; undo: () => Promise<void> };
+  const undoStackRef = useRef<UndoEntry[]>([]);
+  const UNDO_MAX = 50;
+  const [undoLabel, setUndoLabel] = useState<string | null>(null);
+  const pushUndo = (label: string, undo: () => Promise<void>) => {
+    const stack = undoStackRef.current;
+    stack.push({ label, undo });
+    if (stack.length > UNDO_MAX) stack.shift();
+    setUndoLabel(label);
+  };
+  const popUndo = async () => {
+    const stack = undoStackRef.current;
+    const entry = stack.pop();
+    if (!entry) return false;
+    try {
+      await entry.undo();
+    } catch (e) {
+      console.error('[Undo error]', e);
+    }
+    setUndoLabel(stack[stack.length - 1]?.label ?? null);
+    return true;
+  };
   stateRef.current.scale = scale;
   stateRef.current.offset = offset;
   stateRef.current.editMode = editMode;
@@ -253,9 +287,9 @@ export default function SignalFlowMap() {
     const out = new Map<string, string>(); // key: "deviceId:portName" → sourceDeviceId
     const inSignal = new Map<string, string>(); // key: "deviceId:portName" (input) → sourceDeviceId
 
-    // 1) source 장비들의 모든 출력 포트는 자신을 소스로 가짐
+    // 1) source 장비들의 모든 출력 포트는 자신을 소스로 가짐 (이미지 또는 오디오가 있으면)
     devices.forEach(d => {
-      if (d.role === 'source' && d.imageUrl) {
+      if (d.role === 'source' && (d.imageUrl || d.audioUrl)) {
         d.outputs.forEach(p => out.set(`${d.id}:${p}`, d.id));
       }
     });
@@ -383,6 +417,24 @@ export default function SignalFlowMap() {
 
   // ===== Global window listeners =====
   useEffect(() => {
+    // 키보드: Cmd/Ctrl+Z — 편집모드 undo
+    const onKey = async (e: KeyboardEvent) => {
+      const isUndo = (e.metaKey || e.ctrlKey) && !e.shiftKey && (e.key === 'z' || e.key === 'Z' || e.key === 'ㅋ');
+      if (!isUndo) return;
+      // 편집모드 아니면 무시
+      if (!stateRef.current.editMode) return;
+      // 입력 포커스 중이면 기본 undo에 맡김
+      const tag = (document.activeElement?.tagName ?? '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+      e.preventDefault();
+      await popUndo();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
     const onMove = (e: MouseEvent) => {
       const p = pointerRef.current;
       if (p.type === 'none') return;
@@ -437,6 +489,20 @@ export default function SignalFlowMap() {
             return latest ? (supabase as any).from('devices').update({ x: latest.x, y: latest.y }).eq('id', id) : null;
           }).filter(Boolean);
           await Promise.all(saves);
+          // Undo 등록: 원위치로 복귀
+          const origPositions = p.origPositions;
+          if (origPositions) {
+            const snapshot = { ...origPositions };
+            pushUndo(
+              ids.length === 1 ? '이동 되돌리기' : `${ids.length}개 이동 되돌리기`,
+              async () => {
+                setDevices(prev => prev.map(d => snapshot[d.id] ? { ...d, ...snapshot[d.id] } : d));
+                await Promise.all(Object.entries(snapshot).map(([id, pos]) =>
+                  (supabase as any).from('devices').update({ x: pos.x, y: pos.y }).eq('id', id)
+                ));
+              }
+            );
+          }
         } else {
           // 클릭으로 판정
           const clickedId = p.clickedDeviceId!;
@@ -539,6 +605,12 @@ export default function SignalFlowMap() {
 
   // ===== Device mousedown =====
   const onDeviceMouseDown = (e: React.MouseEvent, d: Device) => {
+    // audio/video/input 등의 UI 컨트롤이면 장비 드래그 시작하지 않음
+    const tgt = e.target as HTMLElement;
+    if (tgt.closest('[data-ui]') || ['AUDIO', 'VIDEO', 'INPUT', 'BUTTON', 'SELECT', 'TEXTAREA'].includes(tgt.tagName)) {
+      return;
+    }
+
     e.stopPropagation();
     e.preventDefault();
 
@@ -611,8 +683,16 @@ export default function SignalFlowMap() {
         to_device: deviceId, to_port: port,
         conn_type: pendingFrom.connType ?? d.inputsMeta?.[port]?.connType ?? null,
       };
+      // 덮어쓸 기존 연결 스냅샷
+      const overwritten = connections.find(c => c.to_device === deviceId && c.to_port === port);
       await (supabase as any).from('connections').delete().eq('to_device', deviceId).eq('to_port', port);
       await (supabase as any).from('connections').insert(newConn);
+      pushUndo('케이블 연결 되돌리기', async () => {
+        await (supabase as any).from('connections').delete().eq('id', newConn.id);
+        if (overwritten) {
+          await (supabase as any).from('connections').insert(overwritten);
+        }
+      });
       setPendingFrom(null);
     }
   };
@@ -634,6 +714,10 @@ export default function SignalFlowMap() {
       physPorts: {}, routing: {},
     };
     await (supabase as any).from('devices').insert(d);
+    pushUndo('장비 추가 되돌리기', async () => {
+      await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
+      await (supabase as any).from('devices').delete().eq('id', id);
+    });
     setEditingDevice(d);
   };
 
@@ -660,29 +744,31 @@ export default function SignalFlowMap() {
       normals: src.normals ? { ...src.normals } : undefined,
     };
     await (supabase as any).from('devices').insert(clone);
+    pushUndo('복제 되돌리기', async () => {
+      await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
+      await (supabase as any).from('devices').delete().eq('id', id);
+    });
     setEditingDevice(clone);
   };
 
   const handleSaveDevice = async (updates: Partial<Device>) => {
     if (!editingDevice) return;
     const targetId = editingDevice.id;
+    // 변경 전 원본 스냅샷 (undo용)
+    const before = { ...editingDevice };
 
-    // undefined 값 제거 (Supabase가 확실히 덮어쓰지 않도록)
     const cleanUpdates: Record<string, any> = {};
     Object.entries(updates).forEach(([k, v]) => {
       if (v !== undefined) cleanUpdates[k] = v;
     });
 
-    // 낙관적 로컬 업데이트
     setDevices(prev => prev.map(d => d.id === targetId ? { ...d, ...updates } : d));
     setEditingDevice(null);
 
-    // DB 저장 시도
     const { error } = await (supabase as any).from('devices').update(cleanUpdates).eq('id', targetId);
 
     if (error) {
       console.error('[DB save error]', error);
-      // 신규 컬럼 부재로 실패한 경우, 신규 컬럼만 제외하고 재시도
       const KNOWN_NEW_COLS = ['model', 'location', 'roomNumber', 'normals', 'pgmPort', 'role'];
       const missing = KNOWN_NEW_COLS.filter(k =>
         (error.message ?? '').includes(k) || (error.details ?? '').includes(k)
@@ -699,22 +785,47 @@ export default function SignalFlowMap() {
       } else {
         alert(`저장 실패: ${error.message ?? JSON.stringify(error)}`);
       }
+      return;
     }
+
+    // 성공 시 undo 등록
+    pushUndo(`"${before.name}" 편집 되돌리기`, async () => {
+      // 전체 필드를 원래대로 복구
+      setDevices(prev => prev.map(d => d.id === targetId ? before : d));
+      await (supabase as any).from('devices').update(before).eq('id', targetId);
+    });
   };
   const handleDeleteDevice = async () => {
     if (!editingDevice) return;
-    await (supabase as any).from('connections').delete().or(`from_device.eq.${editingDevice.id},to_device.eq.${editingDevice.id}`);
-    await (supabase as any).from('devices').delete().eq('id', editingDevice.id);
+    const snapshot = { ...editingDevice };
+    const relatedConns = connections.filter(c => c.from_device === snapshot.id || c.to_device === snapshot.id);
+    await (supabase as any).from('connections').delete().or(`from_device.eq.${snapshot.id},to_device.eq.${snapshot.id}`);
+    await (supabase as any).from('devices').delete().eq('id', snapshot.id);
+    pushUndo(`"${snapshot.name}" 삭제 되돌리기`, async () => {
+      await (supabase as any).from('devices').insert(snapshot);
+      if (relatedConns.length > 0) {
+        await (supabase as any).from('connections').insert(relatedConns);
+      }
+    });
     setEditingDevice(null);
   };
   const handleDeleteSelected = async () => {
     if (selectedIds.size === 0) return;
     if (!confirm(`${selectedIds.size}개 장비 삭제?`)) return;
-    for (const id of Array.from(selectedIds)) {
+    const ids = Array.from(selectedIds);
+    const snapshotDevs = ids.map(id => devices.find(d => d.id === id)).filter(Boolean) as Device[];
+    const snapshotConns = connections.filter(c =>
+      ids.includes(c.from_device) || ids.includes(c.to_device)
+    );
+    for (const id of ids) {
       await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
       await (supabase as any).from('devices').delete().eq('id', id);
     }
     setSelectedIds(new Set());
+    pushUndo(`${ids.length}개 삭제 되돌리기`, async () => {
+      if (snapshotDevs.length > 0) await (supabase as any).from('devices').insert(snapshotDevs);
+      if (snapshotConns.length > 0) await (supabase as any).from('connections').insert(snapshotConns);
+    });
   };
 
   // ========== 그룹화 ==========
@@ -722,24 +833,37 @@ export default function SignalFlowMap() {
     if (selectedIds.size < 2) return;
     const ids = Array.from(selectedIds);
     const sel = ids.map(id => devices.find(d => d.id === id)).filter(Boolean) as Device[];
+    // 이전 상태 기록 (undo)
+    const prevState = sel.map(d => ({ id: d.id, groupId: d.groupId, groupName: d.groupName }));
     const existingGroup = sel.find(d => d.groupName)?.groupName ?? '';
     const name = prompt('그룹 이름을 입력하세요:', existingGroup || 'Group 1');
     if (!name) return;
     const groupId = `grp_${Date.now().toString(36)}`;
-    // 낙관적 업데이트
     setDevices(prev => prev.map(d =>
       ids.includes(d.id) ? { ...d, groupId, groupName: name.trim() } : d
     ));
-    // DB 저장
     const updates = ids.map(id =>
       (supabase as any).from('devices').update({ groupId, groupName: name.trim() }).eq('id', id)
     );
     await Promise.all(updates);
+    pushUndo(`그룹화 되돌리기`, async () => {
+      setDevices(prev => prev.map(d => {
+        const ps = prevState.find(x => x.id === d.id);
+        return ps ? { ...d, groupId: ps.groupId, groupName: ps.groupName } : d;
+      }));
+      await Promise.all(prevState.map(ps =>
+        (supabase as any).from('devices').update({
+          groupId: ps.groupId ?? null, groupName: ps.groupName ?? null,
+        }).eq('id', ps.id)
+      ));
+    });
   };
 
   const handleUngroupSelected = async () => {
     if (selectedIds.size === 0) return;
     const ids = Array.from(selectedIds);
+    const sel = ids.map(id => devices.find(d => d.id === id)).filter(Boolean) as Device[];
+    const prevState = sel.map(d => ({ id: d.id, groupId: d.groupId, groupName: d.groupName }));
     setDevices(prev => prev.map(d =>
       ids.includes(d.id) ? { ...d, groupId: undefined, groupName: undefined } : d
     ));
@@ -747,6 +871,17 @@ export default function SignalFlowMap() {
       (supabase as any).from('devices').update({ groupId: null, groupName: null }).eq('id', id)
     );
     await Promise.all(updates);
+    pushUndo(`그룹 해제 되돌리기`, async () => {
+      setDevices(prev => prev.map(d => {
+        const ps = prevState.find(x => x.id === d.id);
+        return ps ? { ...d, groupId: ps.groupId, groupName: ps.groupName } : d;
+      }));
+      await Promise.all(prevState.map(ps =>
+        (supabase as any).from('devices').update({
+          groupId: ps.groupId ?? null, groupName: ps.groupName ?? null,
+        }).eq('id', ps.id)
+      ));
+    });
   };
 
   // 선택된 장비가 속한 그룹 이름 (모두 같은 그룹일 때만)
@@ -840,6 +975,19 @@ export default function SignalFlowMap() {
       (supabase as any).from('devices').update({ x: pos.x, y: pos.y }).eq('id', id)
     );
     await Promise.all(updates);
+
+    // Undo 등록
+    const prevPositions = new Map<string, { x: number; y: number }>();
+    sel.forEach(d => prevPositions.set(d.id, { x: d.x, y: d.y }));
+    pushUndo(`정렬 되돌리기`, async () => {
+      setDevices(prev => prev.map(d => {
+        const pos = prevPositions.get(d.id);
+        return pos ? { ...d, x: pos.x, y: pos.y } : d;
+      }));
+      await Promise.all(Array.from(prevPositions.entries()).map(([id, pos]) =>
+        (supabase as any).from('devices').update({ x: pos.x, y: pos.y }).eq('id', id)
+      ));
+    });
   };
   const handleResetAll = async () => {
     if (!confirm('모든 데이터 삭제 후 초기 데이터로 재시드?')) return;
@@ -853,6 +1001,9 @@ export default function SignalFlowMap() {
     setLayers(DEFAULT_LAYERS);
     setDevices(INITIAL_DEVICES);
     setConnections(conns as any);
+    // undo 스택 비우기
+    undoStackRef.current = [];
+    setUndoLabel(null);
   };
 
   if (loading) {
@@ -923,8 +1074,19 @@ export default function SignalFlowMap() {
             title="월박스 관리 페이지"
           >▦ 월박스 <span className="font-mono opacity-70">{devices.filter(d => d.role === 'wallbox').length}</span></button>
 
+          {inspectHubs.size > 0 && (
+            <button
+              onClick={() => setInspectHubs(new Set())}
+              className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg border bg-fuchsia-500/15 border-fuchsia-500/40 text-fuchsia-200 hover:bg-fuchsia-500/30 hover:text-white transition-all flex items-center gap-1.5"
+              title="모든 라우터/패치베이 연결선 숨기기"
+            >
+              <span className="font-mono text-[13px]">👁</span>
+              <span>선 숨기기 ({inspectHubs.size})</span>
+            </button>
+          )}
+
           {(() => {
-            const activeSources = devices.filter(d => d.role === 'source' && d.imageUrl).length;
+            const activeSources = devices.filter(d => d.role === 'source' && (d.imageUrl || d.audioUrl)).length;
             const liveDisplays = Array.from(displaySources.values()).length;
             if (activeSources === 0 && devices.filter(d => d.role === 'display').length === 0) return null;
             return (
@@ -1018,6 +1180,17 @@ export default function SignalFlowMap() {
                     </>
                   )}
                 </div>
+              )}
+              {undoLabel && (
+                <button
+                  onClick={() => popUndo()}
+                  className="px-2.5 py-1.5 text-[11px] rounded-lg bg-indigo-500/15 hover:bg-indigo-500 text-indigo-300 hover:text-white border border-indigo-500/30 hover:border-indigo-400 font-medium transition flex items-center gap-1.5"
+                  title="Ctrl+Z 로 되돌리기"
+                >
+                  <span className="font-mono text-[13px]">↶</span>
+                  <span className="truncate max-w-40">{undoLabel}</span>
+                  <span className="text-[9px] text-indigo-400/70 font-mono">⌘Z</span>
+                </button>
               )}
               <button onClick={handleResetAll}
                 className="px-2.5 py-1.5 text-[11px] rounded-lg bg-white/5 hover:bg-rose-500/80 text-neutral-500 hover:text-white border border-white/10 transition">⟲</button>
@@ -1141,6 +1314,18 @@ export default function SignalFlowMap() {
               if (c.from_device === c.to_device && c.is_patch) return null;
               const from = devById.get(c.from_device)!;
               const to = devById.get(c.to_device)!;
+              // 라우터/패치베이와 연결된 선은 기본 숨김 — "inspectHubs"에 그 hub가 있을 때만 표시
+              // (trace 중이면 traced 연결은 예외로 보여줌)
+              const fromIsHub = from.role === 'router' || from.role === 'patchbay';
+              const toIsHub = to.role === 'router' || to.role === 'patchbay';
+              const hubConn = fromIsHub || toIsHub;
+              if (hubConn) {
+                const inspectedHere =
+                  (fromIsHub && inspectHubs.has(from.id)) ||
+                  (toIsHub && inspectHubs.has(to.id));
+                const tracedHere = traceId && traced.connections.has(c.id);
+                if (!inspectedHere && !tracedHere) return null;
+              }
               const outVis = visiblePorts(from, 'out', visibleLayerIds);
               const inVis = visiblePorts(to, 'in', visibleLayerIds);
               const fi = outVis.findIndex(p => p.name === c.from_port);
@@ -1323,12 +1508,44 @@ export default function SignalFlowMap() {
             const isDisplay = role === 'display';
             const currentDisplaySource = isDisplay ? displaySources.get(d.id) : undefined;
 
+            // 이 장비가 라우터/패치베이에 연결된 지점들 (배지 목록용)
+            // self-patch는 제외. 자기 자신이 hub면 배지 안 보임.
+            const hubConnections: Array<{
+              id: string; hub: Device; myPort: string; hubPort: string;
+              dir: 'in' | 'out';  // in=hub→me, out=me→hub
+            }> = [];
+            if (role !== 'router' && role !== 'patchbay') {
+              connections.forEach(c => {
+                if (c.from_device === c.to_device && c.is_patch) return;
+                // 나 → hub
+                if (c.from_device === d.id) {
+                  const hub = devById.get(c.to_device);
+                  if (hub && (hub.role === 'router' || hub.role === 'patchbay')) {
+                    hubConnections.push({ id: c.id, hub, myPort: c.from_port, hubPort: c.to_port, dir: 'out' });
+                  }
+                }
+                // hub → 나
+                if (c.to_device === d.id) {
+                  const hub = devById.get(c.from_device);
+                  if (hub && (hub.role === 'router' || hub.role === 'patchbay')) {
+                    hubConnections.push({ id: c.id, hub, myPort: c.to_port, hubPort: c.from_port, dir: 'in' });
+                  }
+                }
+              });
+            }
+            // 패치베이 내 포트 번호(1부터 시작) 구하기
+            const hubPortIndex = (hub: Device, portName: string, isOutputSide: boolean): number => {
+              const list = isOutputSide ? hub.outputs : hub.inputs;
+              const idx = list.indexOf(portName);
+              return idx >= 0 ? idx + 1 : 0;
+            };
+
             const borderColor = isSelected ? '#fbbf24' : isTraceTarget ? color.glow : editMode ? 'rgba(251,191,36,0.35)' : color.border;
             const borderWidth = isSelected || isTraceTarget ? 2 : 1.2;
 
             return (
+              <div key={d.id} style={{ display: 'contents' }}>
               <div
-                key={d.id}
                 data-device-id={d.id}
                 onMouseDown={e => onDeviceMouseDown(e, d)}
                 onClick={e => onDeviceClickView(e, d)}
@@ -1405,6 +1622,30 @@ export default function SignalFlowMap() {
                           }}
                           title={DEVICE_ROLE_LABELS[role]}
                         >{roleIcon} {DEVICE_ROLE_LABELS[role]}</span>
+                      )}
+                      {/* 라우터/패치베이: 연결선 표시 토글 */}
+                      {(role === 'router' || role === 'patchbay') && (
+                        <button
+                          data-ui
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setInspectHubs(prev => {
+                              const next = new Set(prev);
+                              if (next.has(d.id)) next.delete(d.id);
+                              else next.add(d.id);
+                              return next;
+                            });
+                          }}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          className={`text-[9px] px-1.5 py-[1px] rounded shrink-0 font-mono font-bold transition ${
+                            inspectHubs.has(d.id)
+                              ? 'bg-sky-500 text-white shadow-md shadow-sky-500/40 border border-sky-400'
+                              : 'bg-white/5 text-neutral-400 border border-white/15 hover:bg-sky-500/20 hover:text-sky-200 hover:border-sky-500/40'
+                          }`}
+                          title={inspectHubs.has(d.id) ? '연결선 숨기기' : '연결선 확인'}
+                        >
+                          {inspectHubs.has(d.id) ? '👁 ON' : '👁'}
+                        </button>
                       )}
                     </div>
                     <div className="flex items-center gap-1.5 min-w-0 mt-[1px]">
@@ -1677,58 +1918,166 @@ export default function SignalFlowMap() {
                 </div>
                 )}
 
-                {/* Source thumbnail */}
-                {isSource && d.imageUrl && (
-                  <div className="relative mx-2.5 mb-2.5 rounded-md overflow-hidden border border-lime-500/25"
-                    style={{ aspectRatio: '16/9', background: '#000' }}
-                  >
-                    <img
-                      src={d.imageUrl}
-                      alt={d.name}
-                      className="w-full h-full object-cover"
-                      draggable={false}
-                    />
-                    <div className="absolute top-1 left-1 flex items-center gap-1 px-1.5 py-0.5 rounded bg-lime-500/90 text-black text-[9px] font-bold">
-                      <div className="w-1 h-1 rounded-full bg-white animate-pulse"></div>
-                      LIVE
-                    </div>
-                  </div>
-                )}
-
-                {/* Display screen */}
-                {isDisplay && (
-                  <div className="relative mx-2.5 mb-2.5 rounded-md overflow-hidden border-2 border-neutral-700"
-                    style={{ aspectRatio: '16/9', background: 'linear-gradient(180deg, #000 0%, #0a0a0a 100%)' }}
-                  >
-                    {currentDisplaySource?.imageUrl ? (
-                      <>
+                {/* Source preview - 비디오 이미지, 오디오 플레이어, combined는 둘 다 */}
+                {isSource && (d.imageUrl || d.audioUrl) && (
+                  <div className="mx-2.5 mb-2.5 space-y-1.5">
+                    {/* 이미지 */}
+                    {d.imageUrl && (d.type === 'video' || d.type === 'combined') && (
+                      <div className="relative rounded-md overflow-hidden border border-lime-500/25"
+                        style={{ aspectRatio: '16/9', background: '#000' }}
+                      >
                         <img
-                          src={currentDisplaySource.imageUrl}
-                          alt={currentDisplaySource.name}
+                          src={d.imageUrl}
+                          alt={d.name}
                           className="w-full h-full object-cover"
                           draggable={false}
                         />
-                        <div className="absolute top-1 right-1 flex items-center gap-1 px-1.5 py-0.5 rounded bg-black/70 text-emerald-300 text-[9px] font-bold font-mono">
-                          <div className="w-1 h-1 rounded-full bg-emerald-400 animate-pulse"></div>
-                          {currentDisplaySource.name}
+                        <div className="absolute top-1 left-1 flex items-center gap-1 px-1.5 py-0.5 rounded bg-lime-500/90 text-black text-[9px] font-bold">
+                          <div className="w-1 h-1 rounded-full bg-white animate-pulse"></div>
+                          LIVE
                         </div>
-                      </>
-                    ) : currentDisplaySource ? (
-                      <div className="absolute inset-0 flex items-center justify-center text-neutral-600 text-[10px]">
-                        📡 {currentDisplaySource.name} (이미지 없음)
-                      </div>
-                    ) : (
-                      <div className="absolute inset-0 flex flex-col items-center justify-center text-neutral-700">
-                        <div className="text-[10px] font-mono">NO SIGNAL</div>
-                        <div className="text-[8px] opacity-60 mt-0.5">소스 연결 대기</div>
                       </div>
                     )}
-                    {/* 스캔라인 */}
-                    <div className="absolute inset-0 pointer-events-none" style={{
-                      background: 'repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.08) 2px, rgba(0,0,0,0.08) 3px)',
-                    }}></div>
+                    {/* 오디오 */}
+                    {d.audioUrl && (d.type === 'audio' || d.type === 'combined') && (
+                      <div className="relative rounded-md overflow-hidden border border-rose-500/30 bg-black/60 px-2 py-1 flex items-center gap-1.5">
+                        <span className="text-rose-300 text-[11px]">🎵</span>
+                        <span className="text-[9px] text-rose-300 font-mono flex items-center gap-1">
+                          <div className="w-1 h-1 rounded-full bg-rose-400 animate-pulse"></div>
+                          AUDIO
+                        </span>
+                        <audio src={d.audioUrl} controls className="flex-1 h-6" data-ui style={{ minWidth: 0 }} />
+                      </div>
+                    )}
                   </div>
                 )}
+
+                {/* Display screen - 연결된 소스 재생 */}
+                {isDisplay && (
+                  <div className="mx-2.5 mb-2.5 space-y-1.5">
+                    {/* 비디오 화면 */}
+                    {(d.type === 'video' || d.type === 'combined') && (
+                      <div className="relative rounded-md overflow-hidden border-2 border-neutral-700"
+                        style={{ aspectRatio: '16/9', background: 'linear-gradient(180deg, #000 0%, #0a0a0a 100%)' }}
+                      >
+                        {currentDisplaySource?.imageUrl ? (
+                          <>
+                            <img
+                              src={currentDisplaySource.imageUrl}
+                              alt={currentDisplaySource.name}
+                              className="w-full h-full object-cover"
+                              draggable={false}
+                            />
+                            <div className="absolute top-1 right-1 flex items-center gap-1 px-1.5 py-0.5 rounded bg-black/70 text-emerald-300 text-[9px] font-bold font-mono">
+                              <div className="w-1 h-1 rounded-full bg-emerald-400 animate-pulse"></div>
+                              {currentDisplaySource.name}
+                            </div>
+                          </>
+                        ) : currentDisplaySource ? (
+                          <div className="absolute inset-0 flex items-center justify-center text-neutral-600 text-[10px]">
+                            📡 {currentDisplaySource.name} {currentDisplaySource.audioUrl && !currentDisplaySource.imageUrl ? '(오디오 전용)' : '(이미지 없음)'}
+                          </div>
+                        ) : (
+                          <div className="absolute inset-0 flex flex-col items-center justify-center text-neutral-700">
+                            <div className="text-[10px] font-mono">NO SIGNAL</div>
+                            <div className="text-[8px] opacity-60 mt-0.5">소스 연결 대기</div>
+                          </div>
+                        )}
+                        {/* 스캔라인 */}
+                        <div className="absolute inset-0 pointer-events-none" style={{
+                          background: 'repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.08) 2px, rgba(0,0,0,0.08) 3px)',
+                        }}></div>
+                      </div>
+                    )}
+                    {/* 오디오 플레이어 */}
+                    {(d.type === 'audio' || d.type === 'combined') && (
+                      <div className="relative rounded-md overflow-hidden border-2 border-rose-700/50 bg-gradient-to-r from-black to-rose-950/30 px-2 py-1.5 flex items-center gap-2">
+                        <span className="text-rose-300 text-[11px]">🎵</span>
+                        {currentDisplaySource?.audioUrl ? (
+                          <>
+                            <div className="text-[9px] text-rose-300 font-mono flex items-center gap-1 shrink-0">
+                              <div className="w-1 h-1 rounded-full bg-rose-400 animate-pulse"></div>
+                              {currentDisplaySource.name}
+                            </div>
+                            <audio
+                              src={currentDisplaySource.audioUrl}
+                              controls
+                              className="flex-1 h-6"
+                              data-ui
+                              style={{ minWidth: 0 }}
+                              key={currentDisplaySource.id + ':' + currentDisplaySource.audioUrl}
+                            />
+                          </>
+                        ) : currentDisplaySource ? (
+                          <span className="text-[9.5px] text-neutral-600 italic">
+                            📡 {currentDisplaySource.name} (음원 없음)
+                          </span>
+                        ) : (
+                          <span className="text-[9.5px] text-neutral-700 italic font-mono">NO AUDIO</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* 라우터/패치베이 연결 배지 바 */}
+              {hubConnections.length > 0 && (
+                <div
+                  data-ui
+                  className="absolute flex flex-col gap-0.5 pointer-events-auto"
+                  style={{
+                    left: d.x + w + 6,
+                    top: d.y,
+                    maxWidth: 180,
+                    zIndex: 6,
+                  }}
+                >
+                  {hubConnections.map(hc => {
+                    const isRouter = hc.hub.role === 'router';
+                    const isActive = inspectHubs.has(hc.hub.id);
+                    let label: string;
+                    if (isRouter) {
+                      // "20x10 R/S 포트명"
+                      label = `${hc.hub.inputs.length}x${hc.hub.outputs.length} R/S ${hc.hubPort}`;
+                    } else {
+                      // 패치베이: "패치베이이름-포트번호"
+                      const idx = hubPortIndex(hc.hub, hc.hubPort, hc.dir === 'out');
+                      label = `${hc.hub.name}-${String(idx).padStart(2, '0')}`;
+                    }
+                    const arrow = hc.dir === 'in' ? '←' : '→';
+                    return (
+                      <button
+                        key={hc.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setInspectHubs(prev => {
+                            const next = new Set(prev);
+                            if (next.has(hc.hub.id)) next.delete(hc.hub.id);
+                            else next.add(hc.hub.id);
+                            return next;
+                          });
+                        }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        className={`flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] font-mono font-medium transition text-left ${
+                          isActive
+                            ? isRouter
+                              ? 'bg-fuchsia-500 text-white border border-fuchsia-400 shadow-md shadow-fuchsia-500/40'
+                              : 'bg-teal-500 text-white border border-teal-400 shadow-md shadow-teal-500/40'
+                            : isRouter
+                              ? 'bg-fuchsia-500/15 text-fuchsia-200 border border-fuchsia-500/30 hover:bg-fuchsia-500/30'
+                              : 'bg-teal-500/15 text-teal-200 border border-teal-500/30 hover:bg-teal-500/30'
+                        }`}
+                        title={`${hc.dir === 'in' ? '수신' : '송신'}: ${hc.myPort} ${arrow} ${hc.hub.name} / ${hc.hubPort}${isActive ? '\n(클릭 → 선 숨기기)' : '\n(클릭 → 연결선 표시)'}`}
+                      >
+                        <span className="text-[8px] opacity-75 shrink-0">{hc.myPort}</span>
+                        <span className="text-[8px] opacity-75 shrink-0">{arrow}</span>
+                        <span className="truncate">{label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
               </div>
             );
           })}
@@ -1808,7 +2157,11 @@ export default function SignalFlowMap() {
           toName={devById.get(editingCable.to_device)?.name ?? editingCable.to_device}
           onClose={() => setEditingCable(null)}
           onDelete={async () => {
+            const snapshot = { ...editingCable };
             await (supabase as any).from('connections').delete().eq('id', editingCable.id);
+            pushUndo('케이블 삭제 되돌리기', async () => {
+              await (supabase as any).from('connections').insert(snapshot);
+            });
             setEditingCable(null);
           }}
         />

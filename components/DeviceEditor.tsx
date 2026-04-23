@@ -28,8 +28,11 @@ export default function DeviceEditor({ device, layers, selectionCount, onSave, o
   const [roomNumber, setRoomNumber] = useState(device.roomNumber ?? '');
   const [imageUrl, setImageUrl] = useState(device.imageUrl ?? '');
   const [imageStoragePath, setImageStoragePath] = useState(device.imageStoragePath ?? '');
+  const [audioUrl, setAudioUrl] = useState(device.audioUrl ?? '');
+  const [audioStoragePath, setAudioStoragePath] = useState(device.audioStoragePath ?? '');
   const [selectedInput, setSelectedInput] = useState(device.selectedInput ?? '');
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [uploadingAudio, setUploadingAudio] = useState(false);
   const [type, setType] = useState<Device['type']>(device.type);
   const [role, setRole] = useState<DeviceRole>(device.role ?? 'standard');
   const [pgmPort, setPgmPort] = useState<string>(device.pgmPort ?? '');
@@ -51,6 +54,8 @@ export default function DeviceEditor({ device, layers, selectionCount, onSave, o
     setRoomNumber(device.roomNumber ?? '');
     setImageUrl(device.imageUrl ?? '');
     setImageStoragePath(device.imageStoragePath ?? '');
+    setAudioUrl(device.audioUrl ?? '');
+    setAudioStoragePath(device.audioStoragePath ?? '');
     setSelectedInput(device.selectedInput ?? '');
     setType(device.type);
     setRole(device.role ?? 'standard');
@@ -145,6 +150,8 @@ export default function DeviceEditor({ device, layers, selectionCount, onSave, o
       roomNumber: role === 'wallbox' ? (roomNumber.trim() || undefined) : undefined,
       imageUrl: role === 'source' ? (imageUrl.trim() || undefined) : undefined,
       imageStoragePath: role === 'source' ? (imageStoragePath.trim() || undefined) : undefined,
+      audioUrl: role === 'source' ? (audioUrl.trim() || undefined) : undefined,
+      audioStoragePath: role === 'source' ? (audioStoragePath.trim() || undefined) : undefined,
       selectedInput: (role === 'switcher' || role === 'router') ? (selectedInput || undefined) : undefined,
       type, role,
       pgmPort: role === 'switcher' ? (pgmPort || undefined) : undefined,
@@ -394,85 +401,149 @@ export default function DeviceEditor({ device, layers, selectionCount, onSave, o
           </div>
         )}
 
-        {/* Source 이미지 업로드 */}
+        {/* Source 업로드 — type에 따라 이미지/오디오/둘다 */}
         {role === 'source' && (
-          <div className="bg-gradient-to-br from-lime-500/10 to-transparent border border-lime-500/20 rounded-lg p-3 space-y-2">
-            <div className="flex items-center gap-2">
-              <span className="text-[15px]">▶</span>
-              <div>
-                <div className="text-[11px] font-bold text-lime-300">소스 이미지</div>
-                <div className="text-[10px] text-neutral-500">연결된 디스플레이에서 이 이미지를 재생합니다</div>
-              </div>
-            </div>
+          <div className="space-y-2">
+            {/* 이미지 업로드 (video/combined) */}
+            {(type === 'video' || type === 'combined') && (
+              <div className="bg-gradient-to-br from-lime-500/10 to-transparent border border-lime-500/20 rounded-lg p-3 space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-[15px]">🎥</span>
+                  <div>
+                    <div className="text-[11px] font-bold text-lime-300">비디오 소스 이미지</div>
+                    <div className="text-[10px] text-neutral-500">디스플레이 화면에 표시됨</div>
+                  </div>
+                </div>
 
-            {imageUrl ? (
-              <div className="relative group">
-                <img src={imageUrl} alt="Source preview"
-                  className="w-full max-h-48 object-contain bg-black/60 rounded border border-lime-500/20" />
-                <button
-                  onClick={async () => {
-                    if (imageStoragePath) {
-                      await (supabase as any).storage.from('device-images').remove([imageStoragePath]);
-                    }
-                    setImageUrl('');
-                    setImageStoragePath('');
-                  }}
-                  className="absolute top-1 right-1 w-6 h-6 rounded bg-rose-500/90 hover:bg-rose-500 text-white text-[11px] opacity-0 group-hover:opacity-100 transition"
-                  title="이미지 제거"
-                >✕</button>
-              </div>
-            ) : (
-              <div className="text-[10px] text-neutral-500 italic py-2 text-center bg-black/30 rounded">
-                이미지가 없음
+                {imageUrl ? (
+                  <div className="relative group">
+                    <img src={imageUrl} alt="Source preview"
+                      className="w-full max-h-40 object-contain bg-black/60 rounded border border-lime-500/20" />
+                    <button
+                      onClick={async () => {
+                        if (imageStoragePath) await (supabase as any).storage.from('device-images').remove([imageStoragePath]);
+                        setImageUrl(''); setImageStoragePath('');
+                      }}
+                      className="absolute top-1 right-1 w-6 h-6 rounded bg-rose-500/90 hover:bg-rose-500 text-white text-[11px] opacity-0 group-hover:opacity-100 transition"
+                      title="이미지 제거"
+                    >✕</button>
+                  </div>
+                ) : (
+                  <div className="text-[10px] text-neutral-500 italic py-2 text-center bg-black/30 rounded">
+                    이미지가 없음
+                  </div>
+                )}
+
+                <label className={`block w-full cursor-pointer ${uploadingImage ? 'opacity-50 pointer-events-none' : ''}`}>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      setUploadingImage(true);
+                      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+                      const path = `${device.id}/image_${Date.now()}_${safeName}`;
+                      const { error } = await (supabase as any).storage
+                        .from('device-images').upload(path, file, { cacheControl: '3600', upsert: false });
+                      if (error) {
+                        alert(`업로드 실패: ${error.message}\n\n"device-images" 버킷이 있는지 확인 (schema.sql 실행)`);
+                        console.error(error);
+                      } else {
+                        if (imageStoragePath) await (supabase as any).storage.from('device-images').remove([imageStoragePath]);
+                        const { data: pub } = (supabase as any).storage.from('device-images').getPublicUrl(path);
+                        setImageUrl(pub.publicUrl);
+                        setImageStoragePath(path);
+                      }
+                      setUploadingImage(false);
+                      e.target.value = '';
+                    }}
+                    className="hidden"
+                  />
+                  <div className="w-full py-1.5 text-center text-[11px] font-medium rounded bg-lime-500/20 hover:bg-lime-500/35 text-lime-200 border border-lime-500/30 transition">
+                    {uploadingImage ? '⏳ 업로드 중...' : imageUrl ? '🖼 이미지 교체' : '📤 이미지 업로드'}
+                  </div>
+                </label>
+
+                <input
+                  type="url"
+                  value={imageUrl}
+                  onChange={e => { setImageUrl(e.target.value); setImageStoragePath(''); }}
+                  placeholder="또는 외부 URL: https://example.com/image.jpg"
+                  className="w-full bg-neutral-900 border border-lime-500/20 rounded px-2 py-1 text-[11px] font-mono text-neutral-200 focus:border-lime-400 focus:outline-none"
+                />
               </div>
             )}
 
-            <label className={`block w-full cursor-pointer ${uploadingImage ? 'opacity-50 pointer-events-none' : ''}`}>
-              <input
-                type="file"
-                accept="image/*"
-                onChange={async (e) => {
-                  const file = e.target.files?.[0];
-                  if (!file) return;
-                  setUploadingImage(true);
-                  // 업로드 경로: {deviceId}/{timestamp}_{name}
-                  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-                  const path = `${device.id}/${Date.now()}_${safeName}`;
-                  const { error } = await (supabase as any).storage
-                    .from('device-images')
-                    .upload(path, file, { cacheControl: '3600', upsert: false });
-                  if (error) {
-                    alert(`업로드 실패: ${error.message}\n\n"device-images" 버킷이 있는지 확인 (schema.sql 실행)`);
-                    console.error(error);
-                  } else {
-                    // 이전 파일 삭제
-                    if (imageStoragePath) {
-                      await (supabase as any).storage.from('device-images').remove([imageStoragePath]);
-                    }
-                    const { data: pub } = (supabase as any).storage.from('device-images').getPublicUrl(path);
-                    setImageUrl(pub.publicUrl);
-                    setImageStoragePath(path);
-                  }
-                  setUploadingImage(false);
-                  e.target.value = '';
-                }}
-                className="hidden"
-              />
-              <div className="w-full py-2 text-center text-[11px] font-medium rounded bg-lime-500/20 hover:bg-lime-500/35 text-lime-200 border border-lime-500/30 transition">
-                {uploadingImage ? '⏳ 업로드 중...' : imageUrl ? '🖼 이미지 교체' : '📤 이미지 업로드'}
-              </div>
-            </label>
+            {/* 오디오 업로드 (audio/combined) */}
+            {(type === 'audio' || type === 'combined') && (
+              <div className="bg-gradient-to-br from-rose-500/10 to-transparent border border-rose-500/20 rounded-lg p-3 space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-[15px]">🎵</span>
+                  <div>
+                    <div className="text-[11px] font-bold text-rose-300">오디오 소스 음원</div>
+                    <div className="text-[10px] text-neutral-500">디스플레이에서 재생됨</div>
+                  </div>
+                </div>
 
-            <div className="text-[10px] text-neutral-500">
-              또는 외부 URL 직접 입력:
-            </div>
-            <input
-              type="url"
-              value={imageUrl}
-              onChange={e => { setImageUrl(e.target.value); setImageStoragePath(''); }}
-              placeholder="https://example.com/image.jpg"
-              className="w-full bg-neutral-900 border border-lime-500/20 rounded px-2 py-1 text-[11px] font-mono text-neutral-200 focus:border-lime-400 focus:outline-none"
-            />
+                {audioUrl ? (
+                  <div className="relative group bg-black/60 rounded border border-rose-500/20 p-2">
+                    <audio src={audioUrl} controls className="w-full h-8" />
+                    <button
+                      onClick={async () => {
+                        if (audioStoragePath) await (supabase as any).storage.from('device-images').remove([audioStoragePath]);
+                        setAudioUrl(''); setAudioStoragePath('');
+                      }}
+                      className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-rose-500/90 hover:bg-rose-500 text-white text-[10px] opacity-0 group-hover:opacity-100 transition"
+                      title="음원 제거"
+                    >✕</button>
+                  </div>
+                ) : (
+                  <div className="text-[10px] text-neutral-500 italic py-2 text-center bg-black/30 rounded">
+                    음원이 없음
+                  </div>
+                )}
+
+                <label className={`block w-full cursor-pointer ${uploadingAudio ? 'opacity-50 pointer-events-none' : ''}`}>
+                  <input
+                    type="file"
+                    accept="audio/*"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      setUploadingAudio(true);
+                      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+                      const path = `${device.id}/audio_${Date.now()}_${safeName}`;
+                      const { error } = await (supabase as any).storage
+                        .from('device-images').upload(path, file, { cacheControl: '3600', upsert: false });
+                      if (error) {
+                        alert(`음원 업로드 실패: ${error.message}`);
+                        console.error(error);
+                      } else {
+                        if (audioStoragePath) await (supabase as any).storage.from('device-images').remove([audioStoragePath]);
+                        const { data: pub } = (supabase as any).storage.from('device-images').getPublicUrl(path);
+                        setAudioUrl(pub.publicUrl);
+                        setAudioStoragePath(path);
+                      }
+                      setUploadingAudio(false);
+                      e.target.value = '';
+                    }}
+                    className="hidden"
+                  />
+                  <div className="w-full py-1.5 text-center text-[11px] font-medium rounded bg-rose-500/20 hover:bg-rose-500/35 text-rose-200 border border-rose-500/30 transition">
+                    {uploadingAudio ? '⏳ 업로드 중...' : audioUrl ? '🎵 음원 교체' : '📤 음원 업로드 (.mp3, .wav, .ogg)'}
+                  </div>
+                </label>
+
+                <input
+                  type="url"
+                  value={audioUrl}
+                  onChange={e => { setAudioUrl(e.target.value); setAudioStoragePath(''); }}
+                  placeholder="또는 외부 URL: https://example.com/sound.mp3"
+                  className="w-full bg-neutral-900 border border-rose-500/20 rounded px-2 py-1 text-[11px] font-mono text-neutral-200 focus:border-rose-400 focus:outline-none"
+                />
+              </div>
+            )}
           </div>
         )}
 

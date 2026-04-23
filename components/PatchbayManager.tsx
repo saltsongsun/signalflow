@@ -242,7 +242,7 @@ export default function PatchbayManager({ devices, connections, layers, racks, o
             {pb.outputs.map((portName, idx) => {
               const meta = pb.outputsMeta?.[portName];
               const layer = meta?.layerId ? layerById.get(meta.layerId) : undefined;
-              const portColor = layer?.color ?? '#14b8a6';
+              const portColor = layer?.color ?? (isAudio ? '#ef4444' : '#3b82f6');
               const isDragFrom = drag?.fromDeviceId === pb.id && drag.fromPortName === portName;
               const patched = patches.has(portName);
               const hasExt = !!connections.find(c => c.from_device === pb.id && c.from_port === portName);
@@ -270,7 +270,7 @@ export default function PatchbayManager({ devices, connections, layers, racks, o
             {pb.inputs.map((portName, idx) => {
               const meta = pb.inputsMeta?.[portName];
               const layer = meta?.layerId ? layerById.get(meta.layerId) : undefined;
-              const portColor = layer?.color ?? '#14b8a6';
+              const portColor = layer?.color ?? (isAudio ? '#ef4444' : '#3b82f6');
               const isHoverDrop = !!drag && hoverTarget?.deviceId === pb.id && hoverTarget?.portName === portName;
               const patched = Array.from(patches.values()).includes(portName);
               const hasExt = !!connections.find(c => c.to_device === pb.id && c.to_port === portName);
@@ -345,7 +345,7 @@ export default function PatchbayManager({ devices, connections, layers, racks, o
             {pb.outputs.map((portName, idx) => {
               const meta = pb.outputsMeta?.[portName];
               const layer = meta?.layerId ? layerById.get(meta.layerId) : undefined;
-              const portColor = layer?.color ?? '#14b8a6';
+              const portColor = layer?.color ?? (isAudio ? '#ef4444' : '#3b82f6');
               const isDragFrom = drag?.fromDeviceId === pb.id && drag.fromPortName === portName;
               const patched = patches.has(portName);
               const hasExt = !!connections.find(c => c.from_device === pb.id && c.from_port === portName);
@@ -385,7 +385,7 @@ export default function PatchbayManager({ devices, connections, layers, racks, o
             {pb.inputs.map((portName, idx) => {
               const meta = pb.inputsMeta?.[portName];
               const layer = meta?.layerId ? layerById.get(meta.layerId) : undefined;
-              const portColor = layer?.color ?? '#14b8a6';
+              const portColor = layer?.color ?? (isAudio ? '#ef4444' : '#3b82f6');
               const isHoverDrop = !!drag && hoverTarget?.deviceId === pb.id && hoverTarget?.portName === portName;
               const patched = Array.from(patches.values()).includes(portName);
               const hasExt = !!connections.find(c => c.to_device === pb.id && c.to_port === portName);
