@@ -1,46 +1,75 @@
 -- ============================================================
--- Signal Flow Map - Supabase Schema
--- Supabase SQL Editor에서 실행하세요
+-- Signal Flow Map v2 Schema
 -- ============================================================
 
--- devices 테이블
+-- 기존 테이블이 있으면 컬럼만 추가 (데이터 보존)
+-- 처음 설치라면 이 block 전체 실행
+
 create table if not exists public.devices (
   id text primary key,
   name text not null,
   type text not null check (type in ('video', 'audio', 'combined')),
   x double precision not null default 0,
   y double precision not null default 0,
+  width double precision,
+  height double precision,
   inputs jsonb not null default '[]'::jsonb,
   outputs jsonb not null default '[]'::jsonb,
+  "inputsMeta" jsonb not null default '{}'::jsonb,
+  "outputsMeta" jsonb not null default '{}'::jsonb,
   "physPorts" jsonb not null default '{}'::jsonb,
   routing jsonb not null default '{}'::jsonb,
   created_at timestamp with time zone default now()
 );
 
--- connections 테이블
 create table if not exists public.connections (
   id uuid primary key,
   from_device text not null references public.devices(id) on delete cascade,
   from_port text not null,
   to_device text not null references public.devices(id) on delete cascade,
   to_port text not null,
+  conn_type text,
   created_at timestamp with time zone default now(),
   unique (to_device, to_port)
 );
 
--- Realtime 활성화
-alter publication supabase_realtime add table public.devices;
-alter publication supabase_realtime add table public.connections;
+-- 기존 테이블 있으면 컬럼만 추가 (idempotent)
+alter table public.devices add column if not exists width double precision;
+alter table public.devices add column if not exists height double precision;
+alter table public.devices add column if not exists "inputsMeta" jsonb not null default '{}'::jsonb;
+alter table public.devices add column if not exists "outputsMeta" jsonb not null default '{}'::jsonb;
+alter table public.connections add column if not exists conn_type text;
 
--- RLS: 공용 단일 맵이므로 anon에게 전체 권한
+-- Realtime 활성화 (이미 활성인 경우는 무시됨)
+do $$
+begin
+  perform 1 from pg_publication_tables where pubname='supabase_realtime' and tablename='devices';
+  if not found then
+    alter publication supabase_realtime add table public.devices;
+  end if;
+  perform 1 from pg_publication_tables where pubname='supabase_realtime' and tablename='connections';
+  if not found then
+    alter publication supabase_realtime add table public.connections;
+  end if;
+end $$;
+
+-- RLS
 alter table public.devices enable row level security;
 alter table public.connections enable row level security;
+
+drop policy if exists "Public read devices" on public.devices;
+drop policy if exists "Public insert devices" on public.devices;
+drop policy if exists "Public update devices" on public.devices;
+drop policy if exists "Public delete devices" on public.devices;
+drop policy if exists "Public read connections" on public.connections;
+drop policy if exists "Public insert connections" on public.connections;
+drop policy if exists "Public update connections" on public.connections;
+drop policy if exists "Public delete connections" on public.connections;
 
 create policy "Public read devices" on public.devices for select using (true);
 create policy "Public insert devices" on public.devices for insert with check (true);
 create policy "Public update devices" on public.devices for update using (true);
 create policy "Public delete devices" on public.devices for delete using (true);
-
 create policy "Public read connections" on public.connections for select using (true);
 create policy "Public insert connections" on public.connections for insert with check (true);
 create policy "Public update connections" on public.connections for update using (true);
