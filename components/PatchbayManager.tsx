@@ -234,38 +234,10 @@ export default function PatchbayManager({ devices, connections, layers, racks, o
             padding: `2px ${innerPadH}px`,
           }}
         >
-          <div className="absolute left-1 top-1 text-[7px] font-bold tracking-[0.1em] text-teal-400/70 leading-none">OUT⬆</div>
-          <div className="absolute left-1 bottom-1 text-[7px] font-bold tracking-[0.1em] text-teal-400/70 leading-none">IN ⬇</div>
+          <div className="absolute left-1 top-1 text-[7px] font-bold tracking-[0.1em] text-teal-400/70 leading-none">IN ⬇</div>
+          <div className="absolute left-1 bottom-1 text-[7px] font-bold tracking-[0.1em] text-teal-400/70 leading-none">OUT⬆</div>
 
-          {/* OUT 행 */}
-          <div className="flex items-center overflow-hidden" style={{ height: rowH, paddingLeft: labelW }}>
-            {pb.outputs.map((portName, idx) => {
-              const meta = pb.outputsMeta?.[portName];
-              const layer = meta?.layerId ? layerById.get(meta.layerId) : undefined;
-              const portColor = layer?.color ?? (isAudio ? '#ef4444' : '#3b82f6');
-              const isDragFrom = drag?.fromDeviceId === pb.id && drag.fromPortName === portName;
-              const patched = patches.has(portName);
-              const hasExt = !!connections.find(c => c.from_device === pb.id && c.from_port === portName);
-              return (
-                <div
-                  key={portName}
-                  data-out-jack
-                  data-out-device={pb.id}
-                  data-out-port={portName}
-                  onMouseDown={e => onJackMouseDown(e, pb.id, portName)}
-                  className="relative flex items-center justify-center shrink-0 cursor-grab active:cursor-grabbing"
-                  style={{ width: cellW, height: rowH }}
-                  title={`${pb.name} OUT ${idx + 1}: ${portName}`}
-                >
-                  {isAudio
-                    ? audioJack(jackSize, portColor, { active: patched || isDragFrom, extCable: hasExt })
-                    : videoJack(jackSize, portColor, { active: patched || isDragFrom, extCable: hasExt })}
-                </div>
-              );
-            })}
-          </div>
-
-          {/* IN 행 */}
+          {/* IN 행 (상단) — 소스 장비에서 들어오는 신호 */}
           <div className="flex items-center overflow-hidden" style={{ height: rowH, paddingLeft: labelW }}>
             {pb.inputs.map((portName, idx) => {
               const meta = pb.inputsMeta?.[portName];
@@ -288,6 +260,34 @@ export default function PatchbayManager({ devices, connections, layers, racks, o
                   {isAudio
                     ? audioJack(jackSize, portColor, { active: patched, extCable: hasExt, normal: hasNormal, hover: isHoverDrop })
                     : videoJack(jackSize, portColor, { active: patched, extCable: hasExt, normal: hasNormal, hover: isHoverDrop })}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* OUT 행 (하단) — 여기에 패치 케이블을 꽂으면 normal이 끊기고 신호 교체됨 */}
+          <div className="flex items-center overflow-hidden" style={{ height: rowH, paddingLeft: labelW }}>
+            {pb.outputs.map((portName, idx) => {
+              const meta = pb.outputsMeta?.[portName];
+              const layer = meta?.layerId ? layerById.get(meta.layerId) : undefined;
+              const portColor = layer?.color ?? (isAudio ? '#ef4444' : '#3b82f6');
+              const isDragFrom = drag?.fromDeviceId === pb.id && drag.fromPortName === portName;
+              const patched = patches.has(portName);
+              const hasExt = !!connections.find(c => c.from_device === pb.id && c.from_port === portName);
+              return (
+                <div
+                  key={portName}
+                  data-out-jack
+                  data-out-device={pb.id}
+                  data-out-port={portName}
+                  onMouseDown={e => onJackMouseDown(e, pb.id, portName)}
+                  className="relative flex items-center justify-center shrink-0 cursor-grab active:cursor-grabbing"
+                  style={{ width: cellW, height: rowH }}
+                  title={`${pb.name} OUT ${idx + 1}: ${portName}`}
+                >
+                  {isAudio
+                    ? audioJack(jackSize, portColor, { active: patched || isDragFrom, extCable: hasExt })
+                    : videoJack(jackSize, portColor, { active: patched || isDragFrom, extCable: hasExt })}
                 </div>
               );
             })}
@@ -337,50 +337,11 @@ export default function PatchbayManager({ devices, connections, layers, racks, o
           }}
         >
           <div className="flex items-center mb-0.5" style={{ width: railW }}>
-            <div className="text-[8px] font-bold tracking-[0.15em] text-teal-400/70 w-10 shrink-0">OUT ⬆</div>
+            <div className="text-[8px] font-bold tracking-[0.15em] text-teal-400/70 w-10 shrink-0">IN ⬇</div>
             <div className="flex-1 h-px bg-gradient-to-r from-teal-400/30 to-transparent"></div>
           </div>
 
-          <div className="flex" style={{ width: railW }}>
-            {pb.outputs.map((portName, idx) => {
-              const meta = pb.outputsMeta?.[portName];
-              const layer = meta?.layerId ? layerById.get(meta.layerId) : undefined;
-              const portColor = layer?.color ?? (isAudio ? '#ef4444' : '#3b82f6');
-              const isDragFrom = drag?.fromDeviceId === pb.id && drag.fromPortName === portName;
-              const patched = patches.has(portName);
-              const hasExt = !!connections.find(c => c.from_device === pb.id && c.from_port === portName);
-              return (
-                <div
-                  key={portName}
-                  data-out-jack
-                  data-out-device={pb.id}
-                  data-out-port={portName}
-                  onMouseDown={e => onJackMouseDown(e, pb.id, portName)}
-                  className="relative flex flex-col items-center shrink-0 cursor-grab active:cursor-grabbing"
-                  style={{ width: jackW, height: FULL_JACK_SIZE + 14 }}
-                  title={`${pb.name} OUT ${idx + 1}: ${portName}`}
-                >
-                  <div style={{ marginTop: 2 }}>
-                    {isAudio
-                      ? audioJack(FULL_JACK_SIZE - 4, portColor, { active: patched || isDragFrom, extCable: hasExt })
-                      : videoJack(FULL_JACK_SIZE - 4, portColor, { active: patched || isDragFrom, extCable: hasExt })}
-                  </div>
-                  <div className="text-[7.5px] font-mono font-bold text-neutral-400 mt-0.5 leading-none">
-                    {String(idx + 1).padStart(2, '0')}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="flex items-center justify-between text-[7.5px] font-bold tracking-[0.15em] px-0.5 my-0.5"
-            style={{ height: 10, color: 'rgba(20,184,166,0.55)' }}
-          >
-            <span>●</span>
-            <span className="text-neutral-600 font-mono tracking-normal">{pb.outputs.length}/{pb.inputs.length}</span>
-            <span>●</span>
-          </div>
-
+          {/* IN 행 (상단) — 각 장비에서 오는 소스가 꽂히는 자리 */}
           <div className="flex" style={{ width: railW }}>
             {pb.inputs.map((portName, idx) => {
               const meta = pb.inputsMeta?.[portName];
@@ -400,15 +361,61 @@ export default function PatchbayManager({ devices, connections, layers, racks, o
                   style={{ width: jackW, height: FULL_JACK_SIZE + 14 }}
                   title={`${pb.name} IN ${idx + 1}: ${portName}${hasNormal ? ` · normal → ${pb.normals![portName]}` : ''}`}
                 >
+                  <div style={{ marginTop: 2 }}>
+                    {isAudio
+                      ? audioJack(FULL_JACK_SIZE - 4, portColor, { active: patched, extCable: hasExt, normal: hasNormal, hover: isHoverDrop })
+                      : videoJack(FULL_JACK_SIZE - 4, portColor, { active: patched, extCable: hasExt, normal: hasNormal, hover: isHoverDrop })}
+                  </div>
+                  <div className="text-[7.5px] font-mono font-bold text-neutral-400 mt-0.5 leading-none">
+                    {String(idx + 1).padStart(2, '0')}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="flex items-center justify-between text-[7.5px] font-bold tracking-[0.15em] px-0.5 my-0.5"
+            style={{ height: 10, color: 'rgba(20,184,166,0.55)' }}
+          >
+            <span>●</span>
+            <span className="text-neutral-600 font-mono tracking-normal">{pb.inputs.length}/{pb.outputs.length}</span>
+            <span>●</span>
+          </div>
+
+          {/* OUT 행 (하단) — 이 잭에 패치 케이블을 꽂으면 normal이 끊기고 다른 IN 신호로 교체됨 */}
+          <div className="flex" style={{ width: railW }}>
+            {pb.outputs.map((portName, idx) => {
+              const meta = pb.outputsMeta?.[portName];
+              const layer = meta?.layerId ? layerById.get(meta.layerId) : undefined;
+              const portColor = layer?.color ?? (isAudio ? '#ef4444' : '#3b82f6');
+              const isDragFrom = drag?.fromDeviceId === pb.id && drag.fromPortName === portName;
+              const patched = patches.has(portName);
+              const hasExt = !!connections.find(c => c.from_device === pb.id && c.from_port === portName);
+              return (
+                <div
+                  key={portName}
+                  data-out-jack
+                  data-out-device={pb.id}
+                  data-out-port={portName}
+                  onMouseDown={e => onJackMouseDown(e, pb.id, portName)}
+                  className="relative flex flex-col items-center shrink-0 cursor-grab active:cursor-grabbing"
+                  style={{ width: jackW, height: FULL_JACK_SIZE + 14 }}
+                  title={`${pb.name} OUT ${idx + 1}: ${portName}`}
+                >
                   <div className="text-[7.5px] font-mono font-bold text-neutral-400 mb-0.5 leading-none mt-0.5">
                     {String(idx + 1).padStart(2, '0')}
                   </div>
                   {isAudio
-                    ? audioJack(FULL_JACK_SIZE - 4, portColor, { active: patched, extCable: hasExt, normal: hasNormal, hover: isHoverDrop })
-                    : videoJack(FULL_JACK_SIZE - 4, portColor, { active: patched, extCable: hasExt, normal: hasNormal, hover: isHoverDrop })}
+                    ? audioJack(FULL_JACK_SIZE - 4, portColor, { active: patched || isDragFrom, extCable: hasExt })
+                    : videoJack(FULL_JACK_SIZE - 4, portColor, { active: patched || isDragFrom, extCable: hasExt })}
                 </div>
               );
             })}
+          </div>
+
+          <div className="flex items-center mt-0.5" style={{ width: railW }}>
+            <div className="text-[8px] font-bold tracking-[0.15em] text-teal-400/70 w-10 shrink-0">OUT ⬆</div>
+            <div className="flex-1 h-px bg-gradient-to-r from-teal-400/30 to-transparent"></div>
           </div>
         </div>
       </div>

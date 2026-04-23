@@ -82,12 +82,12 @@ function portYFromRenderIdx(d: Device, renderIdx: number) {
 function patchbayPortXY(d: Device, dir: 'in' | 'out', portIdx: number) {
   // 바깥패딩 6 + 안쪽패딩 8 = 14, cell center = 14 + portIdx*JACK_W + JACK_W/2
   const cx = d.x + 14 + portIdx * PB_JACK_W + PB_JACK_W / 2;
-  if (dir === 'out') {
-    // OUT 잭 상단부 ≈ 헤더 아래 + 6(바깥) + 6(안쪽) + 2 (잭 margintop) = HEADER_H + 14
+  if (dir === 'in') {
+    // IN 잭은 상단부에 위치 (소스가 꽂히는 자리)
     const cy = d.y + HEADER_H + 14;
     return { x: cx, y: cy };
   } else {
-    // IN 잭 하단부 ≈ HEADER_H + 14 + JACK_H + ROW_GAP + JACK_H
+    // OUT 잭은 하단부에 위치 (여기 꽂으면 normal이 끊기고 신호 교체됨)
     const cy = d.y + HEADER_H + 14 + PB_JACK_H + PB_ROW_GAP + PB_JACK_H;
     return { x: cx, y: cy };
   }
@@ -105,6 +105,8 @@ export default function SignalFlowMap() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [traceId, setTraceId] = useState<string | null>(null);
   const [traceMode, setTraceMode] = useState<TraceMode>('both');
+  // 라우터/패치베이 연결선 표시 토글 — 이 Set에 포함된 장비만 라인 표시
+  const [inspectHubs, setInspectHubs] = useState<Set<string>>(new Set());
   const [editingDevice, setEditingDevice] = useState<Device | null>(null);
   const [editingCable, setEditingCable] = useState<Connection | null>(null);
   const [showLayerPanel, setShowLayerPanel] = useState(false);
@@ -1072,6 +1074,45 @@ export default function SignalFlowMap() {
             title="월박스 관리 페이지"
           >▦ 월박스 <span className="font-mono opacity-70">{devices.filter(d => d.role === 'wallbox').length}</span></button>
 
+          {/* 라우터/패치베이 선 전체 보기 토글 */}
+          {(() => {
+            const allHubs = devices.filter(d => d.role === 'router' || d.role === 'patchbay');
+            if (allHubs.length === 0) return null;
+            const activeCount = allHubs.filter(h => inspectHubs.has(h.id)).length;
+            const allOn = activeCount === allHubs.length;
+            const someOn = activeCount > 0 && !allOn;
+            return (
+              <button
+                onClick={() => {
+                  if (allOn) {
+                    // 모두 켜진 상태 → 전부 끄기
+                    setInspectHubs(new Set());
+                  } else {
+                    // 일부/아무것도 안 켜진 → 전부 켜기
+                    setInspectHubs(new Set(allHubs.map(h => h.id)));
+                  }
+                }}
+                className={`px-2.5 py-1.5 text-[11px] font-medium rounded-lg border transition-all flex items-center gap-1.5 ${
+                  allOn
+                    ? 'bg-fuchsia-500 border-fuchsia-400 text-white shadow-md shadow-fuchsia-500/40'
+                    : someOn
+                      ? 'bg-fuchsia-500/30 border-fuchsia-500/50 text-fuchsia-100 hover:bg-fuchsia-500/50'
+                      : 'bg-white/5 border-white/15 text-neutral-400 hover:bg-fuchsia-500/20 hover:text-fuchsia-200 hover:border-fuchsia-500/40'
+                }`}
+                title={allOn
+                  ? '모든 라우터/패치베이 연결선 숨기기'
+                  : someOn
+                    ? `일부 표시 중 (${activeCount}/${allHubs.length}) — 클릭하면 전부 표시`
+                    : '모든 라우터/패치베이 연결선 보기'}
+              >
+                <span className="font-mono text-[13px]">👁</span>
+                <span>
+                  Hub 선 {allOn ? 'ON' : someOn ? `${activeCount}/${allHubs.length}` : 'OFF'}
+                </span>
+              </button>
+            );
+          })()}
+
           {(() => {
             const activeSources = devices.filter(d => d.role === 'source' && (d.imageUrl || d.audioUrl)).length;
             const liveDisplays = Array.from(displaySources.values()).length;
@@ -1301,6 +1342,18 @@ export default function SignalFlowMap() {
               if (c.from_device === c.to_device && c.is_patch) return null;
               const from = devById.get(c.from_device)!;
               const to = devById.get(c.to_device)!;
+              // 라우터/패치베이와 연결된 선은 기본 숨김 — "inspectHubs"에 그 hub가 있을 때만 표시
+              // (trace 중이면 traced 연결은 예외로 보여줌)
+              const fromIsHub = from.role === 'router' || from.role === 'patchbay';
+              const toIsHub = to.role === 'router' || to.role === 'patchbay';
+              const hubConn = fromIsHub || toIsHub;
+              if (hubConn) {
+                const inspectedHere =
+                  (fromIsHub && inspectHubs.has(from.id)) ||
+                  (toIsHub && inspectHubs.has(to.id));
+                const tracedHere = traceId && traced.connections.has(c.id);
+                if (!inspectedHere && !tracedHere) return null;
+              }
               const outVis = visiblePorts(from, 'out', visibleLayerIds);
               const inVis = visiblePorts(to, 'in', visibleLayerIds);
               const fi = outVis.findIndex(p => p.name === c.from_port);
@@ -1330,31 +1383,32 @@ export default function SignalFlowMap() {
               }
 
               // 경로 계산 - 패치베이 관련이면 수직 베지어, 아니면 수평
+              // 패치베이는 IN이 상단, OUT이 하단이므로:
+              //   - from.OUT (하단) → 아래로 빠져나감
+              //   - to.IN (상단) → 위에서 들어옴
               let path: string;
               const fromIsPatchbay = from.role === 'patchbay';
               const toIsPatchbay = to.role === 'patchbay';
               if (fromIsPatchbay && toIsPatchbay) {
-                // 둘 다 패치베이: OUT(위)↑에서 나가 IN(아래)↓로 들어감
+                // 둘 다 패치베이: from.OUT(아래)↓에서 나가 to.IN(위)↑로 들어감
                 const dxAbs = Math.abs(x2 - x1);
                 const dyAbs = Math.abs(y2 - y1);
                 const offsetV = Math.max(60, dyAbs / 2.2, dxAbs / 4);
-                path = `M ${x1} ${y1} C ${x1} ${y1 - offsetV}, ${x2} ${y2 + offsetV}, ${x2} ${y2}`;
+                path = `M ${x1} ${y1} C ${x1} ${y1 + offsetV}, ${x2} ${y2 - offsetV}, ${x2} ${y2}`;
               } else if (fromIsPatchbay) {
-                // from만 패치베이: 위로 빠져나간 뒤 옆으로
+                // from만 패치베이: 아래로 빠져나간 뒤 옆으로
                 const offsetV = Math.max(50, Math.abs(y2 - y1) / 3);
                 const dxc = Math.max(50, Math.abs(x2 - x1) / 1.8);
-                path = `M ${x1} ${y1} C ${x1} ${y1 - offsetV}, ${x2 - dxc} ${y2}, ${x2} ${y2}`;
+                path = `M ${x1} ${y1} C ${x1} ${y1 + offsetV}, ${x2 - dxc} ${y2}, ${x2} ${y2}`;
               } else if (toIsPatchbay) {
-                // to만 패치베이: 옆으로 가다가 아래로 들어감
+                // to만 패치베이: 옆으로 가다가 위에서 내려와 IN으로 들어감
                 const offsetV = Math.max(50, Math.abs(y2 - y1) / 3);
                 const dxc = Math.max(50, Math.abs(x2 - x1) / 1.8);
-                path = `M ${x1} ${y1} C ${x1 + dxc} ${y1}, ${x2} ${y2 + offsetV}, ${x2} ${y2}`;
+                path = `M ${x1} ${y1} C ${x1 + dxc} ${y1}, ${x2} ${y2 - offsetV}, ${x2} ${y2}`;
               } else {
                 // 일반 장비끼리: 자유로운 베지어
                 const dxAbs = Math.abs(x2 - x1);
                 const dyAbs = Math.abs(y2 - y1);
-                // 수평 거리와 수직 편차에 따라 제어점 여유 조정. 
-                // 가로로 넓으면 제어점 중간, 세로로 치우치면 S자가 자연스럽게 빠지도록 큰 값
                 const ctrl = Math.max(80, dxAbs / 1.8, dyAbs / 2.5);
                 path = `M ${x1} ${y1} C ${x1 + ctrl} ${y1}, ${x2 - ctrl} ${y2}, ${x2} ${y2}`;
               }
@@ -1483,12 +1537,37 @@ export default function SignalFlowMap() {
             const isDisplay = role === 'display';
             const currentDisplaySource = isDisplay ? displaySources.get(d.id) : undefined;
 
+            // 이 장비의 IN 포트에 연결된 hub (라우터/패치베이) — 카드 옆 배지 바용
+            // OUT 방향은 OUT 포트 라벨로 이미 표시됨
+            const hubConnections: Array<{
+              id: string; hub: Device; myPort: string; hubPort: string;
+              dir: 'in';
+            }> = [];
+            if (role !== 'router' && role !== 'patchbay') {
+              connections.forEach(c => {
+                if (c.from_device === c.to_device && c.is_patch) return;
+                // hub → 나 (IN으로 들어오는 연결만)
+                if (c.to_device === d.id) {
+                  const hub = devById.get(c.from_device);
+                  if (hub && (hub.role === 'router' || hub.role === 'patchbay')) {
+                    hubConnections.push({ id: c.id, hub, myPort: c.to_port, hubPort: c.from_port, dir: 'in' });
+                  }
+                }
+              });
+            }
+            // 패치베이 내 포트 번호(1부터 시작) 구하기
+            const hubPortIndex = (hub: Device, portName: string, isOutputSide: boolean): number => {
+              const list = isOutputSide ? hub.outputs : hub.inputs;
+              const idx = list.indexOf(portName);
+              return idx >= 0 ? idx + 1 : 0;
+            };
+
             const borderColor = isSelected ? '#fbbf24' : isTraceTarget ? color.glow : editMode ? 'rgba(251,191,36,0.35)' : color.border;
             const borderWidth = isSelected || isTraceTarget ? 2 : 1.2;
 
             return (
+              <div key={d.id} style={{ display: 'contents' }}>
               <div
-                key={d.id}
                 data-device-id={d.id}
                 onMouseDown={e => onDeviceMouseDown(e, d)}
                 onClick={e => onDeviceClickView(e, d)}
@@ -1566,6 +1645,30 @@ export default function SignalFlowMap() {
                           title={DEVICE_ROLE_LABELS[role]}
                         >{roleIcon} {DEVICE_ROLE_LABELS[role]}</span>
                       )}
+                      {/* 라우터/패치베이: 연결선 표시 토글 */}
+                      {(role === 'router' || role === 'patchbay') && (
+                        <button
+                          data-ui
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setInspectHubs(prev => {
+                              const next = new Set(prev);
+                              if (next.has(d.id)) next.delete(d.id);
+                              else next.add(d.id);
+                              return next;
+                            });
+                          }}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          className={`text-[9px] px-1.5 py-[1px] rounded shrink-0 font-mono font-bold transition ${
+                            inspectHubs.has(d.id)
+                              ? 'bg-sky-500 text-white shadow-md shadow-sky-500/40 border border-sky-400'
+                              : 'bg-white/5 text-neutral-400 border border-white/15 hover:bg-sky-500/20 hover:text-sky-200 hover:border-sky-500/40'
+                          }`}
+                          title={inspectHubs.has(d.id) ? '연결선 숨기기' : '연결선 확인'}
+                        >
+                          {inspectHubs.has(d.id) ? '👁 ON' : '👁'}
+                        </button>
+                      )}
                     </div>
                     <div className="flex items-center gap-1.5 min-w-0 mt-[1px]">
                       <span className="text-[9px] text-neutral-500 uppercase tracking-[0.1em] font-medium shrink-0">{d.type}</span>
@@ -1618,34 +1721,32 @@ export default function SignalFlowMap() {
                         border: '1px solid rgba(0,0,0,0.9)',
                       }}
                     >
-                      {/* 상단 행: OUT */}
+                      {/* 상단 행: IN (각 장비에서 오는 소스가 꽂히는 자리) */}
                       <div className="flex items-center justify-center" style={{ height: PB_JACK_H }}>
-                        {d.outputs.map((portName, idx) => {
-                          const meta = d.outputsMeta?.[portName];
+                        {d.inputs.map((portName, idx) => {
+                          const meta = d.inputsMeta?.[portName];
                           const lid = meta?.layerId;
                           const layer = lid ? layerById.get(lid) : undefined;
                           const portColor = layer?.color ?? color.main;
-                          const isPending = pendingFrom?.device === d.id && pendingFrom?.port === portName;
-                          const isPgm = d.role === 'switcher' && d.pgmPort === portName;
-                          const hasNormal = d.normals && Object.values(d.normals).includes(portName);
+                          const hasNormal = d.normals?.[portName];
                           return (
                             <div
                               key={portName}
                               className="flex flex-col items-center justify-start relative shrink-0"
                               style={{ width: PB_JACK_W, height: PB_JACK_H }}
-                              title={`OUT ${idx + 1}: ${portName}${meta?.label ? ` — ${meta.label}` : ''}`}
+                              title={`IN ${idx + 1}: ${portName}${meta?.label ? ` — ${meta.label}` : ''}${hasNormal ? ` · normal → ${hasNormal}` : ''}`}
                             >
                               <button
                                 data-port
                                 onMouseDown={onPortMouseDown}
-                                onClick={e => onPortClick(e, d.id, portName, true)}
-                                className={`relative rounded-full transition-transform hover:scale-[1.2] ${isPending ? 'ring-2 ring-amber-300 animate-pulse' : isPgm ? 'ring-2 ring-emerald-400' : ''}`}
+                                onClick={e => onPortClick(e, d.id, portName, false)}
+                                className="relative rounded-full transition-transform hover:scale-[1.2]"
                                 style={{
                                   width: 20, height: 20,
                                   marginTop: 2,
-                                  background: `radial-gradient(circle at 35% 30%, ${isPending ? '#fbbf24' : isPgm ? '#10b981' : portColor} 25%, #000 85%)`,
+                                  background: `radial-gradient(circle at 35% 30%, ${portColor} 25%, #000 85%)`,
                                   boxShadow: `
-                                    0 0 ${isPgm ? '10px' : '5px'} ${isPending ? '#fbbf24' : isPgm ? '#10b981' : portColor}aa,
+                                    0 0 5px ${portColor}aa,
                                     inset 0 -1px 2px rgba(0,0,0,0.7),
                                     inset 0 1px 1.5px rgba(255,255,255,0.35)
                                   `,
@@ -1686,25 +1787,27 @@ export default function SignalFlowMap() {
                           borderBottom: '1px solid rgba(20,184,166,0.15)',
                         }}
                       >
-                        <span>⬆ OUT</span>
-                        <span className="text-neutral-600 font-mono tracking-normal">{d.outputs.length}CH</span>
-                        <span>IN ⬇</span>
+                        <span>⬇ IN</span>
+                        <span className="text-neutral-600 font-mono tracking-normal">{d.inputs.length}CH</span>
+                        <span>OUT ⬆</span>
                       </div>
 
-                      {/* 하단 행: IN */}
+                      {/* 하단 행: OUT (여기 꽂으면 normal이 끊기고 신호 교체됨) */}
                       <div className="flex items-center justify-center" style={{ height: PB_JACK_H }}>
-                        {d.inputs.map((portName, idx) => {
-                          const meta = d.inputsMeta?.[portName];
+                        {d.outputs.map((portName, idx) => {
+                          const meta = d.outputsMeta?.[portName];
                           const lid = meta?.layerId;
                           const layer = lid ? layerById.get(lid) : undefined;
                           const portColor = layer?.color ?? color.main;
-                          const hasNormal = d.normals?.[portName];
+                          const isPending = pendingFrom?.device === d.id && pendingFrom?.port === portName;
+                          const isPgm = d.role === 'switcher' && d.pgmPort === portName;
+                          const hasNormal = d.normals && Object.values(d.normals).includes(portName);
                           return (
                             <div
                               key={portName}
                               className="flex flex-col items-center justify-end relative shrink-0"
                               style={{ width: PB_JACK_W, height: PB_JACK_H }}
-                              title={`IN ${idx + 1}: ${portName}${meta?.label ? ` — ${meta.label}` : ''}${hasNormal ? ` · normal → ${hasNormal}` : ''}`}
+                              title={`OUT ${idx + 1}: ${portName}${meta?.label ? ` — ${meta.label}` : ''}`}
                             >
                               <div
                                 className="text-center text-[7.5px] font-mono font-bold text-neutral-400 leading-none mb-0.5"
@@ -1715,14 +1818,14 @@ export default function SignalFlowMap() {
                               <button
                                 data-port
                                 onMouseDown={onPortMouseDown}
-                                onClick={e => onPortClick(e, d.id, portName, false)}
-                                className="relative rounded-full transition-transform hover:scale-[1.2]"
+                                onClick={e => onPortClick(e, d.id, portName, true)}
+                                className={`relative rounded-full transition-transform hover:scale-[1.2] ${isPending ? 'ring-2 ring-amber-300 animate-pulse' : isPgm ? 'ring-2 ring-emerald-400' : ''}`}
                                 style={{
                                   width: 20, height: 20,
                                   marginBottom: 2,
-                                  background: `radial-gradient(circle at 35% 30%, ${portColor} 25%, #000 85%)`,
+                                  background: `radial-gradient(circle at 35% 30%, ${isPending ? '#fbbf24' : isPgm ? '#10b981' : portColor} 25%, #000 85%)`,
                                   boxShadow: `
-                                    0 0 5px ${portColor}aa,
+                                    0 0 ${isPgm ? '10px' : '5px'} ${isPending ? '#fbbf24' : isPgm ? '#10b981' : portColor}aa,
                                     inset 0 -1px 2px rgba(0,0,0,0.7),
                                     inset 0 1px 1.5px rgba(255,255,255,0.35)
                                   `,
@@ -1801,9 +1904,38 @@ export default function SignalFlowMap() {
                       const portColor = layer?.color ?? color.main;
                       const isPending = pendingFrom?.device === d.id && pendingFrom?.port === p.name;
                       const isPgm = d.role === 'switcher' && d.pgmPort === p.name;
+                      // 이 OUT이 연결된 대상 찾기
+                      const destConn = connections.find(c =>
+                        c.from_device === d.id && c.from_port === p.name &&
+                        !(c.from_device === c.to_device && c.is_patch)
+                      );
+                      const destDev = destConn ? devById.get(destConn.to_device) : undefined;
+                      let destLabel: string | null = null;
+                      let destColor = 'text-neutral-500';
+                      if (destDev && destConn) {
+                        if (destDev.role === 'router') {
+                          // "20x10 R/S 포트명"
+                          destLabel = `→ ${destDev.inputs.length}x${destDev.outputs.length} R/S ${destConn.to_port}`;
+                          destColor = 'text-fuchsia-300';
+                        } else if (destDev.role === 'patchbay') {
+                          // "패치베이명-포트번호"
+                          const idx = destDev.inputs.indexOf(destConn.to_port);
+                          destLabel = `→ ${destDev.name}-${String((idx >= 0 ? idx + 1 : 0)).padStart(2, '0')}`;
+                          destColor = 'text-teal-300';
+                        } else {
+                          // 일반 장비
+                          destLabel = `→ ${destDev.name}·${destConn.to_port}`;
+                          destColor = 'text-neutral-400';
+                        }
+                      }
                       return (
                         <div key={p.name} className="flex items-center justify-end pointer-events-auto" style={{ height: PORT_H }}>
                           <div className="flex-1 flex items-center justify-end gap-1.5 min-w-0 mr-2">
+                            {destLabel && (
+                              <span className={`text-[8.5px] ${destColor} truncate font-mono opacity-80`} title={`연결됨: ${destDev?.name} / ${destConn?.to_port}`}>
+                                {destLabel}
+                              </span>
+                            )}
                             {meta?.label && <span className="text-[9.5px] text-neutral-500 truncate text-right">{meta.label}</span>}
                             {isPgm && (
                               <span className="text-[8.5px] px-1.5 py-[1px] rounded font-mono font-bold"
@@ -1938,6 +2070,62 @@ export default function SignalFlowMap() {
                     )}
                   </div>
                 )}
+              </div>
+
+              {/* 라우터/패치베이 연결 배지 바 */}
+              {hubConnections.length > 0 && (
+                <div
+                  data-ui
+                  className="absolute flex flex-col gap-0.5 pointer-events-auto"
+                  style={{
+                    left: d.x + w + 6,
+                    top: d.y,
+                    maxWidth: 180,
+                    zIndex: 6,
+                  }}
+                >
+                  {hubConnections.map(hc => {
+                    const isRouter = hc.hub.role === 'router';
+                    const isActive = inspectHubs.has(hc.hub.id);
+                    let label: string;
+                    if (isRouter) {
+                      label = `${hc.hub.inputs.length}x${hc.hub.outputs.length} R/S ${hc.hubPort}`;
+                    } else {
+                      // hc.dir은 'in' 고정 — hub의 OUT 쪽 포트 인덱스
+                      const idx = hubPortIndex(hc.hub, hc.hubPort, true);
+                      label = `${hc.hub.name}-${String(idx).padStart(2, '0')}`;
+                    }
+                    return (
+                      <button
+                        key={hc.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setInspectHubs(prev => {
+                            const next = new Set(prev);
+                            if (next.has(hc.hub.id)) next.delete(hc.hub.id);
+                            else next.add(hc.hub.id);
+                            return next;
+                          });
+                        }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        className={`flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] font-mono font-medium transition text-left ${
+                          isActive
+                            ? isRouter
+                              ? 'bg-fuchsia-500 text-white border border-fuchsia-400 shadow-md shadow-fuchsia-500/40'
+                              : 'bg-teal-500 text-white border border-teal-400 shadow-md shadow-teal-500/40'
+                            : isRouter
+                              ? 'bg-fuchsia-500/15 text-fuchsia-200 border border-fuchsia-500/30 hover:bg-fuchsia-500/30'
+                              : 'bg-teal-500/15 text-teal-200 border border-teal-500/30 hover:bg-teal-500/30'
+                        }`}
+                        title={`수신: ${hc.hub.name}/${hc.hubPort} → ${hc.myPort}${isActive ? '\n(클릭 → 선 숨기기)' : '\n(클릭 → 연결선 표시)'}`}
+                      >
+                        <span className="text-[8px] opacity-75 shrink-0">←</span>
+                        <span className="truncate">{label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
               </div>
             );
           })}
