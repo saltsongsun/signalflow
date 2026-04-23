@@ -3,6 +3,7 @@
 create table if not exists public.devices (
   id text primary key,
   name text not null,
+  model text,
   type text not null check (type in ('video', 'audio', 'combined')),
   role text default 'standard',
   "pgmPort" text,
@@ -43,6 +44,7 @@ create table if not exists public.layers (
 );
 
 -- idempotent column additions
+alter table public.devices add column if not exists model text;
 alter table public.devices add column if not exists width double precision;
 alter table public.devices add column if not exists height double precision;
 alter table public.devices add column if not exists "inputsMeta" jsonb not null default '{}'::jsonb;

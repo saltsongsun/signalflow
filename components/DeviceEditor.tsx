@@ -21,6 +21,7 @@ const TYPE_ACCENT = {
 
 export default function DeviceEditor({ device, layers, onSave, onDelete, onDuplicate, onClose }: Props) {
   const [name, setName] = useState(device.name);
+  const [model, setModel] = useState(device.model ?? '');
   const [type, setType] = useState<Device['type']>(device.type);
   const [role, setRole] = useState<DeviceRole>(device.role ?? 'standard');
   const [pgmPort, setPgmPort] = useState<string>(device.pgmPort ?? '');
@@ -37,6 +38,7 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onDupli
 
   useEffect(() => {
     setName(device.name);
+    setModel(device.model ?? '');
     setType(device.type);
     setRole(device.role ?? 'standard');
     setPgmPort(device.pgmPort ?? '');
@@ -98,6 +100,7 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onDupli
     });
     onSave({
       name: name.trim() || device.name,
+      model: model.trim() || undefined,
       type, role,
       pgmPort: role === 'switcher' ? (pgmPort || undefined) : undefined,
       normals: role === 'patchbay' ? normals : undefined,
@@ -209,12 +212,27 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onDupli
 
       <div className="p-5 space-y-5">
         {/* Name */}
+        {/* Name */}
         <div>
           <label className="block text-[10px] uppercase tracking-[0.12em] text-neutral-500 mb-2 font-semibold">장비명</label>
           <input
             value={name}
             onChange={e => setName(e.target.value)}
+            placeholder="예: Main Video Switcher"
             className="w-full bg-white/5 border border-white/10 rounded-lg px-3.5 py-2.5 text-sm font-medium text-white focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none transition"
+          />
+        </div>
+
+        {/* Model */}
+        <div>
+          <label className="block text-[10px] uppercase tracking-[0.12em] text-neutral-500 mb-2 font-semibold">
+            모델명 <span className="text-neutral-600 normal-case tracking-normal ml-1 font-normal">제조사/품번 (장비카드에 작게 표시)</span>
+          </label>
+          <input
+            value={model}
+            onChange={e => setModel(e.target.value)}
+            placeholder="예: Sony XVS-G1 / Allen & Heath AVANTIS 48/16 / ADC PPS3"
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3.5 py-2 text-[13px] font-mono text-neutral-300 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none transition"
           />
         </div>
 

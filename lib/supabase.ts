@@ -39,6 +39,7 @@ export const DEVICE_ROLE_LABELS: Record<DeviceRole, string> = {
 export type Device = {
   id: string;
   name: string;
+  model?: string;        // 모델명 (예: "XVS-G1", "AVANTIS 48/16", "ADC PPS3")
   type: 'video' | 'audio' | 'combined';
   role?: DeviceRole;
   pgmPort?: string;

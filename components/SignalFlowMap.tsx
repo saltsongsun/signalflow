@@ -9,7 +9,7 @@ import CableEditor from './CableEditor';
 type TraceMode = 'both' | 'upstream' | 'downstream';
 
 const PORT_H = 22;
-const HEADER_H = 46;
+const HEADER_H = 50;
 const PADDING_Y = 14;
 const DRAG_THRESHOLD = 4;
 
@@ -978,7 +978,17 @@ export default function SignalFlowMap() {
                         >{roleIcon} {DEVICE_ROLE_LABELS[role]}</span>
                       )}
                     </div>
-                    <div className="text-[9px] text-neutral-500 uppercase tracking-[0.1em] font-medium">{d.type}</div>
+                    <div className="flex items-center gap-1.5 min-w-0 mt-[1px]">
+                      <span className="text-[9px] text-neutral-500 uppercase tracking-[0.1em] font-medium shrink-0">{d.type}</span>
+                      {d.model && (
+                        <>
+                          <span className="text-neutral-700 text-[8px]">·</span>
+                          <span className="text-[9.5px] font-mono text-neutral-400/90 truncate" title={d.model}>
+                            {d.model}
+                          </span>
+                        </>
+                      )}
+                    </div>
                   </div>
                   {editMode && (
                     <div className="text-[9px] text-neutral-600 font-mono opacity-60 shrink-0">{w}×{Math.round(h)}</div>
