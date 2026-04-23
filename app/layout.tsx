@@ -3,7 +3,7 @@ import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
   title: 'Signal Flow Map',
-  description: 'UHD Broadcast Signal Flow Map - 실시간 협업',
+  description: 'UHD Broadcast Signal Flow Map',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
