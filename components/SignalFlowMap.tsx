@@ -134,6 +134,8 @@ export default function SignalFlowMap() {
   const [traceMode, setTraceMode] = useState<TraceMode>('both');
   // 라우터/패치베이 연결선 표시 토글 — 이 Set에 포함된 장비만 라인 표시
   const [inspectHubs, setInspectHubs] = useState<Set<string>>(new Set());
+  // 도면에 패치베이 카드/관련 연결선 숨김 토글 — 기본 ON
+  const [hidePatchbay, setHidePatchbay] = useState<boolean>(true);
   const [editingDevice, setEditingDevice] = useState<Device | null>(null);
   const [editingCable, setEditingCable] = useState<Connection | null>(null);
   const [showLayerPanel, setShowLayerPanel] = useState(false);
@@ -511,6 +513,79 @@ export default function SignalFlowMap() {
     });
     return m;
   }, [devices, visibleLayerIds]);
+
+  // 패치베이 IN → OUT 매핑: 수동 패치(is_patch=true) > normals (IN ↔ OUT)
+  // 결과: 한 번의 IN 포트에 대해 "그 신호가 패치베이 내부에서 어느 OUT 포트로 나가는가"
+  const patchbayInternalMap = useMemo(() => {
+    const m = new Map<string, string>(); // "pbId:inPort" → outPort
+    devices.forEach(d => {
+      if (d.role !== 'patchbay') return;
+      // normals: IN → OUT 기본 매핑 (있으면)
+      Object.entries(d.normals ?? {}).forEach(([inPort, outPort]) => {
+        m.set(`${d.id}:${inPort}`, outPort);
+      });
+    });
+    // 수동 패치가 normals 덮어씀
+    connections.forEach(c => {
+      if (c.from_device === c.to_device && c.is_patch) {
+        // self-loop 패치: normal 구조에선 "내부 IN → OUT"의 의미로 저장되어 있음
+        // DB 구조: from_port=OUT, to_port=IN 이므로 IN 포트 기준 매핑
+        m.set(`${c.from_device}:${c.to_port}`, c.from_port);
+      }
+    });
+    return m;
+  }, [devices, connections]);
+
+  // OUT 포트에서 시작해 "패치베이를 투명하게 통과"한 뒤의 최종 도착점 추적
+  // 결과: 체인(경유 노드 목록) + 최종 도착 Device/Connection
+  //   예) Switcher OUT → Patchbay#1 IN-05 →(normal) OUT-05 → MAIN PGM IN-1
+  //   → chain: [{hub: Patchbay#1, inPort: 'IN-05', outPort: 'OUT-05'}]
+  //     finalDev: MAIN PGM, finalPort: 'SDI-1'
+  type PatchHop = { hub: Device; inPort: string; outPort: string };
+  type FollowedPath = { chain: PatchHop[]; finalDev: Device; finalPort: string } | null;
+
+  const followPathFromOut = useMemo(() => {
+    const cache = new Map<string, FollowedPath>(); // "deviceId:portName" → result
+
+    // 재귀적으로 체인 수집 (최대 깊이 8)
+    const follow = (fromDevId: string, fromPort: string, depth: number, seen: Set<string>): FollowedPath => {
+      const key = `${fromDevId}:${fromPort}`;
+      if (depth > 8) return null;
+      if (seen.has(key)) return null;
+      const nextSeen = new Set(seen);
+      nextSeen.add(key);
+
+      const info = destInfoByOutPort.get(key);
+      if (!info) return null;
+      const { destDev, destConn } = info;
+
+      // 패치베이가 아니면 여기가 최종 도착점
+      if (destDev.role !== 'patchbay') {
+        return { chain: [], finalDev: destDev, finalPort: destConn.to_port };
+      }
+
+      // 패치베이면 IN → OUT 내부 매핑으로 따라감
+      const inPort = destConn.to_port;
+      const outPort = patchbayInternalMap.get(`${destDev.id}:${inPort}`);
+      if (!outPort) return null; // 내부 연결 없음 (normal도 patch도 없음) → 도착하지 못함
+
+      const sub = follow(destDev.id, outPort, depth + 1, nextSeen);
+      if (!sub) return null;
+      return {
+        chain: [{ hub: destDev, inPort, outPort }, ...sub.chain],
+        finalDev: sub.finalDev,
+        finalPort: sub.finalPort,
+      };
+    };
+
+    return (deviceId: string, portName: string): FollowedPath => {
+      const key = `${deviceId}:${portName}`;
+      if (cache.has(key)) return cache.get(key)!;
+      const result = follow(deviceId, portName, 0, new Set());
+      cache.set(key, result);
+      return result;
+    };
+  }, [destInfoByOutPort, patchbayInternalMap]);
 
   // ===== Global window listeners =====
   useEffect(() => {
@@ -1289,6 +1364,24 @@ export default function SignalFlowMap() {
             title="패치베이 관리 페이지"
           >⊟ 패치베이 <span className="font-mono opacity-70">{devices.filter(d => d.role === 'patchbay').length}</span></button>
 
+          {/* 도면에서 패치베이 숨김 토글 */}
+          {devices.some(d => d.role === 'patchbay') && (
+            <button
+              onClick={() => setHidePatchbay(v => !v)}
+              className={`px-2.5 py-1.5 text-[11px] font-medium rounded-lg border transition-all flex items-center gap-1.5 ${
+                hidePatchbay
+                  ? 'bg-teal-500 border-teal-400 text-white shadow-md shadow-teal-500/30'
+                  : 'bg-white/5 border-white/15 text-neutral-400 hover:bg-teal-500/20 hover:text-teal-200 hover:border-teal-500/40'
+              }`}
+              title={hidePatchbay
+                ? '패치베이가 도면에서 숨겨져 있음 — 클릭하면 표시됨'
+                : '패치베이가 도면에 표시됨 — 클릭하면 숨겨짐'}
+            >
+              <span className="font-mono text-[12px]">{hidePatchbay ? '⊘' : '⊟'}</span>
+              <span>도면 {hidePatchbay ? '숨김' : '표시'}</span>
+            </button>
+          )}
+
           <button
             onClick={() => setShowWallboxMgr(true)}
             className="px-3 py-1.5 text-[11px] font-medium rounded-lg border bg-white/5 border-amber-500/30 text-amber-300 hover:text-white hover:bg-amber-500/20 transition-all"
@@ -1574,6 +1667,10 @@ export default function SignalFlowMap() {
               // (trace 중이면 traced 연결은 예외로 보여줌)
               const fromIsHub = from.role === 'router' || from.role === 'patchbay';
               const toIsHub = to.role === 'router' || to.role === 'patchbay';
+              const fromIsPb = from.role === 'patchbay';
+              const toIsPb = to.role === 'patchbay';
+              // hidePatchbay 모드: 패치베이 관련 연결선은 전부 숨김 (카드가 없으니 선도 허공)
+              if (hidePatchbay && (fromIsPb || toIsPb)) return null;
               const hubConn = fromIsHub || toIsHub;
               if (hubConn) {
                 const inspectedHere =
@@ -1738,6 +1835,7 @@ export default function SignalFlowMap() {
           {/* Devices */}
           {devices.map(d => {
             if (!isDeviceVisible(d)) return null;
+            if (hidePatchbay && d.role === 'patchbay') return null;
             const color = TYPE_COLORS[d.type];
             const isSelected = selectedIds.has(d.id);
             const isTraceTarget = traceId === d.id;
@@ -2382,9 +2480,79 @@ export default function SignalFlowMap() {
                   }}
                 >
                   {outVis.map((p) => {
+                    // hidePatchbay 모드: follow 로직으로 체인 전체 구성
+                    // 일반 모드: 다음 홉만 표시
+                    if (hidePatchbay) {
+                      const followed = followPathFromOut(d.id, p.name);
+                      if (!followed) {
+                        // 패치베이 안에서 신호가 끝나거나 연결 없음 → 빈 자리
+                        // 직접 연결이 패치베이 아닌 장비면 그걸 표시
+                        const info = destInfoByOutPort.get(`${d.id}:${p.name}`);
+                        if (!info || info.destDev.role === 'patchbay') {
+                          // 패치베이로만 연결된 포트 — 체인이 패치베이에서 끊겼다는 뜻 (normal/patch 없음)
+                          // 그래도 힌트는 주자: "→ Patchbay #1-05 (dead-end)"
+                          if (info && info.destDev.role === 'patchbay') {
+                            const pbDev = info.destDev;
+                            const pbIdx = pbDev.inputs.indexOf(info.destConn.to_port);
+                            return (
+                              <div key={p.name} className="flex items-center" style={{ height: PORT_H }}>
+                                <div
+                                  className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] font-mono font-medium text-left border bg-teal-500/10 text-teal-400/60 border-teal-500/20"
+                                  title={`${pbDev.name}에서 끝남 — normal/patch 없음`}
+                                >
+                                  <span className="text-[8px] opacity-75 shrink-0">→</span>
+                                  <span className="truncate">{pbDev.name}-{String(pbIdx >= 0 ? pbIdx + 1 : 0).padStart(2, '0')} · 끊김</span>
+                                </div>
+                              </div>
+                            );
+                          }
+                          return <div key={p.name} style={{ height: PORT_H }}></div>;
+                        }
+                      }
+                      if (followed) {
+                        // 체인 렌더: → Patchbay#1-05 → Patchbay#2-07 → MAIN PGM·SDI-1
+                        const { chain, finalDev, finalPort } = followed;
+                        const finalIsRouter = finalDev.role === 'router';
+                        const bgClass = finalIsRouter
+                          ? 'bg-fuchsia-500/15 text-fuchsia-200 border-fuchsia-500/30 hover:bg-fuchsia-500/30'
+                          : chain.length > 0
+                            ? 'bg-teal-500/15 text-teal-200 border-teal-500/30 hover:bg-teal-500/30'
+                            : 'bg-white/5 text-neutral-300 border-white/15';
+
+                        const finalLabel = finalIsRouter
+                          ? `${finalDev.inputs.length}x${finalDev.outputs.length} R/S ${finalPort}`
+                          : `${finalDev.name}·${finalPort}`;
+
+                        return (
+                          <div key={p.name} className="flex items-center" style={{ height: PORT_H }}>
+                            <div
+                              className={`flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] font-mono font-medium text-left border whitespace-nowrap ${bgClass}`}
+                              title={chain.length > 0
+                                ? `경로: ${chain.map(h => `${h.hub.name}[${h.inPort}→${h.outPort}]`).join(' → ')} → ${finalDev.name}/${finalPort}`
+                                : `${finalDev.name}/${finalPort}`}
+                            >
+                              {chain.map((hop, i) => {
+                                const pbIdx = hop.hub.inputs.indexOf(hop.inPort);
+                                return (
+                                  <span key={i} className="flex items-center gap-1">
+                                    <span className="text-[8px] opacity-75 shrink-0">→</span>
+                                    <span>{hop.hub.name}-{String(pbIdx >= 0 ? pbIdx + 1 : 0).padStart(2, '0')}</span>
+                                  </span>
+                                );
+                              })}
+                              <span className="flex items-center gap-1">
+                                <span className="text-[8px] opacity-75 shrink-0">→</span>
+                                <span>{finalLabel}</span>
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      }
+                    }
+
+                    // 일반 모드: 바로 다음 홉만 표시 (기존 로직)
                     const info = destInfoByOutPort.get(`${d.id}:${p.name}`);
                     if (!info) {
-                      // 연결 없음 - 빈 자리 유지 (정렬용)
                       return <div key={p.name} style={{ height: PORT_H }}></div>;
                     }
                     const { destDev, destConn } = info;
