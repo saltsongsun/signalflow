@@ -25,7 +25,7 @@ export type PortInfo = {
 };
 
 // 장비 역할
-export const DEVICE_ROLES = ['standard', 'switcher', 'router', 'splitter', 'patchbay'] as const;
+export const DEVICE_ROLES = ['standard', 'switcher', 'router', 'splitter', 'patchbay', 'wallbox'] as const;
 export type DeviceRole = typeof DEVICE_ROLES[number];
 
 export const DEVICE_ROLE_LABELS: Record<DeviceRole, string> = {
@@ -34,6 +34,7 @@ export const DEVICE_ROLE_LABELS: Record<DeviceRole, string> = {
   router:   '라우터',
   splitter: '스플리터',
   patchbay: '패치베이',
+  wallbox:  '월박스',
 };
 
 export type Device = {
@@ -47,6 +48,9 @@ export type Device = {
   // 예: { 'IN-01': 'OUT-01', 'IN-02': 'OUT-02' }
   // 'normal' 상태에서는 이 매핑대로 신호가 통과
   normals?: Record<string, string>;
+  // wallbox 전용: 설치 장소 + 방번호
+  location?: string;   // 예: '주경기장', '중계석#1', 'PC 존', '선수대기실-1'
+  roomNumber?: string; // 예: 'WB-101', 'OBS-01'
   x: number;
   y: number;
   width?: number;

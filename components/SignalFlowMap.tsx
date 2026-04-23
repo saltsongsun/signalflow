@@ -6,6 +6,7 @@ import DeviceEditor from './DeviceEditor';
 import LayerPanel from './LayerPanel';
 import CableEditor from './CableEditor';
 import PatchbayManager from './PatchbayManager';
+import WallboxManager from './WallboxManager';
 
 type TraceMode = 'both' | 'upstream' | 'downstream';
 
@@ -90,6 +91,7 @@ export default function SignalFlowMap() {
   const [editingCable, setEditingCable] = useState<Connection | null>(null);
   const [showLayerPanel, setShowLayerPanel] = useState(false);
   const [showPatchbayMgr, setShowPatchbayMgr] = useState(false);
+  const [showWallboxMgr, setShowWallboxMgr] = useState(false);
   const [pendingFrom, setPendingFrom] = useState<{ device: string; port: string; connType?: ConnectionType } | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
@@ -654,6 +656,12 @@ export default function SignalFlowMap() {
             title="패치베이 관리 페이지"
           >⊟ 패치베이 <span className="font-mono opacity-70">{devices.filter(d => d.role === 'patchbay').length}</span></button>
 
+          <button
+            onClick={() => setShowWallboxMgr(true)}
+            className="px-3 py-1.5 text-[11px] font-medium rounded-lg border bg-white/5 border-amber-500/30 text-amber-300 hover:text-white hover:bg-amber-500/20 transition-all"
+            title="월박스 관리 페이지"
+          >▦ 월박스 <span className="font-mono opacity-70">{devices.filter(d => d.role === 'wallbox').length}</span></button>
+
           {!editMode && traceId && (
             <div className="flex items-center gap-0.5 bg-sky-500/10 border border-sky-500/30 rounded-lg p-0.5">
               {(['both','upstream','downstream'] as TraceMode[]).map(m => (
@@ -924,8 +932,9 @@ export default function SignalFlowMap() {
             const inVis = visiblePorts(d, 'in', visibleLayerIds);
             const outVis = visiblePorts(d, 'out', visibleLayerIds);
             const role = d.role ?? 'standard';
-            const roleIcon = role === 'switcher' ? '⇆' : role === 'router' ? '⇅' : role === 'splitter' ? '⇶' : role === 'patchbay' ? '⊟' : null;
+            const roleIcon = role === 'switcher' ? '⇆' : role === 'router' ? '⇅' : role === 'splitter' ? '⇶' : role === 'patchbay' ? '⊟' : role === 'wallbox' ? '▦' : null;
             const isPatchbay = role === 'patchbay';
+            const isWallbox = role === 'wallbox';
 
             const borderColor = isSelected ? '#fbbf24' : isTraceTarget ? color.glow : editMode ? 'rgba(251,191,36,0.35)' : color.border;
             const borderWidth = isSelected || isTraceTarget ? 2 : 1.2;
@@ -943,8 +952,10 @@ export default function SignalFlowMap() {
                   left: d.x, top: d.y, width: w, minHeight: h,
                   background: isPatchbay
                     ? `linear-gradient(165deg, rgba(20,184,166,0.15) 0%, rgba(8,12,12,0.96) 40%, rgba(4,6,6,0.98) 100%)`
+                    : isWallbox
+                    ? `linear-gradient(165deg, rgba(245,158,11,0.12) 0%, rgba(12,10,6,0.96) 40%, rgba(6,4,2,0.98) 100%)`
                     : `linear-gradient(165deg, ${color.bg} 0%, rgba(10,10,12,0.96) 40%, rgba(4,4,6,0.98) 100%)`,
-                  border: `${borderWidth}px solid ${isPatchbay && !isSelected && !isTraceTarget ? 'rgba(20,184,166,0.4)' : borderColor}`,
+                  border: `${borderWidth}px solid ${isPatchbay && !isSelected && !isTraceTarget ? 'rgba(20,184,166,0.4)' : isWallbox && !isSelected && !isTraceTarget ? 'rgba(245,158,11,0.4)' : borderColor}`,
                   boxShadow: isSelected
                     ? `0 0 0 1px rgba(251,191,36,0.4), 0 0 30px rgba(251,191,36,0.45), 0 10px 30px rgba(0,0,0,0.5)`
                     : isTraceTarget
@@ -953,6 +964,8 @@ export default function SignalFlowMap() {
                     ? `0 0 24px ${color.glow}30, 0 8px 22px rgba(0,0,0,0.6)`
                     : isPatchbay
                     ? `0 0 18px rgba(20,184,166,0.15), 0 4px 16px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04)`
+                    : isWallbox
+                    ? `0 0 18px rgba(245,158,11,0.12), 0 4px 16px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04)`
                     : `0 4px 16px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04)`,
                   opacity: isDim ? 0.25 : 1,
                   cursor: editMode ? 'move' : 'pointer',
@@ -980,9 +993,9 @@ export default function SignalFlowMap() {
                         <span
                           className="text-[9px] px-1 py-[1px] rounded shrink-0 font-mono font-bold"
                           style={{
-                            background: 'rgba(16,185,129,0.15)',
-                            color: '#34D399',
-                            border: '0.5px solid rgba(52,211,153,0.4)',
+                            background: isWallbox ? 'rgba(245,158,11,0.15)' : isPatchbay ? 'rgba(20,184,166,0.15)' : 'rgba(16,185,129,0.15)',
+                            color: isWallbox ? '#FBBF24' : isPatchbay ? '#2DD4BF' : '#34D399',
+                            border: `0.5px solid ${isWallbox ? 'rgba(251,191,36,0.4)' : isPatchbay ? 'rgba(45,212,191,0.4)' : 'rgba(52,211,153,0.4)'}`,
                           }}
                           title={DEVICE_ROLE_LABELS[role]}
                         >{roleIcon} {DEVICE_ROLE_LABELS[role]}</span>
@@ -997,6 +1010,19 @@ export default function SignalFlowMap() {
                             {d.model}
                           </span>
                         </>
+                      )}
+                      {isWallbox && d.location && (
+                        <>
+                          <span className="text-neutral-700 text-[8px]">·</span>
+                          <span className="text-[9.5px] text-amber-300/90 truncate font-medium" title={`${d.location}${d.roomNumber ? ' · ' + d.roomNumber : ''}`}>
+                            📍 {d.location}
+                          </span>
+                        </>
+                      )}
+                      {isWallbox && d.roomNumber && (
+                        <span className="text-[8.5px] px-1 rounded font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 shrink-0" title="방번호">
+                          {d.roomNumber}
+                        </span>
                       )}
                     </div>
                   </div>
@@ -1264,6 +1290,16 @@ export default function SignalFlowMap() {
           connections={connections}
           layers={layers}
           onClose={() => setShowPatchbayMgr(false)}
+        />
+      )}
+
+      {showWallboxMgr && (
+        <WallboxManager
+          devices={devices}
+          connections={connections}
+          layers={layers}
+          onClose={() => setShowWallboxMgr(false)}
+          onEditDevice={(d) => { setShowWallboxMgr(false); setEditingDevice(d); }}
         />
       )}
 

@@ -22,6 +22,8 @@ const TYPE_ACCENT = {
 export default function DeviceEditor({ device, layers, onSave, onDelete, onDuplicate, onClose }: Props) {
   const [name, setName] = useState(device.name);
   const [model, setModel] = useState(device.model ?? '');
+  const [location, setLocation] = useState(device.location ?? '');
+  const [roomNumber, setRoomNumber] = useState(device.roomNumber ?? '');
   const [type, setType] = useState<Device['type']>(device.type);
   const [role, setRole] = useState<DeviceRole>(device.role ?? 'standard');
   const [pgmPort, setPgmPort] = useState<string>(device.pgmPort ?? '');
@@ -39,6 +41,8 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onDupli
   useEffect(() => {
     setName(device.name);
     setModel(device.model ?? '');
+    setLocation(device.location ?? '');
+    setRoomNumber(device.roomNumber ?? '');
     setType(device.type);
     setRole(device.role ?? 'standard');
     setPgmPort(device.pgmPort ?? '');
@@ -128,6 +132,8 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onDupli
     onSave({
       name: name.trim() || device.name,
       model: model.trim() || undefined,
+      location: role === 'wallbox' ? (location.trim() || undefined) : undefined,
+      roomNumber: role === 'wallbox' ? (roomNumber.trim() || undefined) : undefined,
       type, role,
       pgmPort: role === 'switcher' ? (pgmPort || undefined) : undefined,
       normals: role === 'patchbay' ? normals : undefined,
@@ -298,15 +304,15 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onDupli
           <label className="block text-[10px] uppercase tracking-[0.12em] text-neutral-500 mb-2 font-semibold">
             역할 <span className="text-neutral-600 normal-case tracking-normal ml-1">Device Role</span>
           </label>
-          <div className="grid grid-cols-5 gap-1 p-1 bg-white/5 rounded-lg border border-white/10">
+          <div className="grid grid-cols-6 gap-1 p-1 bg-white/5 rounded-lg border border-white/10">
             {DEVICE_ROLES.map(r => {
               const active = role === r;
-              const icon = r === 'switcher' ? '⇆' : r === 'router' ? '⇅' : r === 'splitter' ? '⇶' : r === 'patchbay' ? '⊟' : '◻';
+              const icon = r === 'switcher' ? '⇆' : r === 'router' ? '⇅' : r === 'splitter' ? '⇶' : r === 'patchbay' ? '⊟' : r === 'wallbox' ? '▦' : '◻';
               return (
                 <button
                   key={r}
                   onClick={() => setRole(r)}
-                  className={`py-1.5 text-[11px] rounded-md font-medium transition flex items-center justify-center gap-1 ${active ? 'bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-md shadow-emerald-500/30' : 'text-neutral-500 hover:text-white'}`}
+                  className={`py-1.5 text-[10.5px] rounded-md font-medium transition flex items-center justify-center gap-1 ${active ? 'bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-md shadow-emerald-500/30' : 'text-neutral-500 hover:text-white'}`}
                 >
                   <span className="text-[12px]">{icon}</span>
                   <span>{DEVICE_ROLE_LABELS[r]}</span>
@@ -319,6 +325,7 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onDupli
             {role === 'router' && '⇅ 모든 입력을 모든 출력으로 자유롭게 라우팅.'}
             {role === 'splitter' && '⇶ 하나의 입력을 여러 출력으로 분배 (VDA/DA).'}
             {role === 'patchbay' && '⊟ 물리 패치베이. 기본 배선(normal)과 수동 패치(patch) 구분.'}
+            {role === 'wallbox' && '▦ 벽면 판넬 월박스. 현장 장소별 포트 접점.'}
             {role === 'standard' && '◻ 일반 장비. 1:1 포트 매핑.'}
           </div>
         </div>
@@ -346,7 +353,58 @@ export default function DeviceEditor({ device, layers, onSave, onDelete, onDupli
           </div>
         )}
 
-        {/* Patchbay Normals (patchbay only) */}
+        {/* Wallbox 전용 설정 */}
+        {role === 'wallbox' && (
+          <div className="bg-gradient-to-br from-amber-500/10 to-transparent border border-amber-500/20 rounded-lg p-3 space-y-3">
+            <div className="flex items-center gap-2">
+              <span className="text-[15px]">▦</span>
+              <div>
+                <div className="text-[11px] font-bold text-amber-300">월박스 설정</div>
+                <div className="text-[10px] text-neutral-500">설치 장소와 방번호를 지정하면 월박스 관리 페이지에서 그룹핑됨</div>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block text-[10px] uppercase tracking-[0.12em] text-amber-400 mb-1 font-semibold">
+                  설치 장소
+                </label>
+                <input
+                  value={location}
+                  onChange={e => setLocation(e.target.value)}
+                  placeholder="예: 주경기장 / 중계석#1 / PC 존"
+                  list="wallbox-locations"
+                  className="w-full bg-neutral-900 border border-amber-500/30 rounded px-3 py-1.5 text-[12px] text-amber-100 focus:border-amber-400 focus:ring-2 focus:ring-amber-500/20 focus:outline-none"
+                />
+                <datalist id="wallbox-locations">
+                  <option value="주경기장" />
+                  <option value="보조경기장" />
+                  <option value="중계석#1" />
+                  <option value="중계석#2" />
+                  <option value="PC 존" />
+                  <option value="크로마실" />
+                  <option value="선수대기실-1" />
+                  <option value="선수대기실-2" />
+                  <option value="선수대기실-3" />
+                  <option value="A팀 선수석" />
+                  <option value="B팀 선수석" />
+                  <option value="부조정실" />
+                  <option value="음저버" />
+                </datalist>
+              </div>
+              <div>
+                <label className="block text-[10px] uppercase tracking-[0.12em] text-amber-400 mb-1 font-semibold">
+                  방 번호 / 태그
+                </label>
+                <input
+                  value={roomNumber}
+                  onChange={e => setRoomNumber(e.target.value)}
+                  placeholder="예: WB-101, OBS-01"
+                  className="w-full bg-neutral-900 border border-amber-500/30 rounded px-3 py-1.5 text-[12px] font-mono text-amber-100 focus:border-amber-400 focus:ring-2 focus:ring-amber-500/20 focus:outline-none"
+                />
+              </div>
+            </div>
+          </div>
+        )}
         {role === 'patchbay' && (
           <div className="bg-gradient-to-br from-teal-500/10 to-transparent border border-teal-500/20 rounded-lg p-3 space-y-2.5">
             <div>

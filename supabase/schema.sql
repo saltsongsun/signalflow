@@ -8,6 +8,8 @@ create table if not exists public.devices (
   role text default 'standard',
   "pgmPort" text,
   normals jsonb not null default '{}'::jsonb,
+  location text,
+  "roomNumber" text,
   x double precision not null default 0,
   y double precision not null default 0,
   width double precision,
@@ -52,6 +54,8 @@ alter table public.devices add column if not exists "outputsMeta" jsonb not null
 alter table public.devices add column if not exists role text default 'standard';
 alter table public.devices add column if not exists "pgmPort" text;
 alter table public.devices add column if not exists normals jsonb not null default '{}'::jsonb;
+alter table public.devices add column if not exists location text;
+alter table public.devices add column if not exists "roomNumber" text;
 alter table public.connections add column if not exists conn_type text;
 alter table public.connections add column if not exists tie_line text;
 alter table public.connections add column if not exists is_patch boolean default false;
