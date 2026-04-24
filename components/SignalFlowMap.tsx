@@ -1060,6 +1060,35 @@ export default function SignalFlowMap() {
     });
   };
 
+  // ===== 보기 모드 퀵 액션 =====
+  // 스위처: PGM 포트 설정 (OUT 중 하나)
+  const setSwitcherPgm = async (deviceId: string, port: string) => {
+    const d = devById.get(deviceId);
+    if (!d) return;
+    const prev = d.pgmPort;
+    const next = prev === port ? null : port; // 동일 토글이면 해제
+    setDevices(prevDs => prevDs.map(x => x.id === deviceId ? { ...x, pgmPort: next ?? undefined } : x));
+    await (supabase as any).from('devices').update({ pgmPort: next }).eq('id', deviceId);
+    pushUndo(`"${d.name}" PGM 되돌리기`, async () => {
+      setDevices(ps => ps.map(x => x.id === deviceId ? { ...x, pgmPort: prev } : x));
+      await (supabase as any).from('devices').update({ pgmPort: prev ?? null }).eq('id', deviceId);
+    });
+  };
+
+  // 스위처/라우터: selectedInput 변경
+  const setSelectedInput = async (deviceId: string, inputPort: string) => {
+    const d = devById.get(deviceId);
+    if (!d) return;
+    const prev = d.selectedInput;
+    if (prev === inputPort) return;
+    setDevices(prevDs => prevDs.map(x => x.id === deviceId ? { ...x, selectedInput: inputPort } : x));
+    await (supabase as any).from('devices').update({ selectedInput: inputPort }).eq('id', deviceId);
+    pushUndo(`"${d.name}" 입력 되돌리기`, async () => {
+      setDevices(ps => ps.map(x => x.id === deviceId ? { ...x, selectedInput: prev } : x));
+      await (supabase as any).from('devices').update({ selectedInput: prev ?? null }).eq('id', deviceId);
+    });
+  };
+
   const onPortClick = async (e: React.MouseEvent, deviceId: string, port: string, isOutput: boolean) => {
     e.stopPropagation();
     if (!editMode) return;
@@ -2259,17 +2288,32 @@ export default function SignalFlowMap() {
                       const lid = meta?.layerId;
                       const layer = lid ? layerById.get(lid) : undefined;
                       const portColor = layer?.color ?? color.main;
+                      const isSel = d.selectedInput === p.name;
+                      // 보기 모드에서 스위처/라우터/디스플레이의 IN을 클릭해 활성 입력 변경
+                      const canSelect = !editMode && (d.role === 'switcher' || d.role === 'router' || d.role === 'display');
                       return (
-                        <div key={p.name} className="flex items-center" style={{ height: PORT_H }}>
+                        <div
+                          key={p.name}
+                          className={`flex items-center ${canSelect ? 'cursor-pointer hover:bg-cyan-500/10 rounded' : ''} ${isSel && canSelect ? 'bg-cyan-500/15' : ''}`}
+                          style={{ height: PORT_H }}
+                          onClick={canSelect ? (e) => { e.stopPropagation(); setSelectedInput(d.id, p.name); } : undefined}
+                          title={canSelect ? `클릭하여 활성 입력으로 선택` : undefined}
+                        >
                           <button
                             data-port
                             onMouseDown={onPortMouseDown}
                             onClick={e => onPortClick(e, d.id, p.name, false)}
-                            className="w-3 h-3 rounded-full -ml-[6px] hover:scale-[1.6] transition-transform ring-2 ring-black/40 shrink-0"
-                            style={{ background: portColor, boxShadow: `0 0 8px ${portColor}, inset 0 1px 1px rgba(255,255,255,0.3)` }}
+                            className={`w-3 h-3 rounded-full -ml-[6px] hover:scale-[1.6] transition-transform ring-2 shrink-0 ${isSel && canSelect ? 'ring-cyan-300/70' : 'ring-black/40'}`}
+                            style={{ background: isSel && canSelect ? '#22d3ee' : portColor, boxShadow: `0 0 ${isSel && canSelect ? '12px' : '8px'} ${isSel && canSelect ? '#22d3ee' : portColor}, inset 0 1px 1px rgba(255,255,255,0.3)` }}
                             title={meta?.label ?? p.name}
                           ></button>
                           <div className="ml-2 flex-1 flex items-center gap-1.5 min-w-0">
+                            {isSel && canSelect && (
+                              <span className="text-[9.5px] px-1.5 py-[2px] rounded font-mono font-bold shrink-0"
+                                style={{ background: 'linear-gradient(90deg, #0891b2, #06b6d4)', color: 'white', boxShadow: '0 0 8px rgba(34,211,238,0.6)' }}>
+                                ● ON
+                              </span>
+                            )}
                             <span className="text-[11.5px] text-neutral-200 font-mono truncate font-medium">{p.name}</span>
                             {ct && (
                               <span className="text-[9.5px] px-1.5 py-[2px] rounded font-mono font-semibold shrink-0"
@@ -2295,8 +2339,15 @@ export default function SignalFlowMap() {
                       const portColor = layer?.color ?? color.main;
                       const isPending = pendingFrom?.device === d.id && pendingFrom?.port === p.name;
                       const isPgm = d.role === 'switcher' && d.pgmPort === p.name;
+                      const isSwitcherViewMode = !editMode && d.role === 'switcher';
                       return (
-                        <div key={p.name} className="flex items-center justify-end" style={{ height: PORT_H }}>
+                        <div
+                          key={p.name}
+                          className={`flex items-center justify-end ${isSwitcherViewMode ? 'cursor-pointer hover:bg-emerald-500/10 rounded' : ''}`}
+                          style={{ height: PORT_H }}
+                          onClick={isSwitcherViewMode ? (e) => { e.stopPropagation(); setSwitcherPgm(d.id, p.name); } : undefined}
+                          title={isSwitcherViewMode ? `클릭하여 ${p.name}을(를) PGM으로 지정 / 해제` : undefined}
+                        >
                           <div className="flex-1 flex items-center justify-end gap-1.5 min-w-0 mr-2">
                             {meta?.label && <span className="text-[10.5px] text-neutral-500 truncate text-right">{meta.label}</span>}
                             {isPgm && (
