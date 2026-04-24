@@ -437,7 +437,6 @@ export default function PatchbayManager({ devices, connections, layers, racks, o
               const isDragFrom = drag?.fromDeviceId === pb.id && drag.fromPortName === portName;
               const patched = patches.has(portName);
               const hasExt = !!connections.find(c => c.from_device === pb.id && c.from_port === portName);
-              const meta = pb.outputsMeta?.[portName];
               const isEditing = editingLabel?.pbId === pb.id && editingLabel?.dir === 'out' && editingLabel?.portName === portName;
               return (
                 <div
