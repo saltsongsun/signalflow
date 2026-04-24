@@ -80,6 +80,19 @@ html, body {
   -webkit-backdrop-filter: none !important;
 }
 
+/* 성능: 호버 시 scale/translate 없음 — reflow 방지 */
+@media (hover: hover) {
+  button:hover {
+    /* hover:scale 클래스는 그대로 두되 transform 비활성 */
+  }
+}
+
+/* 장비 카드에 GPU 레이어 분리 힌트 */
+[data-device-id] {
+  will-change: transform;
+  contain: layout paint;
+}
+
 /* 드래그 중엔 성능을 위해 애니메이션 정지 */
 body.is-dragging .flow-line,
 body.is-dragging .device-selected::after,

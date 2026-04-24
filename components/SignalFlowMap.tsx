@@ -8,6 +8,7 @@ import CableEditor from './CableEditor';
 import PatchbayManager from './PatchbayManager';
 import WallboxManager from './WallboxManager';
 import BulkEditor from './BulkEditor';
+import ConnectionCanvas from './ConnectionCanvas';
 
 type TraceMode = 'both' | 'upstream' | 'downstream';
 
@@ -161,6 +162,15 @@ export default function SignalFlowMap() {
 
   const [draggingCursor, setDraggingCursor] = useState<'none' | 'canvas' | 'marquee' | 'device'>('none');
   const [marqueeRect, setMarqueeRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+
+  // 캔버스 크기 추적 (window resize 대응)
+  const [viewport, setViewport] = useState({ w: 1920, h: 1080 });
+  useEffect(() => {
+    const update = () => setViewport({ w: window.innerWidth, h: window.innerHeight });
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
 
   // 터치/핀치 상태
   const pinchRef = useRef<{
@@ -608,6 +618,66 @@ export default function SignalFlowMap() {
     });
     return m;
   }, [devices, visibleLayerIds]);
+
+  // ===== Canvas 렌더링용 cable data =====
+  const canvasCables = useMemo(() => {
+    const list: Array<{
+      x1: number; y1: number; x2: number; y2: number;
+      color: string; strokeWidth: number;
+      isTraced: boolean; isPatch: boolean; isPgm: boolean;
+      dashArray?: number[];
+    }> = [];
+
+    connections.forEach(c => {
+      if (!isConnVisible(c)) return;
+      if (c.from_device === c.to_device && c.is_patch) return;
+      if (traceId && !traced.connections.has(c.id)) return;
+      const from = devById.get(c.from_device);
+      const to = devById.get(c.to_device);
+      if (!from || !to) return;
+
+      const fromIsHub = from.role === 'router' || from.role === 'patchbay';
+      const toIsHub = to.role === 'router' || to.role === 'patchbay';
+      if (hidePatchbay && (fromIsHub || toIsHub)) return;
+      const hubConn = fromIsHub || toIsHub;
+      if (hubConn) {
+        const inspectedHere =
+          (fromIsHub && inspectHubs.has(from.id)) ||
+          (toIsHub && inspectHubs.has(to.id));
+        const tracedHere = traceId && traced.connections.has(c.id);
+        if (!inspectedHere && !tracedHere) return;
+      }
+
+      const outVis = visiblePortsCache.get(from.id)?.out ?? [];
+      const inVis = visiblePortsCache.get(to.id)?.in ?? [];
+      const fi = outVis.findIndex(p => p.name === c.from_port);
+      const ti = inVis.findIndex(p => p.name === c.to_port);
+      if (fi < 0 || ti < 0) return;
+
+      const x1 = from.x + deviceWidth(from);
+      const y1 = portYFromRenderIdx(from, fi);
+      const x2 = to.x;
+      const y2 = portYFromRenderIdx(to, ti);
+
+      const fromLayerId = from.outputsMeta?.[c.from_port]?.layerId;
+      const layerColor = fromLayerId ? layerById.get(fromLayerId)?.color : undefined;
+      const baseColor = layerColor ?? (from.type === 'audio' ? TYPE_COLORS.audio.main : from.type === 'combined' ? TYPE_COLORS.combined.main : TYPE_COLORS.video.main);
+      const isPgm = from.role === 'switcher' && from.pgmPort === c.from_port;
+      const isPatch = c.is_patch === true;
+      const isTraced = traced.connections.has(c.id);
+      const color = isPatch ? '#F97316' : baseColor;
+
+      list.push({
+        x1, y1, x2, y2, color,
+        strokeWidth: isPgm ? 2.2 : isPatch ? 2 : 1.4,
+        isTraced, isPatch, isPgm,
+        dashArray: isPatch ? [5, 4] : undefined,
+      });
+    });
+
+    return list;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connections, devices, traced, hidePatchbay, inspectHubs, visiblePortsCache, traceId, layerById]);
 
   // 허브(패치베이/라우터) IN → OUT 매핑
   // 패치베이: normals(IN→OUT) + 수동 패치(OUT,IN)
@@ -1747,21 +1817,33 @@ export default function SignalFlowMap() {
         onTouchMove={onCanvasTouchMove}
         onTouchEnd={onCanvasTouchEnd}
         style={{
-          backgroundImage: 'radial-gradient(circle at 50% 50%, rgba(168,85,247,0.015) 0%, transparent 50%), radial-gradient(circle, rgba(255,255,255,0.035) 1px, transparent 1px)',
-          backgroundSize: `auto, ${24 * scale}px ${24 * scale}px`,
-          backgroundPosition: `0 0, ${offset.x}px ${offset.y}px`,
+          backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px)',
+          backgroundSize: `${24 * scale}px ${24 * scale}px`,
+          backgroundPosition: `${offset.x}px ${offset.y}px`,
           touchAction: 'none',                        // 브라우저 기본 팬/줌 차단 → 우리가 처리
           WebkitUserSelect: 'none',
           userSelect: 'none',
           WebkitTouchCallout: 'none',
         }}
       >
+        {/* Connection Canvas — screen space에 그려 DOM scale 영향 없음 */}
+        <div style={{ position: 'absolute', top: 56, left: 0, right: 0, bottom: 0, overflow: 'hidden', pointerEvents: 'none' }}>
+          <ConnectionCanvas
+            width={viewport.w}
+            height={viewport.h - 56}
+            scale={scale}
+            offsetX={offset.x}
+            offsetY={offset.y - 56}
+            cables={canvasCables}
+          />
+        </div>
+
         <div style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`, transformOrigin: '0 0', width: '4000px', height: '3000px', position: 'relative' }}>
           {/* Connections */}
           <svg width="4000" height="3000" className="absolute inset-0" style={{ overflow: 'visible', pointerEvents: 'none' }}>
             <defs>
-              <filter id="glow"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-              <filter id="glow-strong"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+              <filter id="glow" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="1.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+              <filter id="glow-strong" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
             </defs>
 
             {/* 그룹 경계 박스 (연결선보다 뒤에) — trace 중엔 추적 장비만 포함 */}
@@ -1816,7 +1898,7 @@ export default function SignalFlowMap() {
               });
             })()}
 
-            {connections.map(c => {
+            {editMode && connections.map(c => {
               if (!isConnVisible(c)) return null;
               if (c.from_device === c.to_device && c.is_patch) return null;
               // Trace 중이면 traced가 아닌 연결은 즉시 컷 — 렌더 작업 절약
@@ -1873,30 +1955,28 @@ export default function SignalFlowMap() {
               return (
                 <g key={c.id} opacity={isDim ? 0.1 : 1} style={{ pointerEvents: 'none' }}>
                   {/* Trace 중에만 glow 레이어 — 평상시엔 생략해 성능 확보 */}
+                  {/* Trace 중에만 glow 레이어 */}
                   {isTraced && (
-                    <path d={path} stroke={cableColor} strokeWidth={isLive ? 7 : 6} fill="none"
-                          opacity={isLive ? 0.38 : 0.25} filter="url(#glow-strong)" />
+                    <path d={path} stroke={cableColor} strokeWidth={6} fill="none"
+                          opacity={0.3} />
                   )}
                   {/* 베이스 라인 */}
-                  <path d={path} stroke={cableColor} strokeWidth={isTraced ? (isLive ? 2.8 : 2.5) : isPgm ? 2.2 : isPatch ? 2 : 1.4}
+                  <path d={path} stroke={cableColor} strokeWidth={isTraced ? 3 : isPgm ? 2.2 : isPatch ? 2 : 1.4}
                         strokeDasharray={cableDash} fill="none"
-                        opacity={isTraced ? 1 : isPgm || isPatch ? 0.85 : 0.55}
-                        filter={isTraced ? 'url(#glow)' : undefined} />
-                  {/* 흐름 애니메이션 오버레이 */}
-                  <path
-                    d={path}
-                    stroke={cableColor}
-                    strokeWidth={isLive ? 2.8 : isPgm ? 3 : isTraced ? 2.5 : isPatch ? 2 : 1.4}
-                    fill="none"
-                    strokeLinecap="round"
-                    strokeDasharray={isTraced || isPatch ? "6 12" : undefined}
-                    className={isTraced ? "flow-line" : ""}
-                    style={{
-                      filter: isTraced ? 'drop-shadow(0 0 3px currentColor)' : undefined,
-                      animationDuration: isTraced ? (isLive ? '1.0s' : '1.2s') : undefined,
-                      opacity: isTraced || isPgm || isPatch ? 1 : 0.7,
-                    }}
-                  />
+                        opacity={isTraced ? 1 : isPgm || isPatch ? 0.85 : 0.55} />
+                  {/* 흐름 애니메이션 오버레이 — trace 중에만 */}
+                  {isTraced && (
+                    <path
+                      d={path}
+                      stroke={cableColor}
+                      strokeWidth={2.5}
+                      fill="none"
+                      strokeLinecap="round"
+                      strokeDasharray="6 12"
+                      className="flow-line"
+                      style={{ animationDuration: '1.2s' }}
+                    />
+                  )}
                   {/* 편집모드에선 클릭 가능한 넓은 투명 path (선 hit area) */}
                   {editMode && (
                     <path
@@ -2113,7 +2193,7 @@ export default function SignalFlowMap() {
                 onClick={e => onDeviceClickView(e, d)}
                 onMouseEnter={() => setHoveredId(d.id)}
                 onMouseLeave={() => setHoveredId(null)}
-                className={`absolute rounded-xl overflow-hidden transition-[opacity,box-shadow,transform] ${isSelected ? 'device-selected' : ''}`}
+                className={`absolute rounded-xl overflow-hidden ${isSelected ? 'device-selected' : ''}`}
                 style={(() => {
                   // 패치베이도 일반 카드로 렌더되므로 회전 없음 (관리 모드에서만 잭 형태)
                   const useBaseW = w;
@@ -2127,13 +2207,10 @@ export default function SignalFlowMap() {
                   return {
                     left: d.x, top: d.y,
                     width: useBaseW, minHeight: useBaseH,
-                    background: isPatchbay
-                      ? `linear-gradient(165deg, rgba(20,184,166,0.15) 0%, rgba(8,12,12,0.96) 40%, rgba(4,6,6,0.98) 100%)`
-                      : isWallbox
-                      ? `linear-gradient(165deg, rgba(245,158,11,0.12) 0%, rgba(12,10,6,0.96) 40%, rgba(6,4,2,0.98) 100%)`
-                      : isRouterRole
-                      ? `linear-gradient(165deg, rgba(249,115,22,0.15) 0%, rgba(12,8,4,0.96) 40%, rgba(6,4,2,0.98) 100%)`
-                      : `linear-gradient(165deg, ${color.bg} 0%, rgba(10,10,12,0.96) 40%, rgba(4,4,6,0.98) 100%)`,
+                    background: isPatchbay ? 'rgba(10,14,14,0.95)'
+                      : isWallbox ? 'rgba(14,12,8,0.95)'
+                      : isRouterRole ? 'rgba(14,10,6,0.95)'
+                      : 'rgba(8,8,10,0.95)',
                     border: `${borderWidth}px solid ${
                       isPatchbay && !isSelected && !isTraceTarget ? 'rgba(20,184,166,0.4)'
                       : isWallbox && !isSelected && !isTraceTarget ? 'rgba(245,158,11,0.4)'
@@ -2141,21 +2218,13 @@ export default function SignalFlowMap() {
                       : borderColor
                     }`,
                     boxShadow: isSelected
-                      ? `0 0 0 1px rgba(251,191,36,0.4), 0 0 30px rgba(251,191,36,0.45), 0 10px 30px rgba(0,0,0,0.5)`
+                      ? `0 0 0 2px rgba(251,191,36,0.6)`
                       : isTraceTarget
-                      ? `0 0 0 1px ${color.glow}66, 0 0 35px ${color.glow}55, 0 10px 30px rgba(0,0,0,0.5)`
+                      ? `0 0 0 2px ${color.glow}aa`
                       : isHovered
-                      ? `0 0 24px ${color.glow}30, 0 8px 22px rgba(0,0,0,0.6)`
-                      : isPatchbay
-                      ? `0 0 18px rgba(20,184,166,0.15), 0 4px 16px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04)`
-                      : isWallbox
-                      ? `0 0 18px rgba(245,158,11,0.12), 0 4px 16px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04)`
-                      : isRouterRole
-                      ? `0 0 18px rgba(249,115,22,0.18), 0 4px 16px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04)`
-                      : `0 4px 16px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04)`,
-                    opacity: isDim ? 0.25 : 1,
+                      ? `0 2px 10px rgba(0,0,0,0.6)`
+                      : `0 2px 8px rgba(0,0,0,0.4)`,
                     cursor: editMode ? 'move' : 'pointer',
-                    backdropFilter: 'blur(8px)',
                     transform: finalTransform || undefined,
                     transformOrigin: '0 0',
                   };
