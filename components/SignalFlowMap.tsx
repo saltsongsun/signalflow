@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { supabase, Device, Connection, ConnectionType, Layer, DEFAULT_LAYERS, DEVICE_ROLE_LABELS, Rack } from '../lib/supabase';
+import { supabase, Device, Connection, ConnectionType, Layer, DEFAULT_LAYERS, DEVICE_ROLE_LABELS, Rack, MULTIVIEW_LAYOUTS, MultiviewLayoutId } from '../lib/supabase';
 import { INITIAL_DEVICES, INITIAL_CONNECTIONS, TYPE_COLORS, CONN_TYPE_STYLES } from '../lib/initialData';
 import DeviceEditor from './DeviceEditor';
 import LayerPanel from './LayerPanel';
@@ -61,12 +61,76 @@ function deviceHeight(d: Device, visibleLayerIds: Set<string>) {
     if (d.type === 'audio' || d.type === 'combined') h += audioRowH + 6;
     h += 6;
   }
+  // multiview: PGM/PVW + 소스 셀 그리드
+  if (d.role === 'multiview') {
+    const layoutId = (d.multiviewLayout as any) ?? 'pgm+pvw+6';
+    const layout = (typeof (window as any) !== 'undefined' ? null : null) || null;
+    // MULTIVIEW_LAYOUTS가 상수이므로 import 없이도 동일 값 사용
+    // sourceCells 룩업
+    const sourceCellsMap: Record<string, number> = {
+      'pgm+pvw+4': 4, 'pgm+pvw+6': 6, 'pgm+pvw+8': 8, 'pgm+pvw+10': 10,
+      'pgm+pvw+12': 12, 'pgm+pvw+14': 14,
+      '2x2': 0, '3x3': 7, '4x4': 14, '5x5': 23,
+    };
+    const srcCells = sourceCellsMap[layoutId] ?? 6;
+    const hasPgmPvw = !!(d.multiviewPgmInput || d.multiviewPvwInput);
+    const w2 = (d.width ?? 200) - 20;
+    // PGM/PVW 한 줄 (2칸 big)
+    if (hasPgmPvw) h += Math.round(w2 / 2 * 9 / 16) + 6;
+    // 소스 셀 그리드
+    if (srcCells > 0) {
+      const cols = srcCells <= 4 ? 2 : srcCells <= 9 ? 3 : srcCells <= 16 ? 4 : 5;
+      const rows = Math.ceil(srcCells / cols);
+      const cellH = Math.round(w2 / cols * 9 / 16);
+      h += rows * (cellH + 2) + 4;
+    }
+    h += 14; // label + padding
+  }
   return h;
 }
 
 // 일반 장비용 포트 Y
 function portYFromRenderIdx(d: Device, renderIdx: number) {
   return d.y + HEADER_H + PADDING_Y + renderIdx * PORT_H + PORT_H / 2;
+}
+
+// 멀티뷰 셀 컴포넌트
+function MultiviewCell({ label, inputPort, srcDev, color, big }: {
+  label: string;
+  inputPort?: string;
+  srcDev: Device | null;
+  color: 'emerald' | 'amber' | 'slate';
+  big?: boolean;
+}) {
+  const colorMap = {
+    emerald: { border: 'border-emerald-500/60', text: 'text-emerald-300', bg: 'bg-emerald-500/10' },
+    amber:   { border: 'border-amber-500/60',   text: 'text-amber-300',   bg: 'bg-amber-500/10' },
+    slate:   { border: 'border-slate-500/40',   text: 'text-slate-300',   bg: 'bg-slate-500/5' },
+  };
+  const c = colorMap[color];
+  return (
+    <div className={`relative rounded ${big ? 'border-2' : 'border'} ${c.border} ${c.bg} overflow-hidden`}
+         style={{ aspectRatio: '16 / 9' }}>
+      {srcDev?.imageUrl ? (
+        <img src={srcDev.imageUrl} alt={srcDev.name}
+             className="w-full h-full object-cover"
+             style={{ imageRendering: 'auto' }} />
+      ) : (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <span className="text-neutral-600 text-[9px] font-mono">{inputPort ?? '—'}</span>
+        </div>
+      )}
+      {/* 라벨 오버레이 */}
+      <div className={`absolute ${big ? 'top-0.5 left-1 text-[10px]' : 'top-0 left-0.5 text-[8px]'} ${c.text} font-mono font-bold px-1 rounded bg-black/70`}>
+        {label}
+      </div>
+      {srcDev && (
+        <div className="absolute bottom-0 left-0 right-0 text-[7.5px] text-white font-mono bg-black/60 px-1 truncate">
+          {srcDev.name}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // 패치베이 카드의 base(회전 전) 크기
@@ -164,8 +228,10 @@ export default function SignalFlowMap() {
 
   // 캔버스 크기 추적 (window resize 대응)
   const [viewport, setViewport] = useState({ w: 1920, h: 1080 });
-  // 드래그 중 DOM-direct offset (ReactState 우회용)
-  const [dragOffset, setDragOffset] = useState<{ ids: Set<string>; worldDx: number; worldDy: number } | null>(null);
+  // Canvas imperative handle — 드래그/팬 중 React state 없이 직접 redraw
+  const connectionCanvasRef = useRef<any>(null);
+  // 현재 드래그 중인 ID + 오프셋 (Canvas에 imperative로 전달)
+  const dragOffsetRef = useRef<{ ids: Set<string>; worldDx: number; worldDy: number } | null>(null);
   useEffect(() => {
     const update = () => setViewport({ w: window.innerWidth, h: window.innerHeight });
     update();
@@ -620,21 +686,16 @@ export default function SignalFlowMap() {
     return m;
   }, [devices, visibleLayerIds]);
 
-  // ===== Canvas 렌더링용 cable data =====
+  // ===== Canvas 렌더링용 cable data (정적) =====
+  // dragOffset은 의존성에서 제외 — 드래그 중엔 이 memo 재계산 안 됨. Canvas 안에서 offset 적용.
   const canvasCables = useMemo(() => {
     const list: Array<{
+      fromId: string; toId: string;  // 드래그 offset 적용용
       x1: number; y1: number; x2: number; y2: number;
       color: string; strokeWidth: number;
       isTraced: boolean; isPatch: boolean; isPgm: boolean;
       dashArray?: number[];
     }> = [];
-
-    // 뷰포트 월드 경계
-    const marginPx = 400; // 곡선 여유
-    const vLeft = (-offset.x - marginPx) / scale;
-    const vTop = (-offset.y - marginPx) / scale;
-    const vRight = (viewport.w - offset.x + marginPx) / scale;
-    const vBottom = (viewport.h - offset.y + marginPx) / scale;
 
     connections.forEach(c => {
       if (!isConnVisible(c)) return;
@@ -675,21 +736,9 @@ export default function SignalFlowMap() {
       const isTraced = traced.connections.has(c.id);
       const color = isPatch ? '#F97316' : baseColor;
 
-      // 드래그 오프셋 적용 — DOM은 이미 이동했으니 cable endpoint도 보정
-      let fx1 = x1, fy1 = y1, fx2 = x2, fy2 = y2;
-      if (dragOffset) {
-        if (dragOffset.ids.has(from.id)) { fx1 += dragOffset.worldDx; fy1 += dragOffset.worldDy; }
-        if (dragOffset.ids.has(to.id)) { fx2 += dragOffset.worldDx; fy2 += dragOffset.worldDy; }
-      }
-
-      // Viewport culling — 두 endpoint 모두 화면 밖이면 skip
-      const minX = Math.min(fx1, fx2), maxX = Math.max(fx1, fx2);
-      const minY = Math.min(fy1, fy2), maxY = Math.max(fy1, fy2);
-      if (maxX < vLeft || minX > vRight) return;
-      if (maxY < vTop || minY > vBottom) return;
-
       list.push({
-        x1: fx1, y1: fy1, x2: fx2, y2: fy2, color,
+        fromId: from.id, toId: to.id,
+        x1, y1, x2, y2, color,
         strokeWidth: isPgm ? 2.2 : isPatch ? 2 : 1.4,
         isTraced, isPatch, isPgm,
         dashArray: isPatch ? [5, 4] : undefined,
@@ -697,8 +746,9 @@ export default function SignalFlowMap() {
     });
 
     return list;
+    // dragOffset/viewport/offset/scale 제외 — 드래그/팬 중 재계산 안 되게
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connections, devices, traced, hidePatchbay, inspectHubs, visiblePortsCache, traceId, layerById, dragOffset, offset, scale, viewport]);
+  }, [connections, devices, traced, hidePatchbay, inspectHubs, visiblePortsCache, traceId, layerById]);
 
   // 허브(패치베이/라우터) IN → OUT 매핑
   // 패치베이: normals(IN→OUT) + 수동 패치(OUT,IN)
@@ -837,8 +887,10 @@ export default function SignalFlowMap() {
               el.style.top = `${newY}px`;
             }
           });
-          // Canvas에 드래그 오프셋 전달 (케이블 업데이트)
-          setDragOffset({ ids: new Set(Object.keys(origs)), worldDx, worldDy });
+          // Canvas에 드래그 오프셋 전달 — React state 없이 imperative redraw
+          const newDragOffset = { ids: new Set(Object.keys(origs)), worldDx, worldDy };
+          dragOffsetRef.current = newDragOffset;
+          connectionCanvasRef.current?.updateDragOffset(newDragOffset);
         }
       } else if (p.type === 'marquee' && p.worldStartX !== undefined && p.worldStartY !== undefined) {
         const sc = stateRef.current.scale;
@@ -887,7 +939,8 @@ export default function SignalFlowMap() {
               finalPositions[dev.id] ? { ...dev, ...finalPositions[dev.id] } : dev
             ));
           }
-          setDragOffset(null);
+          dragOffsetRef.current = null;
+          connectionCanvasRef.current?.updateDragOffset(null);
           // DB 저장
           const saves = Object.entries(finalPositions).map(([id, pos]) =>
             (supabase as any).from('devices').update({ x: pos.x, y: pos.y }).eq('id', id)
@@ -1255,6 +1308,32 @@ export default function SignalFlowMap() {
     };
     await (supabase as any).from('devices').insert(d);
     pushUndo('장비 추가 되돌리기', async () => {
+      await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
+      await (supabase as any).from('devices').delete().eq('id', id);
+    });
+    setEditingDevice(d);
+  };
+
+  // 멀티뷰 장비 추가 — 기본 IN 8채널(PGM, PVW + 6 소스)
+  const handleAddMultiview = async () => {
+    const id = `mv_${Date.now().toString(36)}`;
+    const defaultLayer = layers[0]?.id ?? 'layer_video';
+    const inputs = ['PGM', 'PVW', ...Array.from({ length: 6 }, (_, i) => `SRC-${i + 1}`)];
+    const inputsMeta: Record<string, any> = {};
+    inputs.forEach(p => { inputsMeta[p] = { name: p, layerId: defaultLayer }; });
+    const d: Device = {
+      id, name: '멀티뷰', type: 'video', role: 'multiview',
+      x: (-offset.x + 400) / scale, y: (-offset.y + 200) / scale,
+      width: 340,
+      inputs, outputs: [],
+      inputsMeta, outputsMeta: {},
+      multiviewLayout: 'pgm+pvw+6' as any,
+      multiviewPgmInput: 'PGM',
+      multiviewPvwInput: 'PVW',
+      physPorts: {}, routing: {},
+    };
+    await (supabase as any).from('devices').insert(d);
+    pushUndo('멀티뷰 추가 되돌리기', async () => {
       await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
       await (supabase as any).from('devices').delete().eq('id', id);
     });
@@ -1731,6 +1810,8 @@ export default function SignalFlowMap() {
             <>
               <button onClick={handleAddDevice}
                 className="px-3 py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-sky-500 to-sky-600 hover:from-sky-400 hover:to-sky-500 text-white shadow-md shadow-sky-500/30 transition">＋ 장비</button>
+              <button onClick={handleAddMultiview}
+                className="px-3 py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-white shadow-md shadow-violet-500/30 transition">▦ 멀티뷰</button>
               {selectedIds.size > 0 && (
                 <>
                   <div className="px-2.5 py-1 text-[11px] rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 font-medium">
@@ -1875,6 +1956,7 @@ export default function SignalFlowMap() {
         {/* Connection Canvas — screen space에 그려 DOM scale 영향 없음 */}
         <div style={{ position: 'absolute', top: 56, left: 0, right: 0, bottom: 0, overflow: 'hidden', pointerEvents: 'none' }}>
           <ConnectionCanvas
+            ref={connectionCanvasRef}
             width={viewport.w}
             height={viewport.h - 56}
             scale={scale}
@@ -2204,12 +2286,14 @@ export default function SignalFlowMap() {
               : role === 'wallbox' ? '▦'
               : role === 'source' ? '▶'
               : role === 'display' ? '🖵'
+              : role === 'multiview' ? '▦'
               : role === 'connector' ? '━'
               : null;
             const isPatchbay = role === 'patchbay';
             const isWallbox = role === 'wallbox';
             const isSource = role === 'source';
             const isDisplay = role === 'display';
+            const isMultiview = role === 'multiview';
             const currentDisplaySource = isDisplay ? displaySources.get(d.id) : undefined;
 
             // 이 장비의 IN 포트에 연결된 hub (precomputed)
@@ -2298,6 +2382,7 @@ export default function SignalFlowMap() {
                               isWallbox ? 'rgba(245,158,11,0.15)'
                               : isPatchbay ? 'rgba(20,184,166,0.15)'
                               : role === 'router' ? 'rgba(249,115,22,0.18)'
+                              : isMultiview ? 'rgba(139,92,246,0.18)'
                               : isSource ? 'rgba(132,204,22,0.2)'
                               : isDisplay ? 'rgba(14,165,233,0.18)'
                               : role === 'connector' ? 'rgba(148,163,184,0.15)'
@@ -2306,6 +2391,7 @@ export default function SignalFlowMap() {
                               isWallbox ? '#FBBF24'
                               : isPatchbay ? '#2DD4BF'
                               : role === 'router' ? '#FB923C'
+                              : isMultiview ? '#A78BFA'
                               : isSource ? '#A3E635'
                               : isDisplay ? '#38BDF8'
                               : role === 'connector' ? '#CBD5E1'
@@ -2314,6 +2400,7 @@ export default function SignalFlowMap() {
                               isWallbox ? 'rgba(251,191,36,0.4)'
                               : isPatchbay ? 'rgba(45,212,191,0.4)'
                               : role === 'router' ? 'rgba(251,146,60,0.45)'
+                              : isMultiview ? 'rgba(167,139,250,0.45)'
                               : isSource ? 'rgba(163,230,53,0.4)'
                               : isDisplay ? 'rgba(56,189,248,0.4)'
                               : role === 'connector' ? 'rgba(203,213,225,0.3)'
@@ -2596,6 +2683,69 @@ export default function SignalFlowMap() {
                     )}
                   </div>
                 )}
+
+                {/* 멀티뷰 preview — PGM/PVW + 소스 셀 */}
+                {isMultiview && (() => {
+                  const layoutId = (d.multiviewLayout as MultiviewLayoutId | undefined) ?? 'pgm+pvw+6';
+                  const layout = MULTIVIEW_LAYOUTS[layoutId] ?? MULTIVIEW_LAYOUTS['pgm+pvw+6'];
+                  const sourceCellCount = layout.sourceCells;
+                  const pgmIn = d.multiviewPgmInput;
+                  const pvwIn = d.multiviewPvwInput;
+                  // PGM/PVW 제외한 나머지 IN이 소스 모니터에 순서대로 들어감
+                  const sourceInputs = d.inputs.filter(p => p !== pgmIn && p !== pvwIn).slice(0, sourceCellCount);
+
+                  const getSrc = (inputPort: string | undefined) => {
+                    if (!inputPort) return null;
+                    const srcId = signalByOutput.inSignal.get(`${d.id}:${inputPort}`);
+                    if (!srcId) return null;
+                    const srcDev = devById.get(srcId);
+                    return srcDev ?? null;
+                  };
+
+                  const pgmSrc = getSrc(pgmIn);
+                  const pvwSrc = getSrc(pvwIn);
+
+                  // 소스 모니터 그리드 columns 계산
+                  const srcCols = sourceCellCount <= 4 ? 2 : sourceCellCount <= 9 ? 3 : sourceCellCount <= 16 ? 4 : 5;
+
+                  return (
+                    <div className="mx-2.5 mb-2.5 space-y-1.5">
+                      {/* PGM + PVW 나란히 */}
+                      {(pgmIn || pvwIn) && (
+                        <div className="grid grid-cols-2 gap-1">
+                          <MultiviewCell label="PGM" inputPort={pgmIn} srcDev={pgmSrc} color="emerald" big />
+                          <MultiviewCell label="PVW" inputPort={pvwIn} srcDev={pvwSrc} color="amber" big />
+                        </div>
+                      )}
+                      {/* 소스 모니터 셀 그리드 */}
+                      {sourceCellCount > 0 && (
+                        <div
+                          className="grid gap-0.5"
+                          style={{ gridTemplateColumns: `repeat(${srcCols}, minmax(0, 1fr))` }}
+                        >
+                          {Array.from({ length: sourceCellCount }).map((_, i) => {
+                            const inputPort = sourceInputs[i];
+                            const srcDev = getSrc(inputPort);
+                            return (
+                              <MultiviewCell
+                                key={i}
+                                label={String(i + 1).padStart(2, '0')}
+                                inputPort={inputPort}
+                                srcDev={srcDev}
+                                color="slate"
+                              />
+                            );
+                          })}
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between text-[8.5px] font-mono text-violet-300/60 px-0.5">
+                        <span>{layout.label}</span>
+                        <span>{d.inputs.length}ch IN</span>
+                      </div>
+                    </div>
+                  );
+                })()}
+
               </div>
 
               {/* 왼쪽: IN 쪽 Hub 연결 배지 (각 IN 포트와 y좌표 정렬) */}

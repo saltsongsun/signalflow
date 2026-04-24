@@ -1,8 +1,10 @@
 'use client';
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
 import type { Device, Connection, Layer } from '../lib/supabase';
 
 type CableInfo = {
+  fromId: string;
+  toId: string;
   x1: number; y1: number; x2: number; y2: number;
   color: string;
   strokeWidth: number;
@@ -24,22 +26,49 @@ type Props = {
   virtualCables?: VirtualCableInfo[];
 };
 
+export type ConnectionCanvasHandle = {
+  /** 드래그 중 호출 — React 재렌더 없이 Canvas만 다시 그림 */
+  updateDragOffset: (dragOffset: { ids: Set<string>; worldDx: number; worldDy: number } | null) => void;
+  /** 팬/줌 중 호출 — offset/scale만 바뀔 때도 빠르게 */
+  updateTransform: (scale: number, offsetX: number, offsetY: number) => void;
+};
+
 /**
- * Connection을 SVG 대신 canvas에 그리는 렌더러.
- * 큰 수의 케이블(~수백 개)에서도 60fps 달성.
+ * Connection을 canvas에 그리는 렌더러. Imperative handle로 React 재렌더 없이 업데이트 가능.
  */
-export default function ConnectionCanvas({
-  width, height, scale, offsetX, offsetY, cables, virtualCables = []
-}: Props) {
+const ConnectionCanvas = forwardRef<ConnectionCanvasHandle, Props>(function ConnectionCanvas({
+  width, height, scale: initScale, offsetX: initOffsetX, offsetY: initOffsetY, cables, virtualCables = []
+}, ref) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number | null>(null);
-  const flowOffsetRef = useRef(0); // 점선 흐름 애니메이션 오프셋
+  const flowOffsetRef = useRef(0);
 
-  // 실제 화면 크기와 canvas 픽셀 크기 맞춤 (Retina/고DPI 대응)
+  // 최신 데이터를 ref로 유지 (re-render 없이도 draw에서 접근 가능)
+  const stateRef = useRef({
+    cables, virtualCables,
+    scale: initScale, offsetX: initOffsetX, offsetY: initOffsetY,
+    dragOffset: null as { ids: Set<string>; worldDx: number; worldDy: number } | null,
+    width, height,
+  });
+
+  // props 변경 시 ref 업데이트 + 즉시 redraw
+  useEffect(() => {
+    stateRef.current.cables = cables;
+    stateRef.current.virtualCables = virtualCables;
+    stateRef.current.scale = initScale;
+    stateRef.current.offsetX = initOffsetX;
+    stateRef.current.offsetY = initOffsetY;
+    stateRef.current.width = width;
+    stateRef.current.height = height;
+    requestDraw();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cables, virtualCables, initScale, initOffsetX, initOffsetY, width, height]);
+
+  // 고DPI 세팅
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2); // 2x 캡으로 과도한 해상도 방지
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
     canvas.width = width * dpr;
     canvas.height = height * dpr;
     canvas.style.width = `${width}px`;
@@ -48,68 +77,99 @@ export default function ConnectionCanvas({
     if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }, [width, height]);
 
-  // 메인 드로잉 — cables/transform 변경 시 실행
-  useEffect(() => {
+  const draw = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d', { alpha: true });
     if (!ctx) return;
+    const s = stateRef.current;
+    const { cables: cs, virtualCables: vcs, scale, offsetX, offsetY, width: w, height: h, dragOffset } = s;
 
-    const hasTraced = cables.some(c => c.isTraced) || virtualCables.some(c => c.isTraced);
+    ctx.clearRect(0, 0, w, h);
+    ctx.save();
+    ctx.translate(offsetX, offsetY);
+    ctx.scale(scale, scale);
 
-    const draw = () => {
-      ctx.clearRect(0, 0, width, height);
-      // 월드 좌표 변환 (scale + offset) — 장비 카드 transform과 일치
-      ctx.save();
-      ctx.translate(offsetX, offsetY);
-      ctx.scale(scale, scale);
-
-      // 일반 케이블 먼저 (배경 뒤로)
-      cables.forEach(c => {
-        if (c.isTraced) return; // trace는 마지막에 그려 glow 우선
-        drawCable(ctx, c, flowOffsetRef.current, false);
-      });
-      virtualCables.forEach(c => {
-        if (c.isTraced) return;
-        drawCable(ctx, c, flowOffsetRef.current, false);
-      });
-
-      // Trace 케이블 (glow + 점선 애니메이션)
-      cables.forEach(c => {
-        if (!c.isTraced) return;
-        drawCable(ctx, c, flowOffsetRef.current, true);
-      });
-      virtualCables.forEach(c => {
-        if (!c.isTraced) return;
-        drawCable(ctx, c, flowOffsetRef.current, true);
-      });
-
-      ctx.restore();
-
-      // 애니메이션: trace 있을 때만 계속 redraw
-      if (hasTraced) {
-        flowOffsetRef.current -= 0.6;
-        if (flowOffsetRef.current < -36) flowOffsetRef.current += 36;
-        rafRef.current = requestAnimationFrame(draw);
-      } else {
-        rafRef.current = null;
-      }
+    const applyOffset = (c: CableInfo): CableInfo => {
+      if (!dragOffset || dragOffset.ids.size === 0) return c;
+      const fromMoved = dragOffset.ids.has(c.fromId);
+      const toMoved = dragOffset.ids.has(c.toId);
+      if (!fromMoved && !toMoved) return c;
+      return {
+        ...c,
+        x1: fromMoved ? c.x1 + dragOffset.worldDx : c.x1,
+        y1: fromMoved ? c.y1 + dragOffset.worldDy : c.y1,
+        x2: toMoved ? c.x2 + dragOffset.worldDx : c.x2,
+        y2: toMoved ? c.y2 + dragOffset.worldDy : c.y2,
+      };
     };
 
-    // 이전 애니메이션 정리
-    if (rafRef.current != null) {
-      cancelAnimationFrame(rafRef.current);
+    // 일반 케이블 먼저
+    for (let i = 0; i < cs.length; i++) {
+      const c = cs[i];
+      if (c.isTraced) continue;
+      drawCable(ctx, applyOffset(c), flowOffsetRef.current, false);
+    }
+    for (let i = 0; i < vcs.length; i++) {
+      const c = vcs[i];
+      if (c.isTraced) continue;
+      drawCable(ctx, applyOffset(c), flowOffsetRef.current, false);
+    }
+
+    // Trace 케이블
+    for (let i = 0; i < cs.length; i++) {
+      const c = cs[i];
+      if (!c.isTraced) continue;
+      drawCable(ctx, applyOffset(c), flowOffsetRef.current, true);
+    }
+    for (let i = 0; i < vcs.length; i++) {
+      const c = vcs[i];
+      if (!c.isTraced) continue;
+      drawCable(ctx, applyOffset(c), flowOffsetRef.current, true);
+    }
+
+    ctx.restore();
+
+    const hasTraced = cs.some(c => c.isTraced) || vcs.some(c => c.isTraced);
+    if (hasTraced) {
+      flowOffsetRef.current -= 0.6;
+      if (flowOffsetRef.current < -36) flowOffsetRef.current += 36;
+      rafRef.current = requestAnimationFrame(draw);
+    } else {
       rafRef.current = null;
     }
-    draw();
+  };
 
+  const requestDraw = () => {
+    if (rafRef.current != null) return; // 이미 pending
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      draw();
+    });
+  };
+
+  useImperativeHandle(ref, () => ({
+    updateDragOffset(dragOffset) {
+      stateRef.current.dragOffset = dragOffset;
+      requestDraw();
+    },
+    updateTransform(scale, offsetX, offsetY) {
+      stateRef.current.scale = scale;
+      stateRef.current.offsetX = offsetX;
+      stateRef.current.offsetY = offsetY;
+      requestDraw();
+    },
+  }));
+
+  // cleanup
+  useEffect(() => {
     return () => {
       if (rafRef.current != null) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
     };
-  }, [cables, virtualCables, scale, offsetX, offsetY, width, height]);
+  }, []);
 
   return (
     <canvas
@@ -124,7 +184,9 @@ export default function ConnectionCanvas({
       }}
     />
   );
-}
+});
+
+export default ConnectionCanvas;
 
 function drawCable(ctx: CanvasRenderingContext2D, c: CableInfo, flowOffset: number, isTraced: boolean) {
   const { x1, y1, x2, y2, color } = c;

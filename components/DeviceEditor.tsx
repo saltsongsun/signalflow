@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect } from 'react';
-import { Device, CONNECTION_TYPES, ConnectionType, PortInfo, Layer, DEVICE_ROLES, DEVICE_ROLE_LABELS, DeviceRole, supabase } from '../lib/supabase';
+import { Device, CONNECTION_TYPES, ConnectionType, PortInfo, Layer, DEVICE_ROLES, DEVICE_ROLE_LABELS, DeviceRole, MULTIVIEW_LAYOUTS, MultiviewLayoutId, supabase } from '../lib/supabase';
 
 type Props = {
   device: Device;
@@ -31,6 +31,10 @@ export default function DeviceEditor({ device, layers, selectionCount, onSave, o
   const [audioUrl, setAudioUrl] = useState(device.audioUrl ?? '');
   const [audioStoragePath, setAudioStoragePath] = useState(device.audioStoragePath ?? '');
   const [selectedInput, setSelectedInput] = useState(device.selectedInput ?? '');
+  // 멀티뷰
+  const [multiviewLayout, setMultiviewLayout] = useState<MultiviewLayoutId>((device.multiviewLayout as MultiviewLayoutId) ?? 'pgm+pvw+6');
+  const [multiviewPgmInput, setMultiviewPgmInput] = useState(device.multiviewPgmInput ?? '');
+  const [multiviewPvwInput, setMultiviewPvwInput] = useState(device.multiviewPvwInput ?? '');
   const [uploadingImage, setUploadingImage] = useState(false);
   const [uploadingAudio, setUploadingAudio] = useState(false);
   const [type, setType] = useState<Device['type']>(device.type);
@@ -57,6 +61,9 @@ export default function DeviceEditor({ device, layers, selectionCount, onSave, o
     setAudioUrl(device.audioUrl ?? '');
     setAudioStoragePath(device.audioStoragePath ?? '');
     setSelectedInput(device.selectedInput ?? '');
+    setMultiviewLayout((device.multiviewLayout as MultiviewLayoutId) ?? 'pgm+pvw+6');
+    setMultiviewPgmInput(device.multiviewPgmInput ?? '');
+    setMultiviewPvwInput(device.multiviewPvwInput ?? '');
     setType(device.type);
     setRole(device.role ?? 'standard');
     setPgmPort(device.pgmPort ?? '');
@@ -153,6 +160,9 @@ export default function DeviceEditor({ device, layers, selectionCount, onSave, o
       audioUrl: role === 'source' ? (audioUrl.trim() || null) : null,
       audioStoragePath: role === 'source' ? (audioStoragePath.trim() || null) : null,
       selectedInput: (role === 'switcher' || role === 'router') ? (selectedInput || null) : null,
+      multiviewLayout: role === 'multiview' ? multiviewLayout : null,
+      multiviewPgmInput: role === 'multiview' ? (multiviewPgmInput || null) : null,
+      multiviewPvwInput: role === 'multiview' ? (multiviewPvwInput || null) : null,
       type, role,
       pgmPort: role === 'switcher' ? (pgmPort || undefined) : undefined,
       normals: role === 'patchbay' ? normals : undefined,
@@ -373,6 +383,7 @@ export default function DeviceEditor({ device, layers, selectionCount, onSave, o
             {role === 'wallbox' && '▦ 벽면 판넬 월박스. 현장 장소별 포트 접점.'}
             {role === 'source' && '▶ 신호 소스 (카메라, 플레이어 등). 이미지를 올리면 디스플레이에 재생됨.'}
             {role === 'display' && '🖵 신호 디스플레이 (모니터, 벽). 연결된 소스의 이미지를 표시.'}
+            {role === 'multiview' && '▦ 멀티뷰 모니터. 여러 입력 신호를 한 화면에 PGM/PVW/소스로 배치해 동시 표시.'}
             {role === 'connector' && '━ 통과 장비 (케이블, 변환기). 신호를 그대로 흘려보냄.'}
             {role === 'standard' && '◻ 일반 장비. 1:1 포트 매핑.'}
           </div>
@@ -575,6 +586,77 @@ export default function DeviceEditor({ device, layers, selectionCount, onSave, o
             </select>
           </div>
         )}
+
+        {/* 멀티뷰 설정 */}
+        {role === 'multiview' && (
+          <div className="bg-gradient-to-br from-violet-500/10 to-transparent border border-violet-500/20 rounded-lg p-3 space-y-3">
+            <div className="flex items-center gap-2">
+              <span className="text-[15px]">▦</span>
+              <div>
+                <div className="text-[11px] font-bold text-violet-300">멀티뷰 모니터 설정</div>
+                <div className="text-[10px] text-neutral-500">여러 소스를 한 화면에 동시 표시. 입력 포트로 신호 받음.</div>
+              </div>
+            </div>
+
+            {/* 레이아웃 선택 */}
+            <div>
+              <label className="text-[10px] font-semibold text-violet-300 uppercase tracking-wider block mb-1">레이아웃</label>
+              <select
+                value={multiviewLayout}
+                onChange={e => setMultiviewLayout(e.target.value as MultiviewLayoutId)}
+                className="w-full bg-neutral-900 border border-violet-500/30 rounded px-2 py-1.5 text-[12px] text-violet-100 focus:border-violet-400 focus:outline-none"
+              >
+                {(Object.entries(MULTIVIEW_LAYOUTS) as Array<[MultiviewLayoutId, typeof MULTIVIEW_LAYOUTS[MultiviewLayoutId]]>).map(([id, info]) => (
+                  <option key={id} value={id}>{info.label}</option>
+                ))}
+              </select>
+              <div className="text-[9.5px] text-neutral-500 mt-1">
+                {MULTIVIEW_LAYOUTS[multiviewLayout].sourceCells}개의 소스 모니터 셀 사용 가능
+              </div>
+            </div>
+
+            {/* PGM / PVW 선택 */}
+            {inputs.length > 0 && (
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] font-semibold text-emerald-400 uppercase tracking-wider block mb-1">PGM (방송중)</label>
+                  <select
+                    value={multiviewPgmInput}
+                    onChange={e => setMultiviewPgmInput(e.target.value)}
+                    className="w-full bg-neutral-900 border border-emerald-500/30 rounded px-2 py-1.5 text-[11px] font-mono text-emerald-100 focus:border-emerald-400 focus:outline-none"
+                  >
+                    <option value="">(없음)</option>
+                    {inputs.map(i => (
+                      <option key={i.name} value={i.name}>
+                        {i.name}{i.label ? ` — ${i.label}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] font-semibold text-amber-400 uppercase tracking-wider block mb-1">PVW (대기)</label>
+                  <select
+                    value={multiviewPvwInput}
+                    onChange={e => setMultiviewPvwInput(e.target.value)}
+                    className="w-full bg-neutral-900 border border-amber-500/30 rounded px-2 py-1.5 text-[11px] font-mono text-amber-100 focus:border-amber-400 focus:outline-none"
+                  >
+                    <option value="">(없음)</option>
+                    {inputs.map(i => (
+                      <option key={i.name} value={i.name}>
+                        {i.name}{i.label ? ` — ${i.label}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
+
+            <div className="text-[10px] text-violet-200/70 bg-violet-500/5 border border-violet-500/15 rounded p-2">
+              💡 <span className="font-semibold">소스 모니터</span>는 PGM/PVW로 선택되지 않은 IN 포트들이 자동으로 순서대로 채워집니다.
+            </div>
+          </div>
+        )}
+
 
         {/* Wallbox 전용 설정 */}
         {role === 'wallbox' && (
