@@ -136,7 +136,6 @@ export default function SignalFlowMap() {
   const [showWallboxMgr, setShowWallboxMgr] = useState(false);
   const [showBulkEditor, setShowBulkEditor] = useState(false);
   const [pendingFrom, setPendingFrom] = useState<{ device: string; port: string; connType?: ConnectionType } | null>(null);
-  const [hoveredId, setHoveredId] = useState<string | null>(null);
 
   const [scale, setScale] = useState(0.7);
   const [offset, setOffset] = useState({ x: 40, y: 70 });
@@ -165,6 +164,8 @@ export default function SignalFlowMap() {
 
   // 캔버스 크기 추적 (window resize 대응)
   const [viewport, setViewport] = useState({ w: 1920, h: 1080 });
+  // 드래그 중 DOM-direct offset (ReactState 우회용)
+  const [dragOffset, setDragOffset] = useState<{ ids: Set<string>; worldDx: number; worldDy: number } | null>(null);
   useEffect(() => {
     const update = () => setViewport({ w: window.innerWidth, h: window.innerHeight });
     update();
@@ -628,6 +629,13 @@ export default function SignalFlowMap() {
       dashArray?: number[];
     }> = [];
 
+    // 뷰포트 월드 경계
+    const marginPx = 400; // 곡선 여유
+    const vLeft = (-offset.x - marginPx) / scale;
+    const vTop = (-offset.y - marginPx) / scale;
+    const vRight = (viewport.w - offset.x + marginPx) / scale;
+    const vBottom = (viewport.h - offset.y + marginPx) / scale;
+
     connections.forEach(c => {
       if (!isConnVisible(c)) return;
       if (c.from_device === c.to_device && c.is_patch) return;
@@ -667,8 +675,21 @@ export default function SignalFlowMap() {
       const isTraced = traced.connections.has(c.id);
       const color = isPatch ? '#F97316' : baseColor;
 
+      // 드래그 오프셋 적용 — DOM은 이미 이동했으니 cable endpoint도 보정
+      let fx1 = x1, fy1 = y1, fx2 = x2, fy2 = y2;
+      if (dragOffset) {
+        if (dragOffset.ids.has(from.id)) { fx1 += dragOffset.worldDx; fy1 += dragOffset.worldDy; }
+        if (dragOffset.ids.has(to.id)) { fx2 += dragOffset.worldDx; fy2 += dragOffset.worldDy; }
+      }
+
+      // Viewport culling — 두 endpoint 모두 화면 밖이면 skip
+      const minX = Math.min(fx1, fx2), maxX = Math.max(fx1, fx2);
+      const minY = Math.min(fy1, fy2), maxY = Math.max(fy1, fy2);
+      if (maxX < vLeft || minX > vRight) return;
+      if (maxY < vTop || minY > vBottom) return;
+
       list.push({
-        x1, y1, x2, y2, color,
+        x1: fx1, y1: fy1, x2: fx2, y2: fy2, color,
         strokeWidth: isPgm ? 2.2 : isPatch ? 2 : 1.4,
         isTraced, isPatch, isPgm,
         dashArray: isPatch ? [5, 4] : undefined,
@@ -677,7 +698,7 @@ export default function SignalFlowMap() {
 
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connections, devices, traced, hidePatchbay, inspectHubs, visiblePortsCache, traceId, layerById]);
+  }, [connections, devices, traced, hidePatchbay, inspectHubs, visiblePortsCache, traceId, layerById, dragOffset, offset, scale, viewport]);
 
   // 허브(패치베이/라우터) IN → OUT 매핑
   // 패치베이: normals(IN→OUT) + 수동 패치(OUT,IN)
@@ -805,11 +826,19 @@ export default function SignalFlowMap() {
           const worldDx = dx / sc;
           const worldDy = dy / sc;
           const origs = p.origPositions;
-          setDevices(prev => prev.map(dev => {
-            const orig = origs[dev.id];
-            if (orig) return { ...dev, x: orig.x + worldDx, y: orig.y + worldDy };
-            return dev;
-          }));
+          // DOM 직접 조작 — React setState 우회해서 드래그 중 성능 극대화
+          Object.keys(origs).forEach(id => {
+            const orig = origs[id];
+            const el = document.querySelector(`[data-device-id="${id}"]`) as HTMLElement | null;
+            if (el) {
+              const newX = orig.x + worldDx;
+              const newY = orig.y + worldDy;
+              el.style.left = `${newX}px`;
+              el.style.top = `${newY}px`;
+            }
+          });
+          // Canvas에 드래그 오프셋 전달 (케이블 업데이트)
+          setDragOffset({ ids: new Set(Object.keys(origs)), worldDx, worldDy });
         }
       } else if (p.type === 'marquee' && p.worldStartX !== undefined && p.worldStartY !== undefined) {
         const sc = stateRef.current.scale;
@@ -838,18 +867,35 @@ export default function SignalFlowMap() {
 
       if (p.type === 'device') {
         if (p.moved) {
-          // 저장
-          const latestDevices = stateRef.current.devices;
+          // DOM-direct 드래그 종료: 최종 위치를 state에 한 번에 반영
+          const origs = p.origPositions;
           const ids = p.dragIds ?? [];
-          const saves = ids.map(id => {
-            const latest = latestDevices.find(x => x.id === id);
-            return latest ? (supabase as any).from('devices').update({ x: latest.x, y: latest.y }).eq('id', id) : null;
-          }).filter(Boolean);
+          let finalPositions: Record<string, {x:number;y:number}> = {};
+          if (origs) {
+            // 현재 DOM에서 위치 읽어 commit
+            ids.forEach(id => {
+              const el = document.querySelector(`[data-device-id="${id}"]`) as HTMLElement | null;
+              if (el) {
+                finalPositions[id] = {
+                  x: parseFloat(el.style.left) || origs[id]?.x || 0,
+                  y: parseFloat(el.style.top) || origs[id]?.y || 0,
+                };
+              }
+            });
+            // React state 업데이트 (최종 1회)
+            setDevices(prev => prev.map(dev =>
+              finalPositions[dev.id] ? { ...dev, ...finalPositions[dev.id] } : dev
+            ));
+          }
+          setDragOffset(null);
+          // DB 저장
+          const saves = Object.entries(finalPositions).map(([id, pos]) =>
+            (supabase as any).from('devices').update({ x: pos.x, y: pos.y }).eq('id', id)
+          );
           await Promise.all(saves);
-          // Undo 등록: 원위치로 복귀
-          const origPositions = p.origPositions;
-          if (origPositions) {
-            const snapshot = { ...origPositions };
+          // Undo 등록
+          if (origs) {
+            const snapshot = { ...origs };
             pushUndo(
               ids.length === 1 ? '이동 되돌리기' : `${ids.length}개 이동 되돌리기`,
               async () => {
@@ -2129,18 +2175,23 @@ export default function SignalFlowMap() {
           {/* Devices */}
           {devices.map(d => {
             if (!isDeviceVisible(d)) return null;
-            // 허브 숨김 ON: trace 중에도 허브 카드는 숨김 (text-to-text 가상 케이블로 대체)
             if (hidePatchbay && (d.role === 'patchbay' || d.role === 'router')) return null;
-            // Trace 모드: 추적에 포함되지 않은 장비 완전 숨김
             if (traceId && !traced.devices.has(d.id)) return null;
+            // 뷰포트 컬링 — 화면 밖 장비 skip
+            const w = deviceWidth(d);
+            const h = deviceHeight(d, visibleLayerIds);
+            const viewWorldLeft = (-offset.x - 200) / scale;
+            const viewWorldTop = (-offset.y - 200) / scale;
+            const viewWorldRight = (viewport.w - offset.x + 200) / scale;
+            const viewWorldBottom = (viewport.h - offset.y + 200) / scale;
+            if (d.x + w < viewWorldLeft || d.x > viewWorldRight) return null;
+            if (d.y + h < viewWorldTop || d.y > viewWorldBottom) return null;
+
             const color = TYPE_COLORS[d.type];
             const isSelected = selectedIds.has(d.id);
             const isTraceTarget = traceId === d.id;
             const isTraced = traced.devices.has(d.id);
-            const isDim = false; // trace 모드에선 이미 숨겼으니 dim 효과 없음
-            const isHovered = hoveredId === d.id;
-            const w = deviceWidth(d);
-            const h = deviceHeight(d, visibleLayerIds);
+            const isDim = false;
             const vpCached = visiblePortsCache.get(d.id);
             const inVis = vpCached?.in ?? [];
             const outVis = vpCached?.out ?? [];
@@ -2191,16 +2242,11 @@ export default function SignalFlowMap() {
                   } as unknown as React.MouseEvent, d);
                 }}
                 onClick={e => onDeviceClickView(e, d)}
-                onMouseEnter={() => setHoveredId(d.id)}
-                onMouseLeave={() => setHoveredId(null)}
                 className={`absolute rounded-xl overflow-hidden ${isSelected ? 'device-selected' : ''}`}
                 style={(() => {
-                  // 패치베이도 일반 카드로 렌더되므로 회전 없음 (관리 모드에서만 잭 형태)
                   const useBaseW = w;
                   const useBaseH = h;
-
-                  const baseTransform = isHovered && !editMode ? 'translateY(-1px)' : '';
-                  const finalTransform = baseTransform;
+                  const finalTransform = '';
 
                   const isRouterRole = role === 'router';
 
@@ -2221,8 +2267,6 @@ export default function SignalFlowMap() {
                       ? `0 0 0 2px rgba(251,191,36,0.6)`
                       : isTraceTarget
                       ? `0 0 0 2px ${color.glow}aa`
-                      : isHovered
-                      ? `0 2px 10px rgba(0,0,0,0.6)`
                       : `0 2px 8px rgba(0,0,0,0.4)`,
                     cursor: editMode ? 'move' : 'pointer',
                     transform: finalTransform || undefined,
