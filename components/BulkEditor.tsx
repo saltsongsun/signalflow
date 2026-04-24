@@ -99,8 +99,8 @@ export default function BulkEditor({ devices, layers, onClose }: Props) {
   };
 
   return (
-    <div data-ui className="fixed inset-0 z-[55] bg-black/70 backdrop-blur-md flex items-center justify-center">
-      <div className="w-[560px] max-h-[90vh] bg-gradient-to-b from-neutral-900 to-neutral-950 border border-white/15 rounded-xl shadow-2xl flex flex-col">
+    <div data-ui className="fixed inset-0 z-[55] bg-black/70 flex items-center justify-center p-3">
+      <div className="w-full max-w-[560px] max-h-[90vh] bg-gradient-to-b from-neutral-900 to-neutral-950 border border-white/15 rounded-xl shadow-2xl flex flex-col">
         {/* 헤더 */}
         <div className="px-5 py-3 border-b border-white/10 bg-gradient-to-r from-purple-500/10 to-transparent flex items-center gap-3">
           <div className="w-1 h-5 bg-gradient-to-b from-purple-400 to-purple-600 rounded-full"></div>

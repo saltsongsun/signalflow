@@ -2240,10 +2240,10 @@ export default function SignalFlowMap() {
                     const fromW = deviceWidth(vc.fromDev);
                     // OUT 라벨 박스 오른쪽 끝점
                     const x1 = vc.fromDev.x + fromW + 6 + LABEL_WIDTH + LABEL_PAD;
-                    const y1 = vc.fromDev.y + HEADER_H + PADDING_Y - 2 + vc.fromPortIdx * PORT_H + LABEL_H_OFFSET;
+                    const y1 = vc.fromDev.y + HEADER_H + PADDING_Y + vc.fromPortIdx * PORT_H + PORT_H / 2;
                     // IN 라벨 박스 왼쪽 끝점
                     const x2 = vc.toDev.x - 6 - LABEL_WIDTH - LABEL_PAD;
-                    const y2 = vc.toDev.y + HEADER_H + PADDING_Y - 2 + vc.toPortIdx * PORT_H + LABEL_H_OFFSET;
+                    const y2 = vc.toDev.y + HEADER_H + PADDING_Y + vc.toPortIdx * PORT_H + PORT_H / 2;
 
                     const dxAbs = Math.abs(x2 - x1);
                     const dyAbs = Math.abs(y2 - y1);
@@ -2499,7 +2499,7 @@ export default function SignalFlowMap() {
                 </div>
 
                 {/* Ports — 패치베이도 일반 카드 형태로 통일 (관리 모드에서만 실사) */}
-                <div className="py-3.5 relative" style={{ minHeight: Math.max(inVis.length, outVis.length) * PORT_H }}>
+                <div className="relative" style={{ paddingTop: PADDING_Y, paddingBottom: PADDING_Y, minHeight: Math.max(inVis.length, outVis.length) * PORT_H }}>
                   {/* 패치베이 전용: 도면 카드 우상단 관리 버튼 */}
                   {isPatchbay && editMode && (
                     <button
@@ -2857,7 +2857,7 @@ export default function SignalFlowMap() {
                   style={{
                     left: d.x - 160,
                     width: 154,
-                    top: d.y + HEADER_H + PADDING_Y - 2,
+                    top: d.y + HEADER_H + PADDING_Y,
                     zIndex: 6,
                   }}
                 >
@@ -2955,7 +2955,7 @@ export default function SignalFlowMap() {
                   className="absolute flex flex-col pointer-events-auto"
                   style={{
                     left: d.x + w + 6,
-                    top: d.y + HEADER_H + PADDING_Y - 2,  // OUT 포트 첫 행 시작 위치
+                    top: d.y + HEADER_H + PADDING_Y,  // OUT 포트 첫 행 시작 위치
                     zIndex: 6,
                   }}
                 >

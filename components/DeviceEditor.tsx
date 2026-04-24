@@ -278,10 +278,17 @@ export default function DeviceEditor({ device, layers, allDevices, selectionCoun
   );
 
   return (
-    <div
-      data-ui
-      className={`fixed inset-y-0 right-0 w-[720px] bg-gradient-to-b from-neutral-950 via-neutral-950 to-black border-l border-white/10 shadow-2xl z-50 overflow-y-auto custom-scroll`}
-    >
+    <>
+      {/* 모바일/태블릿 백드롭 — 탭해서 닫기 */}
+      <div
+        data-ui
+        className="fixed inset-0 bg-black/50 z-40 lg:hidden"
+        onClick={onClose}
+      />
+      <div
+        data-ui
+        className={`fixed inset-y-0 right-0 w-full sm:w-[90vw] lg:w-[720px] max-w-[720px] bg-gradient-to-b from-neutral-950 via-neutral-950 to-black border-l border-white/10 shadow-2xl z-50 overflow-y-auto custom-scroll`}
+      >
       {/* Header */}
       <div className={`sticky top-0 z-10 bg-gradient-to-r ${accent.grad} to-neutral-950 backdrop-blur-xl border-b border-white/10`}>
         <div className="px-5 py-4 flex items-center justify-between">
@@ -996,5 +1003,6 @@ export default function DeviceEditor({ device, layers, allDevices, selectionCoun
         </div>
       </div>
     </div>
+    </>
   );
 }
