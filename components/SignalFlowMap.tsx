@@ -1970,7 +1970,7 @@ export default function SignalFlowMap() {
 
       {/* Canvas */}
       <div
-        className={`absolute inset-0 pt-14 ${cursorClass}`}
+        className={`absolute inset-0 pt-12 md:pt-14 ${cursorClass}`}
         onMouseDown={onCanvasMouseDown}
         onWheel={onWheel}
         onTouchStart={onCanvasTouchStart}
@@ -1994,7 +1994,7 @@ export default function SignalFlowMap() {
             height={viewport.h - (viewport.w >= 768 ? 56 : 48)}
             scale={scale}
             offsetX={offset.x}
-            offsetY={offset.y - (viewport.w >= 768 ? 56 : 48)}
+            offsetY={offset.y}
             cables={canvasCables}
           />
         </div>
