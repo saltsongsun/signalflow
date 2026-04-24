@@ -274,20 +274,31 @@ export default function SignalFlowMap() {
     const m = new Map<string, string>();
     devices.forEach(d => {
       if (d.role === 'patchbay') {
-        Object.entries(d.normals ?? {}).forEach(([inPort, outPort]) => {
-          m.set(`${d.id}:${inPort}`, outPort);
-        });
+        const hasAny = Object.keys(d.normals ?? {}).length > 0;
+        if (hasAny) {
+          Object.entries(d.normals ?? {}).forEach(([inPort, outPort]) => {
+            m.set(`${d.id}:${inPort}`, outPort);
+          });
+        } else {
+          // normals가 비어있으면 1:1 기본 매핑 가정 (trace 추적용)
+          d.inputs.forEach((inPort, i) => {
+            const outPort = d.outputs[i];
+            if (outPort) m.set(`${d.id}:${inPort}`, outPort);
+          });
+        }
       } else if (d.role === 'router') {
         d.inputs.forEach((inPort, i) => {
           const outPort = d.outputs[i] ?? d.outputs[0];
           if (outPort) m.set(`${d.id}:${inPort}`, outPort);
         });
-      } else if (d.role === 'switcher' && d.selectedInput) {
-        // 스위처는 selectedInput 하나만 "모든 OUT으로 방송"
-        // traceUp시 OUT→IN 역매핑을 찾을 때 첫 OUT을 기준으로 selectedInput 발견 가능
-        d.outputs.forEach(outPort => {
-          m.set(`${d.id}:${d.selectedInput}`, outPort);
-        });
+      } else if (d.role === 'switcher') {
+        // 스위처: selectedInput이 모든 OUT으로 방송. 없으면 첫 IN을 기본값으로 사용해 trace 끊김 방지
+        const selIn = d.selectedInput ?? d.inputs[0];
+        if (selIn) {
+          d.outputs.forEach(outPort => {
+            m.set(`${d.id}:${selIn}`, outPort);
+          });
+        }
       }
     });
     connections.forEach(c => {
@@ -321,100 +332,94 @@ export default function SignalFlowMap() {
     if (!traceId) return { devices: new Set<string>(), connections: new Set<string>(), ports: new Set<string>() };
     const dSet = new Set<string>([traceId]);
     const cSet = new Set<string>();
-    const pSet = new Set<string>(); // "devId:portName" 형식으로 경유 포트 표기
+    const pSet = new Set<string>();
 
-    // 하류 방향 추적: 어느 OUT 포트에서 시작해 허브 내부까지 따라가며 최종 non-hub 도착점
-    const traceDown = (fromDevId: string, fromPort: string, depth: number = 0, seen: Set<string> = new Set()) => {
-      if (depth > 20) return;
-      const key = `${fromDevId}:${fromPort}`;
-      if (seen.has(key)) return;
-      const nextSeen = new Set(seen); nextSeen.add(key);
-      pSet.add(key);
+    const startDev = devById.get(traceId);
+    if (!startDev) return { devices: dSet, connections: cSet, ports: pSet };
 
-      // 이 OUT 포트에서 나가는 connection
+    // 단일 신호 경로를 connection 체인으로 수집
+    // 각 IN 포트에 대해 "이 IN으로 들어오는 신호가 어느 OUT에서 왔는가" 체인을 역추적
+    const traceInChain = (devId: string, portName: string, depth = 0) => {
+      if (depth > 30) return;
+      const inKey = `${devId}:${portName}`;
+      if (pSet.has(inKey)) return;
+      pSet.add(inKey);
+
+      // 이 IN으로 들어오는 connection 찾기
       const c = connections.find(x =>
-        x.from_device === fromDevId && x.from_port === fromPort &&
-        !(x.from_device === x.to_device && x.is_patch)
-      );
-      if (!c) return;
-      cSet.add(c.id);
-      dSet.add(c.to_device);
-      pSet.add(`${c.to_device}:${c.to_port}`);
-
-      const destDev = devById.get(c.to_device);
-      if (!destDev) return;
-
-      if (destDev.role === 'patchbay' || destDev.role === 'router' || destDev.role === 'switcher') {
-        // 허브 내부 통과: IN → OUT 매핑으로 다음 OUT 찾아 재귀
-        // 스위처는 selectedInput만 매핑되어 있어 실제 신호 경로만 추적됨
-        const nextOut = hubInternalMap.get(`${destDev.id}:${c.to_port}`);
-        if (nextOut) {
-          pSet.add(`${destDev.id}:${nextOut}`);
-          traceDown(destDev.id, nextOut, depth + 1, nextSeen);
-        }
-      }
-      // 일반 장비면 여기가 끝 — 추가로 그 장비에서 다른 OUT으로 downstream 계속하려면?
-      // TD MON 같은 display는 스위처로부터 여러 경로로 받지만, 시작점이 display면 upstream만 의미 있음
-      // 시작이 source면 source OUT이 여러 장비로 가도 downstream 전부 추적
-    };
-
-    // 상류 방향 추적: 이 IN 포트로 들어오는 신호의 근원까지 거슬러 올라감
-    const traceUp = (toDevId: string, toPort: string, depth: number = 0, seen: Set<string> = new Set()) => {
-      if (depth > 20) return;
-      const key = `${toDevId}:${toPort}`;
-      if (seen.has(key)) return;
-      const nextSeen = new Set(seen); nextSeen.add(key);
-      pSet.add(key);
-
-      // 이 IN 포트로 들어오는 connection
-      const c = connections.find(x =>
-        x.to_device === toDevId && x.to_port === toPort &&
+        x.to_device === devId && x.to_port === portName &&
         !(x.from_device === x.to_device && x.is_patch)
       );
       if (!c) return;
       cSet.add(c.id);
       dSet.add(c.from_device);
-      pSet.add(`${c.from_device}:${c.from_port}`);
+      const fromKey = `${c.from_device}:${c.from_port}`;
+      pSet.add(fromKey);
 
       const srcDev = devById.get(c.from_device);
       if (!srcDev) return;
+      if (srcDev.role === 'source') return; // source 도달 — 종료
 
+      // 허브(패치베이/라우터/스위처): 어느 IN에서 이 OUT이 나왔는지 찾기
       if (srcDev.role === 'patchbay' || srcDev.role === 'router' || srcDev.role === 'switcher') {
-        // 허브 내부를 거슬러: OUT → IN 역매핑
-        // hubInternalMap은 IN→OUT이므로 역으로 스캔
-        // 스위처인 경우 selectedInput만 매핑되어 있으므로 자연히 그 IN만 찾아짐
+        // OUT → IN 역매핑 (hubInternalMap은 IN→OUT)
         let foundIn: string | undefined;
         srcDev.inputs.forEach(inP => {
           if (hubInternalMap.get(`${srcDev.id}:${inP}`) === c.from_port) foundIn = inP;
         });
-        if (foundIn) {
-          pSet.add(`${srcDev.id}:${foundIn}`);
-          traceUp(srcDev.id, foundIn, depth + 1, nextSeen);
-        }
+        if (foundIn) traceInChain(srcDev.id, foundIn, depth + 1);
       }
+      // 일반 장비: 여기서 끝 (중간 장비는 보통 pass-through 아님)
     };
 
-    const startDev = devById.get(traceId);
-    if (!startDev) return { devices: dSet, connections: cSet, ports: pSet };
+    // 각 OUT 포트에서 모든 도달 지점까지 추적
+    const traceOutChain = (devId: string, portName: string, depth = 0) => {
+      if (depth > 30) return;
+      const outKey = `${devId}:${portName}`;
+      if (pSet.has(outKey)) return;
+      pSet.add(outKey);
 
-    // 시작 장비 각 OUT 포트에 대해 downstream
-    if (traceMode === 'both' || traceMode === 'downstream') {
-      startDev.outputs.forEach(p => {
-        pSet.add(`${traceId}:${p}`);
-        traceDown(traceId, p);
+      // 이 OUT에서 나가는 모든 connection (하나의 OUT이 여러 분기 가능 — 실제로는 하나지만 안전하게 all)
+      connections.forEach(c => {
+        if (c.from_device !== devId || c.from_port !== portName) return;
+        if (c.from_device === c.to_device && c.is_patch) return;
+        cSet.add(c.id);
+        dSet.add(c.to_device);
+        const toKey = `${c.to_device}:${c.to_port}`;
+        pSet.add(toKey);
+
+        const destDev = devById.get(c.to_device);
+        if (!destDev) return;
+        if (destDev.role === 'display') return; // display 도달 — 종료
+
+        // 허브: 내부 IN→OUT 매핑으로 계속
+        if (destDev.role === 'patchbay' || destDev.role === 'router' || destDev.role === 'switcher') {
+          const nextOut = hubInternalMap.get(`${destDev.id}:${c.to_port}`);
+          if (nextOut) traceOutChain(destDev.id, nextOut, depth + 1);
+        }
       });
+    };
+
+    // 시작 장비 역할에 따라 단순 분기
+    if (startDev.role === 'display') {
+      // 디스플레이 → 각 IN으로 역추적해서 source 도달
+      startDev.inputs.forEach(p => traceInChain(traceId, p));
+    } else if (startDev.role === 'source') {
+      // 소스 → 각 OUT으로 정추적해서 display 도달
+      startDev.outputs.forEach(p => traceOutChain(traceId, p));
+    } else {
+      // 중간 장비: 양방향 모두
+      startDev.inputs.forEach(p => traceInChain(traceId, p));
+      startDev.outputs.forEach(p => traceOutChain(traceId, p));
     }
-    // 시작 장비 각 IN 포트에 대해 upstream
-    if (traceMode === 'both' || traceMode === 'upstream') {
-      startDev.inputs.forEach(p => {
-        pSet.add(`${traceId}:${p}`);
-        traceUp(traceId, p);
-      });
+
+    if (typeof console !== 'undefined') {
+      console.log('[Trace]', startDev.name, startDev.role, 'dev:', dSet.size, 'conn:', cSet.size, 'port:', pSet.size);
     }
 
     return { devices: dSet, connections: cSet, ports: pSet };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [traceId, connections, traceMode, visibleLayerIds, devices, hubInternalMap]);
+  }, [traceId, connections, visibleLayerIds, devices, hubInternalMap]);
 
   // ===== 시그널 시뮬레이션 =====
   // "이 장비의 이 입력 포트에 어떤 소스의 이미지가 도착하는지" 계산
