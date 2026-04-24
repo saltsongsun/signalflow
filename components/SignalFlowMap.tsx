@@ -2025,6 +2025,8 @@ export default function SignalFlowMap() {
                   const baseTransform = isHovered && !editMode ? 'translateY(-1px)' : '';
                   const finalTransform = [extraTransform, baseTransform].filter(Boolean).join(' ');
 
+                  const isRouterRole = role === 'router';
+
                   return {
                     left: d.x, top: d.y,
                     width: useBaseW, minHeight: useBaseH,
@@ -2032,8 +2034,15 @@ export default function SignalFlowMap() {
                       ? `linear-gradient(165deg, rgba(20,184,166,0.15) 0%, rgba(8,12,12,0.96) 40%, rgba(4,6,6,0.98) 100%)`
                       : isWallbox
                       ? `linear-gradient(165deg, rgba(245,158,11,0.12) 0%, rgba(12,10,6,0.96) 40%, rgba(6,4,2,0.98) 100%)`
+                      : isRouterRole
+                      ? `linear-gradient(165deg, rgba(249,115,22,0.15) 0%, rgba(12,8,4,0.96) 40%, rgba(6,4,2,0.98) 100%)`
                       : `linear-gradient(165deg, ${color.bg} 0%, rgba(10,10,12,0.96) 40%, rgba(4,4,6,0.98) 100%)`,
-                    border: `${borderWidth}px solid ${isPatchbay && !isSelected && !isTraceTarget ? 'rgba(20,184,166,0.4)' : isWallbox && !isSelected && !isTraceTarget ? 'rgba(245,158,11,0.4)' : borderColor}`,
+                    border: `${borderWidth}px solid ${
+                      isPatchbay && !isSelected && !isTraceTarget ? 'rgba(20,184,166,0.4)'
+                      : isWallbox && !isSelected && !isTraceTarget ? 'rgba(245,158,11,0.4)'
+                      : isRouterRole && !isSelected && !isTraceTarget ? 'rgba(249,115,22,0.5)'
+                      : borderColor
+                    }`,
                     boxShadow: isSelected
                       ? `0 0 0 1px rgba(251,191,36,0.4), 0 0 30px rgba(251,191,36,0.45), 0 10px 30px rgba(0,0,0,0.5)`
                       : isTraceTarget
@@ -2044,6 +2053,8 @@ export default function SignalFlowMap() {
                       ? `0 0 18px rgba(20,184,166,0.15), 0 4px 16px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04)`
                       : isWallbox
                       ? `0 0 18px rgba(245,158,11,0.12), 0 4px 16px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04)`
+                      : isRouterRole
+                      ? `0 0 18px rgba(249,115,22,0.18), 0 4px 16px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04)`
                       : `0 4px 16px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04)`,
                     opacity: isDim ? 0.25 : 1,
                     cursor: editMode ? 'move' : 'pointer',
@@ -2076,6 +2087,7 @@ export default function SignalFlowMap() {
                             background:
                               isWallbox ? 'rgba(245,158,11,0.15)'
                               : isPatchbay ? 'rgba(20,184,166,0.15)'
+                              : role === 'router' ? 'rgba(249,115,22,0.18)'
                               : isSource ? 'rgba(132,204,22,0.2)'
                               : isDisplay ? 'rgba(14,165,233,0.18)'
                               : role === 'connector' ? 'rgba(148,163,184,0.15)'
@@ -2083,6 +2095,7 @@ export default function SignalFlowMap() {
                             color:
                               isWallbox ? '#FBBF24'
                               : isPatchbay ? '#2DD4BF'
+                              : role === 'router' ? '#FB923C'
                               : isSource ? '#A3E635'
                               : isDisplay ? '#38BDF8'
                               : role === 'connector' ? '#CBD5E1'
@@ -2090,6 +2103,7 @@ export default function SignalFlowMap() {
                             border: `0.5px solid ${
                               isWallbox ? 'rgba(251,191,36,0.4)'
                               : isPatchbay ? 'rgba(45,212,191,0.4)'
+                              : role === 'router' ? 'rgba(251,146,60,0.45)'
                               : isSource ? 'rgba(163,230,53,0.4)'
                               : isDisplay ? 'rgba(56,189,248,0.4)'
                               : role === 'connector' ? 'rgba(203,213,225,0.3)'
@@ -2338,7 +2352,7 @@ export default function SignalFlowMap() {
                     )}
                   </div>
                 ) : (
-                  <div className="py-3.5 relative">
+                  <div className="py-3.5 relative" style={{ minHeight: Math.max(inVis.length, outVis.length) * PORT_H }}>
                   <div className="pr-3">
                     {inVis.map((p, renderIdx) => {
                       const meta = d.inputsMeta?.[p.name];
@@ -2597,10 +2611,10 @@ export default function SignalFlowMap() {
                           className={`flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] font-mono font-medium transition text-left border ${
                             isActive
                               ? isRouter
-                                ? 'bg-fuchsia-500 text-white border-fuchsia-400 shadow-md shadow-fuchsia-500/40'
+                                ? 'bg-orange-500 text-white border-orange-400 shadow-md shadow-orange-500/40'
                                 : 'bg-teal-500 text-white border-teal-400 shadow-md shadow-teal-500/40'
                               : isRouter
-                                ? 'bg-fuchsia-500/15 text-fuchsia-200 border-fuchsia-500/30 hover:bg-fuchsia-500/30'
+                                ? 'bg-orange-500/15 text-orange-200 border-orange-500/30 hover:bg-orange-500/30'
                                 : 'bg-teal-500/15 text-teal-200 border-teal-500/30 hover:bg-teal-500/30'
                           }`}
                           title={`수신: ${hc.hub.name}/${hc.hubPort} → ${hc.myPort}${isActive ? '\n(클릭 → 선 숨기기)' : '\n(클릭 → 연결선 표시)'}`}
@@ -2694,7 +2708,7 @@ export default function SignalFlowMap() {
                             ? `${destDev.inputs.length}x${destDev.outputs.length} R/S ${destConn.to_port}`
                             : `${destDev.name}·${destConn.to_port}`;
                           const bgClass = isRouter
-                            ? 'bg-fuchsia-500/15 text-fuchsia-200 border-fuchsia-500/30'
+                            ? 'bg-orange-500/15 text-orange-200 border-orange-500/30'
                             : 'bg-white/5 text-neutral-400 border-white/15';
                           return (
                             <div key={p.name} className="flex items-center" style={{ height: PORT_H }}>
@@ -2729,8 +2743,8 @@ export default function SignalFlowMap() {
                     if (isRouter) {
                       label = `${destDev.inputs.length}x${destDev.outputs.length} R/S ${destConn.to_port}`;
                       bgClass = isActive
-                        ? 'bg-fuchsia-500 text-white border-fuchsia-400 shadow-md shadow-fuchsia-500/40'
-                        : 'bg-fuchsia-500/15 text-fuchsia-200 border-fuchsia-500/30 hover:bg-fuchsia-500/30';
+                        ? 'bg-orange-500 text-white border-orange-400 shadow-md shadow-orange-500/40'
+                        : 'bg-orange-500/15 text-orange-200 border-orange-500/30 hover:bg-orange-500/30';
                     } else if (isPb) {
                       const idx = destDev.inputs.indexOf(destConn.to_port);
                       label = `${destDev.name}-${String(idx >= 0 ? idx + 1 : 0).padStart(2, '0')}`;
