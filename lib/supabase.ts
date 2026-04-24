@@ -95,10 +95,13 @@ export type Device = {
   audioUrl?: string;       // 소스 장비의 재생 오디오 URL
   audioStoragePath?: string;
   selectedInput?: string;  // 스위처/라우터가 현재 OUT으로 보내는 IN 포트
+  // 스위처: PVW(Preview) 포트 — PGM으로 올라갈 예비 소스
+  pvwPort?: string;
   // 멀티뷰 장비 전용
   multiviewLayout?: MultiviewLayoutId;  // 레이아웃 선택
-  multiviewPgmInput?: string;  // PGM으로 표시할 IN 포트명
-  multiviewPvwInput?: string;  // PVW로 표시할 IN 포트명
+  multiviewPgmInput?: string;  // PGM으로 표시할 IN 포트명 (linkedSwitcher가 없을 때만 사용)
+  multiviewPvwInput?: string;  // PVW로 표시할 IN 포트명 (linkedSwitcher가 없을 때만 사용)
+  multiviewLinkedSwitcherId?: string;  // 연동 스위처 ID — 설정되면 자동으로 PGM/PVW/소스 가져옴
   // 나머지 IN들은 자동으로 소스 모니터 셀에 순서대로 배치됨
   // 그룹화
   groupId?: string;    // 같은 그룹끼리는 동일 id

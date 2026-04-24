@@ -2689,32 +2689,73 @@ export default function SignalFlowMap() {
                   const layoutId = (d.multiviewLayout as MultiviewLayoutId | undefined) ?? 'pgm+pvw+6';
                   const layout = MULTIVIEW_LAYOUTS[layoutId] ?? MULTIVIEW_LAYOUTS['pgm+pvw+6'];
                   const sourceCellCount = layout.sourceCells;
-                  const pgmIn = d.multiviewPgmInput;
-                  const pvwIn = d.multiviewPvwInput;
-                  // PGM/PVW 제외한 나머지 IN이 소스 모니터에 순서대로 들어감
-                  const sourceInputs = d.inputs.filter(p => p !== pgmIn && p !== pvwIn).slice(0, sourceCellCount);
 
-                  const getSrc = (inputPort: string | undefined) => {
-                    if (!inputPort) return null;
-                    const srcId = signalByOutput.inSignal.get(`${d.id}:${inputPort}`);
-                    if (!srcId) return null;
-                    const srcDev = devById.get(srcId);
-                    return srcDev ?? null;
-                  };
+                  // ===== 연동 스위처 모드 =====
+                  const linkedSw = d.multiviewLinkedSwitcherId ? devById.get(d.multiviewLinkedSwitcherId) : null;
 
-                  const pgmSrc = getSrc(pgmIn);
-                  const pvwSrc = getSrc(pvwIn);
+                  let pgmSrc: Device | null = null;
+                  let pvwSrc: Device | null = null;
+                  let sourceSrcList: Array<{ label: string; srcDev: Device | null; inputPort: string }> = [];
+                  let statusLabel: string;
 
-                  // 소스 모니터 그리드 columns 계산
+                  if (linkedSw && linkedSw.role === 'switcher') {
+                    // 스위처의 PGM 출력에 실려 나가는 소스 = 스위처 selectedInput의 source
+                    const pgmInputPort = linkedSw.selectedInput;
+                    if (pgmInputPort) {
+                      const srcId = signalByOutput.inSignal.get(`${linkedSw.id}:${pgmInputPort}`);
+                      if (srcId) pgmSrc = devById.get(srcId) ?? null;
+                    }
+                    // PVW: 스위처의 pvwPort가 있으면 거기서, 없으면 selectedInput 외 임의
+                    const pvwInputPort = linkedSw.pvwPort;
+                    if (pvwInputPort) {
+                      const srcId = signalByOutput.inSignal.get(`${linkedSw.id}:${pvwInputPort}`);
+                      if (srcId) pvwSrc = devById.get(srcId) ?? null;
+                    }
+                    // 소스 모니터: 스위처의 각 IN에 도달한 source 목록 (순서대로)
+                    sourceSrcList = linkedSw.inputs.slice(0, sourceCellCount).map((inp, i) => {
+                      const srcId = signalByOutput.inSignal.get(`${linkedSw.id}:${inp}`);
+                      const srcDev = srcId ? (devById.get(srcId) ?? null) : null;
+                      const meta = linkedSw.inputsMeta?.[inp];
+                      return {
+                        label: meta?.label ?? inp,
+                        srcDev,
+                        inputPort: inp,
+                      };
+                    });
+                    statusLabel = `🔗 ${linkedSw.name}`;
+                  } else {
+                    // ===== 수동 모드 =====
+                    const pgmIn = d.multiviewPgmInput;
+                    const pvwIn = d.multiviewPvwInput;
+                    const sourceInputs = d.inputs.filter(p => p !== pgmIn && p !== pvwIn).slice(0, sourceCellCount);
+
+                    const getSrc = (inputPort: string | undefined): Device | null => {
+                      if (!inputPort) return null;
+                      const srcId = signalByOutput.inSignal.get(`${d.id}:${inputPort}`);
+                      if (!srcId) return null;
+                      return devById.get(srcId) ?? null;
+                    };
+
+                    pgmSrc = getSrc(pgmIn);
+                    pvwSrc = getSrc(pvwIn);
+                    sourceSrcList = sourceInputs.map((inp, i) => ({
+                      label: String(i + 1).padStart(2, '0'),
+                      srcDev: getSrc(inp),
+                      inputPort: inp,
+                    }));
+                    statusLabel = layout.label;
+                  }
+
                   const srcCols = sourceCellCount <= 4 ? 2 : sourceCellCount <= 9 ? 3 : sourceCellCount <= 16 ? 4 : 5;
+                  const hasPgmOrPvw = pgmSrc || pvwSrc || d.multiviewPgmInput || d.multiviewPvwInput || linkedSw;
 
                   return (
                     <div className="mx-2.5 mb-2.5 space-y-1.5">
                       {/* PGM + PVW 나란히 */}
-                      {(pgmIn || pvwIn) && (
+                      {hasPgmOrPvw && (
                         <div className="grid grid-cols-2 gap-1">
-                          <MultiviewCell label="PGM" inputPort={pgmIn} srcDev={pgmSrc} color="emerald" big />
-                          <MultiviewCell label="PVW" inputPort={pvwIn} srcDev={pvwSrc} color="amber" big />
+                          <MultiviewCell label="PGM" inputPort={pgmSrc?.name ?? ''} srcDev={pgmSrc} color="emerald" big />
+                          <MultiviewCell label="PVW" inputPort={pvwSrc?.name ?? ''} srcDev={pvwSrc} color="amber" big />
                         </div>
                       )}
                       {/* 소스 모니터 셀 그리드 */}
@@ -2724,14 +2765,13 @@ export default function SignalFlowMap() {
                           style={{ gridTemplateColumns: `repeat(${srcCols}, minmax(0, 1fr))` }}
                         >
                           {Array.from({ length: sourceCellCount }).map((_, i) => {
-                            const inputPort = sourceInputs[i];
-                            const srcDev = getSrc(inputPort);
+                            const entry = sourceSrcList[i];
                             return (
                               <MultiviewCell
                                 key={i}
-                                label={String(i + 1).padStart(2, '0')}
-                                inputPort={inputPort}
-                                srcDev={srcDev}
+                                label={entry ? entry.label : String(i + 1).padStart(2, '0')}
+                                inputPort={entry?.inputPort}
+                                srcDev={entry?.srcDev ?? null}
                                 color="slate"
                               />
                             );
@@ -2739,8 +2779,8 @@ export default function SignalFlowMap() {
                         </div>
                       )}
                       <div className="flex items-center justify-between text-[8.5px] font-mono text-violet-300/60 px-0.5">
-                        <span>{layout.label}</span>
-                        <span>{d.inputs.length}ch IN</span>
+                        <span className="truncate">{statusLabel}</span>
+                        <span>{linkedSw ? `${linkedSw.inputs.length}ch` : `${d.inputs.length}ch IN`}</span>
                       </div>
                     </div>
                   );
@@ -3066,6 +3106,7 @@ export default function SignalFlowMap() {
         <DeviceEditor
           device={editingDevice}
           layers={layers}
+          allDevices={devices}
           selectionCount={selectedIds.size}
           onSave={handleSaveDevice}
           onSaveToSelection={async (updates) => {

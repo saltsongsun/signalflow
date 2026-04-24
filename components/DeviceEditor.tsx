@@ -5,7 +5,8 @@ import { Device, CONNECTION_TYPES, ConnectionType, PortInfo, Layer, DEVICE_ROLES
 type Props = {
   device: Device;
   layers: Layer[];
-  selectionCount?: number;  // 현재 다중선택된 장비 수
+  allDevices?: Device[];  // 연동 스위처 선택 등에 사용
+  selectionCount?: number;
   onSave: (updates: Partial<Device>) => void;
   onSaveToSelection?: (updates: Partial<Device>) => void;
   onDelete: () => void;
@@ -21,7 +22,7 @@ const TYPE_ACCENT = {
   combined: { grad: 'from-purple-500/20 to-purple-600/5', ring: 'ring-purple-500/40', dot: '#A855F7' },
 };
 
-export default function DeviceEditor({ device, layers, selectionCount, onSave, onSaveToSelection, onDelete, onDuplicate, onClose }: Props) {
+export default function DeviceEditor({ device, layers, allDevices, selectionCount, onSave, onSaveToSelection, onDelete, onDuplicate, onClose }: Props) {
   const [name, setName] = useState(device.name);
   const [model, setModel] = useState(device.model ?? '');
   const [location, setLocation] = useState(device.location ?? '');
@@ -35,6 +36,8 @@ export default function DeviceEditor({ device, layers, selectionCount, onSave, o
   const [multiviewLayout, setMultiviewLayout] = useState<MultiviewLayoutId>((device.multiviewLayout as MultiviewLayoutId) ?? 'pgm+pvw+6');
   const [multiviewPgmInput, setMultiviewPgmInput] = useState(device.multiviewPgmInput ?? '');
   const [multiviewPvwInput, setMultiviewPvwInput] = useState(device.multiviewPvwInput ?? '');
+  const [multiviewLinkedSwitcherId, setMultiviewLinkedSwitcherId] = useState(device.multiviewLinkedSwitcherId ?? '');
+  const [pvwPort, setPvwPort] = useState(device.pvwPort ?? '');
   const [uploadingImage, setUploadingImage] = useState(false);
   const [uploadingAudio, setUploadingAudio] = useState(false);
   const [type, setType] = useState<Device['type']>(device.type);
@@ -64,6 +67,8 @@ export default function DeviceEditor({ device, layers, selectionCount, onSave, o
     setMultiviewLayout((device.multiviewLayout as MultiviewLayoutId) ?? 'pgm+pvw+6');
     setMultiviewPgmInput(device.multiviewPgmInput ?? '');
     setMultiviewPvwInput(device.multiviewPvwInput ?? '');
+    setMultiviewLinkedSwitcherId(device.multiviewLinkedSwitcherId ?? '');
+    setPvwPort(device.pvwPort ?? '');
     setType(device.type);
     setRole(device.role ?? 'standard');
     setPgmPort(device.pgmPort ?? '');
@@ -163,6 +168,8 @@ export default function DeviceEditor({ device, layers, selectionCount, onSave, o
       multiviewLayout: role === 'multiview' ? multiviewLayout : null,
       multiviewPgmInput: role === 'multiview' ? (multiviewPgmInput || null) : null,
       multiviewPvwInput: role === 'multiview' ? (multiviewPvwInput || null) : null,
+      multiviewLinkedSwitcherId: role === 'multiview' ? (multiviewLinkedSwitcherId || null) : null,
+      pvwPort: role === 'switcher' ? (pvwPort || null) : null,
       type, role,
       pgmPort: role === 'switcher' ? (pgmPort || undefined) : undefined,
       normals: role === 'patchbay' ? normals : undefined,
@@ -391,23 +398,44 @@ export default function DeviceEditor({ device, layers, selectionCount, onSave, o
 
         {/* PGM Port (switcher only) */}
         {role === 'switcher' && (
-          <div className="bg-gradient-to-br from-emerald-500/10 to-transparent border border-emerald-500/20 rounded-lg p-3">
-            <label className="block text-[10px] uppercase tracking-[0.12em] text-emerald-400 mb-2 font-semibold">
-              📺 PGM 출력 포트
-              <span className="text-neutral-500 normal-case tracking-normal ml-1 font-normal">현재 송출중인 출력</span>
-            </label>
-            <select
-              value={pgmPort}
-              onChange={e => setPgmPort(e.target.value)}
-              className="w-full bg-neutral-900 border border-emerald-500/30 rounded px-3 py-2 text-sm font-mono text-emerald-200 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500/30 focus:outline-none"
-            >
-              <option value="">(지정 안함)</option>
-              {outputs.map(o => (
-                <option key={o.name} value={o.name}>{o.name}{o.label ? ` — ${o.label}` : ''}</option>
-              ))}
-            </select>
-            <div className="mt-1.5 text-[10px] text-neutral-500">
-              지정하면 장비카드에 「PGM」 뱃지가 붙고, 신호추적시 이 출력이 우선.
+          <div className="bg-gradient-to-br from-emerald-500/10 to-transparent border border-emerald-500/20 rounded-lg p-3 space-y-3">
+            <div>
+              <label className="block text-[10px] uppercase tracking-[0.12em] text-emerald-400 mb-2 font-semibold">
+                📺 PGM 출력 포트
+                <span className="text-neutral-500 normal-case tracking-normal ml-1 font-normal">현재 송출중인 출력</span>
+              </label>
+              <select
+                value={pgmPort}
+                onChange={e => setPgmPort(e.target.value)}
+                className="w-full bg-neutral-900 border border-emerald-500/30 rounded px-3 py-2 text-sm font-mono text-emerald-200 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500/30 focus:outline-none"
+              >
+                <option value="">(지정 안함)</option>
+                {outputs.map(o => (
+                  <option key={o.name} value={o.name}>{o.name}{o.label ? ` — ${o.label}` : ''}</option>
+                ))}
+              </select>
+              <div className="mt-1.5 text-[10px] text-neutral-500">
+                지정하면 장비카드에 「PGM」 뱃지가 붙고, 신호추적시 이 출력이 우선.
+              </div>
+            </div>
+            <div>
+              <label className="block text-[10px] uppercase tracking-[0.12em] text-amber-400 mb-2 font-semibold">
+                🎬 PVW 입력 포트
+                <span className="text-neutral-500 normal-case tracking-normal ml-1 font-normal">다음에 올릴 예비 소스</span>
+              </label>
+              <select
+                value={pvwPort}
+                onChange={e => setPvwPort(e.target.value)}
+                className="w-full bg-neutral-900 border border-amber-500/30 rounded px-3 py-2 text-sm font-mono text-amber-200 focus:border-amber-400 focus:ring-2 focus:ring-amber-500/30 focus:outline-none"
+              >
+                <option value="">(지정 안함 — 현재 선택 입력을 사용)</option>
+                {inputs.map(i => (
+                  <option key={i.name} value={i.name}>{i.name}{i.label ? ` — ${i.label}` : ''}</option>
+                ))}
+              </select>
+              <div className="mt-1.5 text-[10px] text-neutral-500">
+                멀티뷰 연동 시 PVW 셀에 이 입력의 소스가 표시됩니다.
+              </div>
             </div>
           </div>
         )}
@@ -594,9 +622,41 @@ export default function DeviceEditor({ device, layers, selectionCount, onSave, o
               <span className="text-[15px]">▦</span>
               <div>
                 <div className="text-[11px] font-bold text-violet-300">멀티뷰 모니터 설정</div>
-                <div className="text-[10px] text-neutral-500">여러 소스를 한 화면에 동시 표시. 입력 포트로 신호 받음.</div>
+                <div className="text-[10px] text-neutral-500">스위처와 연동하거나 직접 입력을 할당.</div>
               </div>
             </div>
+
+            {/* 연동 스위처 선택 */}
+            {allDevices && (
+              <div>
+                <label className="text-[10px] font-semibold text-violet-300 uppercase tracking-wider block mb-1">
+                  🔗 연동 스위처 <span className="text-neutral-500 normal-case">(선택하면 자동 연동)</span>
+                </label>
+                <select
+                  value={multiviewLinkedSwitcherId}
+                  onChange={e => setMultiviewLinkedSwitcherId(e.target.value)}
+                  className="w-full bg-neutral-900 border border-violet-500/30 rounded px-2 py-1.5 text-[12px] text-violet-100 focus:border-violet-400 focus:outline-none"
+                >
+                  <option value="">(연동 안 함 — 직접 입력 할당)</option>
+                  {allDevices.filter(x => x.role === 'switcher').map(sw => (
+                    <option key={sw.id} value={sw.id}>
+                      ⇆ {sw.name}{sw.model ? ` (${sw.model})` : ''} — IN {sw.inputs.length}ch
+                    </option>
+                  ))}
+                </select>
+                {multiviewLinkedSwitcherId && (() => {
+                  const sw = allDevices.find(x => x.id === multiviewLinkedSwitcherId);
+                  if (!sw) return null;
+                  return (
+                    <div className="mt-1.5 text-[10px] text-violet-200/80 bg-violet-500/10 border border-violet-500/15 rounded p-1.5 space-y-0.5">
+                      <div>✓ PGM: <span className="font-mono text-emerald-300">{sw.pgmPort ?? '(미지정)'}</span> 출력의 현재 소스</div>
+                      <div>✓ PVW: <span className="font-mono text-amber-300">{sw.pvwPort ?? sw.selectedInput ?? '(미지정)'}</span></div>
+                      <div>✓ 소스 모니터: 스위처의 {sw.inputs.length}개 입력 자동 표시</div>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
 
             {/* 레이아웃 선택 */}
             <div>
@@ -615,45 +675,46 @@ export default function DeviceEditor({ device, layers, selectionCount, onSave, o
               </div>
             </div>
 
-            {/* PGM / PVW 선택 */}
-            {inputs.length > 0 && (
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-[10px] font-semibold text-emerald-400 uppercase tracking-wider block mb-1">PGM (방송중)</label>
-                  <select
-                    value={multiviewPgmInput}
-                    onChange={e => setMultiviewPgmInput(e.target.value)}
-                    className="w-full bg-neutral-900 border border-emerald-500/30 rounded px-2 py-1.5 text-[11px] font-mono text-emerald-100 focus:border-emerald-400 focus:outline-none"
-                  >
-                    <option value="">(없음)</option>
-                    {inputs.map(i => (
-                      <option key={i.name} value={i.name}>
-                        {i.name}{i.label ? ` — ${i.label}` : ''}
-                      </option>
-                    ))}
-                  </select>
+            {/* 수동 할당 (연동 없을 때만) */}
+            {!multiviewLinkedSwitcherId && inputs.length > 0 && (
+              <>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[10px] font-semibold text-emerald-400 uppercase tracking-wider block mb-1">PGM (방송중)</label>
+                    <select
+                      value={multiviewPgmInput}
+                      onChange={e => setMultiviewPgmInput(e.target.value)}
+                      className="w-full bg-neutral-900 border border-emerald-500/30 rounded px-2 py-1.5 text-[11px] font-mono text-emerald-100 focus:border-emerald-400 focus:outline-none"
+                    >
+                      <option value="">(없음)</option>
+                      {inputs.map(i => (
+                        <option key={i.name} value={i.name}>
+                          {i.name}{i.label ? ` — ${i.label}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-semibold text-amber-400 uppercase tracking-wider block mb-1">PVW (대기)</label>
+                    <select
+                      value={multiviewPvwInput}
+                      onChange={e => setMultiviewPvwInput(e.target.value)}
+                      className="w-full bg-neutral-900 border border-amber-500/30 rounded px-2 py-1.5 text-[11px] font-mono text-amber-100 focus:border-amber-400 focus:outline-none"
+                    >
+                      <option value="">(없음)</option>
+                      {inputs.map(i => (
+                        <option key={i.name} value={i.name}>
+                          {i.name}{i.label ? ` — ${i.label}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
-                <div>
-                  <label className="text-[10px] font-semibold text-amber-400 uppercase tracking-wider block mb-1">PVW (대기)</label>
-                  <select
-                    value={multiviewPvwInput}
-                    onChange={e => setMultiviewPvwInput(e.target.value)}
-                    className="w-full bg-neutral-900 border border-amber-500/30 rounded px-2 py-1.5 text-[11px] font-mono text-amber-100 focus:border-amber-400 focus:outline-none"
-                  >
-                    <option value="">(없음)</option>
-                    {inputs.map(i => (
-                      <option key={i.name} value={i.name}>
-                        {i.name}{i.label ? ` — ${i.label}` : ''}
-                      </option>
-                    ))}
-                  </select>
+                <div className="text-[10px] text-violet-200/70 bg-violet-500/5 border border-violet-500/15 rounded p-2">
+                  💡 <span className="font-semibold">소스 모니터</span>는 PGM/PVW로 선택되지 않은 IN 포트들이 자동으로 순서대로 채워집니다.
                 </div>
-              </div>
+              </>
             )}
-
-            <div className="text-[10px] text-violet-200/70 bg-violet-500/5 border border-violet-500/15 rounded p-2">
-              💡 <span className="font-semibold">소스 모니터</span>는 PGM/PVW로 선택되지 않은 IN 포트들이 자동으로 순서대로 채워집니다.
-            </div>
           </div>
         )}
 

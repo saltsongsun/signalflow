@@ -78,6 +78,8 @@ alter table public.devices add column if not exists "selectedInput" text;
 alter table public.devices add column if not exists "multiviewLayout" text;
 alter table public.devices add column if not exists "multiviewPgmInput" text;
 alter table public.devices add column if not exists "multiviewPvwInput" text;
+alter table public.devices add column if not exists "multiviewLinkedSwitcherId" text;
+alter table public.devices add column if not exists "pvwPort" text;
 alter table public.devices add column if not exists "groupId" text;
 alter table public.devices add column if not exists "groupName" text;
 alter table public.connections add column if not exists conn_type text;
