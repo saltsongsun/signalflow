@@ -25,20 +25,56 @@ export type PortInfo = {
 };
 
 // 장비 역할
-export const DEVICE_ROLES = ['standard', 'switcher', 'router', 'splitter', 'patchbay'] as const;
+export const DEVICE_ROLES = [
+  'standard', 'switcher', 'router', 'splitter', 'patchbay', 'wallbox',
+  'source', 'display', 'multiview', 'connector',
+] as const;
 export type DeviceRole = typeof DEVICE_ROLES[number];
 
 export const DEVICE_ROLE_LABELS: Record<DeviceRole, string> = {
-  standard: '일반',
-  switcher: '스위처',
-  router:   '라우터',
-  splitter: '스플리터',
-  patchbay: '패치베이',
+  standard:  '일반',
+  switcher:  '스위처',
+  router:    '라우터',
+  splitter:  '스플리터',
+  patchbay:  '패치베이',
+  wallbox:   '월박스',
+  source:    '소스',
+  display:   '디스플레이',
+  multiview: '멀티뷰',
+  connector: '연결',
+};
+
+// 멀티뷰 레이아웃 프리셋
+// PGM/PVW 2칸 + 나머지 소스 모니터 셀 구조
+export const MULTIVIEW_LAYOUTS = {
+  'pgm+pvw+4':  { label: 'PGM/PVW + 4소스',  sourceCells: 4,  layout: '2+4'  },
+  'pgm+pvw+6':  { label: 'PGM/PVW + 6소스',  sourceCells: 6,  layout: '2+6'  },
+  'pgm+pvw+8':  { label: 'PGM/PVW + 8소스',  sourceCells: 8,  layout: '2+8'  },
+  'pgm+pvw+10': { label: 'PGM/PVW + 10소스', sourceCells: 10, layout: '2+10' },
+  'pgm+pvw+12': { label: 'PGM/PVW + 12소스', sourceCells: 12, layout: '2+12' },
+  'pgm+pvw+14': { label: 'PGM/PVW + 14소스', sourceCells: 14, layout: '2+14' },
+  '2x2':        { label: '4분할 2×2 (PGM/PVW만)', sourceCells: 0,  layout: '2x2' },
+  '3x3':        { label: '9분할 3×3',              sourceCells: 7,  layout: '3x3' },
+  '4x4':        { label: '16분할 4×4',             sourceCells: 14, layout: '4x4' },
+  '5x5':        { label: '25분할 5×5',             sourceCells: 23, layout: '5x5' },
+} as const;
+
+export type MultiviewLayoutId = keyof typeof MULTIVIEW_LAYOUTS;
+
+// 가상 랙 (패치베이 관리 페이지에서 사용)
+export type Rack = {
+  id: string;
+  name: string;           // 예: "Main Rack A", "부조 Rack #1"
+  location?: string;      // 설치 위치
+  totalUnits: number;     // 전체 유닛 수 (예: 42U)
+  sort_order: number;
+  created_at?: string;
 };
 
 export type Device = {
   id: string;
   name: string;
+  model?: string;        // 모델명 (예: "XVS-G1", "AVANTIS 48/16", "ADC PPS3")
   type: 'video' | 'audio' | 'combined';
   role?: DeviceRole;
   pgmPort?: string;
@@ -46,6 +82,30 @@ export type Device = {
   // 예: { 'IN-01': 'OUT-01', 'IN-02': 'OUT-02' }
   // 'normal' 상태에서는 이 매핑대로 신호가 통과
   normals?: Record<string, string>;
+  // wallbox 전용: 설치 장소 + 방번호
+  location?: string;   // 예: '주경기장', '중계석#1', 'PC 존', '선수대기실-1'
+  roomNumber?: string; // 예: 'WB-101', 'OBS-01'
+  // 가상 랙 배치 (주로 패치베이에 사용)
+  rackId?: string;     // 속한 랙 ID
+  rackUnit?: number;   // 랙 내 유닛 번호 (1부터 시작, 위가 1)
+  rotation?: 0 | 90 | 180 | 270;  // 장비 카드 회전 각도 (주로 패치베이)
+  // 소스/디스플레이 시뮬레이션
+  imageUrl?: string;       // 소스 장비의 재생 이미지 URL
+  imageStoragePath?: string; // Supabase Storage path (삭제용)
+  audioUrl?: string;       // 소스 장비의 재생 오디오 URL
+  audioStoragePath?: string;
+  selectedInput?: string;  // 스위처/라우터가 현재 OUT으로 보내는 IN 포트
+  // 스위처: PVW(Preview) 포트 — PGM으로 올라갈 예비 소스
+  pvwPort?: string;
+  // 멀티뷰 장비 전용
+  multiviewLayout?: MultiviewLayoutId;  // 레이아웃 선택
+  multiviewPgmInput?: string;  // PGM으로 표시할 IN 포트명 (linkedSwitcher가 없을 때만 사용)
+  multiviewPvwInput?: string;  // PVW로 표시할 IN 포트명 (linkedSwitcher가 없을 때만 사용)
+  multiviewLinkedSwitcherId?: string;  // 연동 스위처 ID — 설정되면 자동으로 PGM/PVW/소스 가져옴
+  // 나머지 IN들은 자동으로 소스 모니터 셀에 순서대로 배치됨
+  // 그룹화
+  groupId?: string;    // 같은 그룹끼리는 동일 id
+  groupName?: string;  // 그룹 표시명 (같은 groupId면 동일)
   x: number;
   y: number;
   width?: number;

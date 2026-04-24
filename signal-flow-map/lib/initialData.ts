@@ -11,9 +11,11 @@ type DeviceSeed = Omit<Device, 'inputsMeta' | 'outputsMeta' | 'physPorts' | 'rou
 
 const videoDevices: DeviceSeed[] = [
   // Col 1: Sources
-  { id: 'cam1', name: 'CAM 1', type: 'video', x: 40, y: 40, inputs: [], outputs: ['SDI'],
+  { id: 'cam1', name: 'CAM 1', type: 'video', role: 'source', x: 40, y: 40, inputs: [], outputs: ['SDI'],
+    imageUrl: 'https://picsum.photos/seed/cam1/800/450',
     outputsMeta: { 'SDI': { label: 'CAM-1 12G OP', connType: '12G-SDI' } } },
-  { id: 'cam2', name: 'CAM 2', type: 'video', x: 40, y: 140, inputs: [], outputs: ['SDI'],
+  { id: 'cam2', name: 'CAM 2', type: 'video', role: 'source', x: 40, y: 140, inputs: [], outputs: ['SDI'],
+    imageUrl: 'https://picsum.photos/seed/cam2/800/450',
     outputsMeta: { 'SDI': { label: 'CAM-2 12G OP', connType: '12G-SDI' } } },
   { id: 'cam3', name: 'CAM 3', type: 'video', x: 40, y: 240, inputs: [], outputs: ['SDI'],
     outputsMeta: { 'SDI': { label: 'CAM-3 12G OP', connType: '12G-SDI' } } },
@@ -77,7 +79,7 @@ const videoDevices: DeviceSeed[] = [
       'FILL': { label: 'VDA1-5A IP', connType: '12G-SDI' },
       'KEY': { label: 'VDA2-5A IP', connType: '12G-SDI' },
     } },
-  { id: 'replay', name: 'Replay (Vieco)', type: 'video', x: 500, y: 140, inputs: [], outputs: ['CH A','CH B'],
+  { id: 'replay', name: 'Replay', model: 'Vieco', type: 'video', x: 500, y: 140, inputs: [], outputs: ['CH A','CH B'],
     outputsMeta: {
       'CH A': { label: 'VDA1-3B IP', connType: '12G-SDI' },
       'CH B': { label: 'VDA2-3B IP', connType: '12G-SDI' },
@@ -88,10 +90,10 @@ const videoDevices: DeviceSeed[] = [
     outputsMeta: { 'OP': { connType: '12G-SDI' } } },
   { id: 'vmix', name: 'V-MIX', type: 'video', x: 500, y: 400, inputs: ['IN'], outputs: ['OP'],
     outputsMeta: { 'OP': { label: 'R/S IP-14', connType: 'SDI' } } },
-  { id: 'vda1_1a', name: 'UHD VDA 1-1A', type: 'video', role: 'splitter', x: 500, y: 500, inputs: ['IP'], outputs: ['OP-1','OP-2','OP-3','OP-4'],
+  { id: 'vda1_1a', name: 'UHD VDA 1-1A', model: 'Cobalt Blue', type: 'video', role: 'splitter', x: 500, y: 500, inputs: ['IP'], outputs: ['OP-1','OP-2','OP-3','OP-4'],
     inputsMeta: { 'IP': { label: 'CCU-1 12G OP-1', connType: '12G-SDI' } },
     outputsMeta: { 'OP-1':{connType:'12G-SDI'},'OP-2':{connType:'12G-SDI'},'OP-3':{connType:'12G-SDI'},'OP-4':{connType:'12G-SDI'} } },
-  { id: 'vda2_1a', name: 'UHD VDA 2-1A', type: 'video', role: 'splitter', x: 500, y: 620, inputs: ['IP'], outputs: ['OP-1','OP-2','OP-3','OP-4'],
+  { id: 'vda2_1a', name: 'UHD VDA 2-1A', model: 'Cobalt Blue', type: 'video', role: 'splitter', x: 500, y: 620, inputs: ['IP'], outputs: ['OP-1','OP-2','OP-3','OP-4'],
     inputsMeta: { 'IP': { connType: '12G-SDI' } },
     outputsMeta: { 'OP-1':{connType:'12G-SDI'},'OP-2':{connType:'12G-SDI'},'OP-3':{connType:'12G-SDI'},'OP-4':{connType:'12G-SDI'} } },
   { id: 'demux1', name: 'DEMUX-1', type: 'combined', x: 500, y: 760, inputs: ['UHD SDI'], outputs: ['AES1-4','VIDEO OUT'],
@@ -107,7 +109,7 @@ const videoDevices: DeviceSeed[] = [
     } },
 
   // Col 4: 32x32 Router (big)
-  { id: 'router', name: '32x32 Routing Switcher', type: 'video', role: 'router', x: 740, y: 40, width: 200,
+  { id: 'router', name: '32x32 라우팅 스위처', model: '32×32 R/S', type: 'video', role: 'router', x: 740, y: 40, width: 200,
     inputs: Array.from({length:32},(_,i)=>`IP${i+1}`),
     outputs: Array.from({length:32},(_,i)=>`OP${i+1}`),
     inputsMeta: {
@@ -155,7 +157,7 @@ const videoDevices: DeviceSeed[] = [
     } },
 
   // Col 5: Main / Sub Switcher
-  { id: 'mvs', name: 'Main Video Switcher (XVS-G1)', type: 'video', role: 'switcher', pgmPort: 'PGM 1', x: 980, y: 40, width: 210,
+  { id: 'mvs', name: 'Main Video Switcher', model: 'Sony XVS-G1', type: 'video', role: 'switcher', pgmPort: 'PGM 1', selectedInput: 'IP1', x: 980, y: 40, width: 210,
     inputs: Array.from({length:20},(_,i)=>`IP${i+1}`),
     outputs: ['PGM 1','PGM 2','CLEAN 1','CLEAN 2','PVW 1','AUX 1','AUX 2','AUX 3','AUX 4','AUX 5','AUX 6','M/V 1','M/V 2'],
     inputsMeta: {
@@ -182,7 +184,7 @@ const videoDevices: DeviceSeed[] = [
       'AUX 5': { connType: '12G-SDI' }, 'AUX 6': { connType: '12G-SDI' },
       'M/V 1': { connType: '12G-SDI' }, 'M/V 2': { connType: '12G-SDI' },
     } },
-  { id: 'svs', name: 'Sub Video Switcher (ATEM 4M/E)', type: 'video', role: 'switcher', pgmPort: 'PGM', x: 980, y: 580, width: 210,
+  { id: 'svs', name: 'Sub Video Switcher', model: 'BMD ATEM 4M/E', type: 'video', role: 'switcher', pgmPort: 'PGM', x: 980, y: 580, width: 210,
     inputs: Array.from({length:12},(_,i)=>`IP${i+1}`),
     outputs: ['PGM','CLEAN','PVW','AUX1','AUX2','AUX3','AUX4','AUX5'],
     inputsMeta: {
@@ -229,7 +231,7 @@ const videoDevices: DeviceSeed[] = [
     inputsMeta: { 'HDMI': { connType: 'HDMI' } } },
   { id: 'led_bottom', name: '주경기장 하단 LED', type: 'video', x: 1460, y: 240, inputs: ['HDMI'], outputs: [],
     inputsMeta: { 'HDMI': { connType: 'HDMI' } } },
-  { id: 'main_pgm', name: 'MAIN PGM 송출', type: 'combined', x: 1460, y: 360, inputs: ['SDI-1','SDI-2','SDI-3'], outputs: [],
+  { id: 'main_pgm', name: 'MAIN PGM 송출', type: 'combined', role: 'display', x: 1460, y: 360, inputs: ['SDI-1','SDI-2','SDI-3'], outputs: [],
     inputsMeta: { 'SDI-1': { connType: '12G-SDI' },'SDI-2':{connType:'12G-SDI'},'SDI-3':{connType:'12G-SDI'} } },
   { id: 'main_clean', name: 'MAIN CLEAN 송출', type: 'combined', x: 1460, y: 480, inputs: ['SDI-1','SDI-2','SDI-3'], outputs: [],
     inputsMeta: { 'SDI-1': { connType: '12G-SDI' },'SDI-2':{connType:'12G-SDI'},'SDI-3':{connType:'12G-SDI'} } },
@@ -243,10 +245,10 @@ const videoDevices: DeviceSeed[] = [
     inputsMeta: { 'MON': { connType: '12G-SDI' } } },
   { id: 'audio_desk', name: 'AUDIO DESK (MON)', type: 'video', x: 1460, y: 930, inputs: ['MON'], outputs: [],
     inputsMeta: { 'MON': { connType: '12G-SDI' } } },
-  { id: 'player_a', name: 'A팀 선수석 WALL BOX', type: 'video', x: 1460, y: 1020, width: 210,
+  { id: 'player_a', name: 'A팀 선수석 WALL BOX', type: 'video', role: 'wallbox', location: 'A팀 선수석', roomNumber: 'WB-PA', x: 1460, y: 1020, width: 210,
     inputs: ['MON1','MON2','MON3','MON4','MON5','MON6'], outputs: [],
     inputsMeta: Object.fromEntries(['MON1','MON2','MON3','MON4','MON5','MON6'].map(p=>[p,{label:`A팀 POV`, connType:'12G-SDI' as ConnectionType}])) },
-  { id: 'player_b', name: 'B팀 선수석 WALL BOX', type: 'video', x: 1460, y: 1230, width: 210,
+  { id: 'player_b', name: 'B팀 선수석 WALL BOX', type: 'video', role: 'wallbox', location: 'B팀 선수석', roomNumber: 'WB-PB', x: 1460, y: 1230, width: 210,
     inputs: ['MON1','MON2','MON3','MON4','MON5','MON6'], outputs: [],
     inputsMeta: Object.fromEntries(['MON1','MON2','MON3','MON4','MON5','MON6'].map(p=>[p,{label:`B팀 POV`, connType:'12G-SDI' as ConnectionType}])) },
   { id: 'standby1', name: '선수대기실-1 65" MON', type: 'video', x: 1700, y: 40, inputs: ['HDMI'], outputs: [],
@@ -264,7 +266,7 @@ const videoDevices: DeviceSeed[] = [
 
   // ===== Video Patchbay (BNC 24 x 2) =====
   // 물리 패치베이 - 기본은 1:1 normal-thru, 앞면 패치로 오버라이드 가능
-  { id: 'vpatch_1', name: 'Video Patchbay #1 (BNC 24×2)', type: 'video', role: 'patchbay', x: 1220, y: 1080, width: 300,
+  { id: 'vpatch_1', name: 'Video Patchbay #1', model: 'ADC PPS3 · BNC 24×2', type: 'video', role: 'patchbay', x: 1220, y: 1080, width: 300,
     inputs:  Array.from({length:24}, (_,i)=>`IN-${String(i+1).padStart(2,'0')}`),
     outputs: Array.from({length:24}, (_,i)=>`OUT-${String(i+1).padStart(2,'0')}`),
     inputsMeta: Object.fromEntries(Array.from({length:24},(_,i)=>{
@@ -292,19 +294,19 @@ const audioDevices: DeviceSeed[] = [
     outputsMeta: { 'ANT': { connType: 'ANALOG' } } },
   { id: 'wl_mic4', name: 'W/L MIC-4', type: 'audio', x: 40, y: 1700, inputs: [], outputs: ['ANT'],
     outputsMeta: { 'ANT': { connType: 'ANALOG' } } },
-  { id: 'mic_wb1', name: '주경기장 W/BOX-1 MIC', type: 'audio', x: 40, y: 1820, width: 200,
+  { id: 'mic_wb1', name: '주경기장 W/BOX-1 MIC', type: 'audio', role: 'wallbox', location: '주경기장', roomNumber: 'WB-M1', x: 40, y: 1820, width: 200,
     inputs: [], outputs: ['MIC1','MIC2','MIC3','MIC4'],
     outputsMeta: Object.fromEntries(['MIC1','MIC2','MIC3','MIC4'].map((p,i)=>[p,{label:`AMU MIC/LINE IP-${i+1}`, connType:'XLR' as ConnectionType}])) },
-  { id: 'mic_wb2', name: '주경기장 W/BOX-2 MIC', type: 'audio', x: 40, y: 1980, width: 200,
+  { id: 'mic_wb2', name: '주경기장 W/BOX-2 MIC', type: 'audio', role: 'wallbox', location: '주경기장', roomNumber: 'WB-M2', x: 40, y: 1980, width: 200,
     inputs: [], outputs: ['MIC1','MIC2'],
     outputsMeta: { 'MIC1':{connType:'XLR'},'MIC2':{connType:'XLR'} } },
-  { id: 'mic_obs', name: '중계석#1 W/BOX MIC', type: 'audio', x: 40, y: 2100, width: 200,
+  { id: 'mic_obs', name: '중계석#1 W/BOX MIC', type: 'audio', role: 'wallbox', location: '중계석#1', roomNumber: 'OBS-01', x: 40, y: 2100, width: 200,
     inputs: [], outputs: ['MIC1','MIC2','MIC3'],
     outputsMeta: { 'MIC1':{connType:'XLR'},'MIC2':{connType:'XLR'},'MIC3':{connType:'XLR'} } },
-  { id: 'mic_cr', name: '크로마실 MIC', type: 'audio', x: 40, y: 2240, width: 200,
+  { id: 'mic_cr', name: '크로마실 MIC', type: 'audio', role: 'wallbox', location: '크로마실', roomNumber: 'CR-01', x: 40, y: 2240, width: 200,
     inputs: [], outputs: ['MIC1','MIC2'],
     outputsMeta: { 'MIC1':{connType:'XLR'},'MIC2':{connType:'XLR'} } },
-  { id: 'mic_pc', name: 'PC 존 MIC', type: 'audio', x: 40, y: 2360, width: 200,
+  { id: 'mic_pc', name: 'PC 존 MIC', type: 'audio', role: 'wallbox', location: 'PC 존', roomNumber: 'PC-01', x: 40, y: 2360, width: 200,
     inputs: [], outputs: ['MIC1','MIC2'],
     outputsMeta: { 'MIC1':{connType:'XLR'},'MIC2':{connType:'XLR'} } },
 
@@ -346,7 +348,7 @@ const audioDevices: DeviceSeed[] = [
     outputsMeta: Object.fromEntries(['AES OUT-1','AES OUT-2','AES OUT-3','AES OUT-4','AES OUT-5','AES OUT-6','AES OUT-7','AES OUT-8'].map(p=>[p,{connType:'AES' as ConnectionType}])) },
 
   // Col 4 Audio: Digital Audio Mixer AVANTIS 48CH
-  { id: 'amu', name: 'Digital Audio Mixer (AVANTIS 48/16)', type: 'audio', role: 'switcher', pgmPort: 'PGM L', x: 740, y: 1460, width: 260,
+  { id: 'amu', name: '디지털 오디오 믹서', model: 'Allen & Heath AVANTIS 48/16', type: 'audio', role: 'switcher', pgmPort: 'PGM L', x: 740, y: 1460, width: 260,
     inputs: Array.from({length:48},(_,i)=>`CH${i+1}`),
     outputs: ['BUS1','BUS2','BUS3','BUS4','BUS5','BUS6','BUS7','BUS8','AUX1','AUX2','AUX3','AUX4','PGM L','PGM R','CLEAN L','CLEAN R','MON L','MON R'],
     inputsMeta: {
@@ -397,18 +399,18 @@ const audioDevices: DeviceSeed[] = [
       'MON L': { label: 'C/R Speaker L', connType: 'AES' },
       'MON R': { label: 'C/R Speaker R', connType: 'AES' },
     } },
-  { id: 'mic_rack', name: 'Digital Mic Rack (GX4816)', type: 'audio', x: 740, y: 2350, width: 260,
+  { id: 'mic_rack', name: '디지털 마이크 랙', model: 'Allen & Heath GX4816', type: 'audio', x: 740, y: 2350, width: 260,
     inputs: ['IN 1-16','IN 17-32','IN 33-48'], outputs: ['DANTE OUT'],
     inputsMeta: { 'IN 1-16':{connType:'XLR'}, 'IN 17-32':{connType:'XLR'}, 'IN 33-48':{connType:'XLR'} },
     outputsMeta: { 'DANTE OUT': { connType: 'DANTE' } } },
 
   // Col 5 Audio: Dante / ADA / Intercom
-  { id: 'dante_sw1', name: 'Dante Network SW#1 (Primary)', type: 'audio', x: 1020, y: 1460, width: 220,
+  { id: 'dante_sw1', name: 'Dante Network SW#1', model: 'Primary', type: 'audio', x: 1020, y: 1460, width: 220,
     inputs: ['AMU OUT','MIC RACK','AES IN','IP BACKUP'],
     outputs: ['AMU IN','W/L Rx','ADA','MONITOR'],
     inputsMeta: { 'AMU OUT':{connType:'DANTE'},'MIC RACK':{connType:'DANTE'},'AES IN':{connType:'DANTE'},'IP BACKUP':{connType:'LAN'} },
     outputsMeta: { 'AMU IN':{connType:'DANTE'},'W/L Rx':{connType:'DANTE'},'ADA':{connType:'DANTE'},'MONITOR':{connType:'DANTE'} } },
-  { id: 'dante_sw2', name: 'Dante Network SW#2 (Backup)', type: 'audio', x: 1020, y: 1660, width: 220,
+  { id: 'dante_sw2', name: 'Dante Network SW#2', model: 'Backup', type: 'audio', x: 1020, y: 1660, width: 220,
     inputs: ['AMU OUT','MIC RACK','AES IN','IP PRIMARY'],
     outputs: ['AMU IN','W/L Rx','ADA','MONITOR'],
     inputsMeta: { 'AMU OUT':{connType:'DANTE'},'MIC RACK':{connType:'DANTE'},'AES IN':{connType:'DANTE'},'IP PRIMARY':{connType:'LAN'} },
@@ -419,7 +421,7 @@ const audioDevices: DeviceSeed[] = [
   { id: 'ada37', name: 'Analog ADA 3-7', type: 'audio', x: 1020, y: 2100, inputs: ['IP'], outputs: ['OP-1','OP-2','OP-3','OP-4'],
     inputsMeta: { 'IP': { connType: 'DANTE' } },
     outputsMeta: Object.fromEntries(['OP-1','OP-2','OP-3','OP-4'].map(p=>[p,{connType:'ANALOG' as ConnectionType}])) },
-  { id: 'intercom', name: 'INTERCOM (CLEAR-COM)', type: 'audio', x: 1020, y: 2300, width: 220,
+  { id: 'intercom', name: 'INTERCOM', model: 'CLEAR-COM', type: 'audio', x: 1020, y: 2300, width: 220,
     inputs: ['CH1','CH2','CH3','CH4'], outputs: ['BP 1','BP 2','BP 3'],
     inputsMeta: { 'CH1':{connType:'AES'},'CH2':{connType:'AES'},'CH3':{connType:'AES'},'CH4':{connType:'AES'} },
     outputsMeta: { 'BP 1':{connType:'ANALOG'},'BP 2':{connType:'ANALOG'},'BP 3':{connType:'ANALOG'} } },
@@ -443,7 +445,7 @@ const audioDevices: DeviceSeed[] = [
     inputsMeta: { 'GPO': { label: 'ON-AIR LAMP', connType: 'GPIO' } } },
 
   // ===== Audio Patchbay (XLR 24 x 2 / TT Bantam) =====
-  { id: 'apatch_1', name: 'Audio Patchbay (XLR 24×2)', type: 'audio', role: 'patchbay', x: 1520, y: 1580, width: 300,
+  { id: 'apatch_1', name: 'Audio Patchbay', model: 'TT Bantam · XLR 24×2', type: 'audio', role: 'patchbay', x: 1520, y: 1580, width: 300,
     inputs:  Array.from({length:24}, (_,i)=>`IN-${String(i+1).padStart(2,'0')}`),
     outputs: Array.from({length:24}, (_,i)=>`OUT-${String(i+1).padStart(2,'0')}`),
     inputsMeta: Object.fromEntries(Array.from({length:24},(_,i)=>{
