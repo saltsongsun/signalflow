@@ -70,9 +70,14 @@ html, body {
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: linear-gradient(90deg, transparent 0%, rgba(251,191,36,0.15) 50%, transparent 100%);
+  background: linear-gradient(90deg, transparent 0%, rgba(251,191,36,0.12) 50%, transparent 100%);
   pointer-events: none;
-  animation: shine 2.5s ease-in-out infinite;
+}
+
+/* 성능: 장비 카드 backdrop-filter 기본 OFF (드래그/비드래그 상관없이) */
+[class*="backdrop-blur"] {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 /* 드래그 중엔 성능을 위해 애니메이션 정지 */

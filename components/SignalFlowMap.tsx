@@ -267,6 +267,36 @@ export default function SignalFlowMap() {
   }, []);
 
   const devById = useMemo(() => new Map(devices.map(d => [d.id, d])), [devices]);
+
+  // 허브(패치베이/라우터/스위처) IN → OUT 매핑 (traced 추적에 사용)
+  // 스위처: selectedInput이 모든 OUT으로 (다른 IN은 매핑 없음 = 신호 흐르지 않음)
+  const hubInternalMap = useMemo(() => {
+    const m = new Map<string, string>();
+    devices.forEach(d => {
+      if (d.role === 'patchbay') {
+        Object.entries(d.normals ?? {}).forEach(([inPort, outPort]) => {
+          m.set(`${d.id}:${inPort}`, outPort);
+        });
+      } else if (d.role === 'router') {
+        d.inputs.forEach((inPort, i) => {
+          const outPort = d.outputs[i] ?? d.outputs[0];
+          if (outPort) m.set(`${d.id}:${inPort}`, outPort);
+        });
+      } else if (d.role === 'switcher' && d.selectedInput) {
+        // 스위처는 selectedInput 하나만 "모든 OUT으로 방송"
+        // traceUp시 OUT→IN 역매핑을 찾을 때 첫 OUT을 기준으로 selectedInput 발견 가능
+        d.outputs.forEach(outPort => {
+          m.set(`${d.id}:${d.selectedInput}`, outPort);
+        });
+      }
+    });
+    connections.forEach(c => {
+      if (c.from_device === c.to_device && c.is_patch) {
+        m.set(`${c.from_device}:${c.to_port}`, c.from_port);
+      }
+    });
+    return m;
+  }, [devices, connections]);
   const visibleLayerIds = useMemo(() => new Set(layers.filter(l => l.visible).map(l => l.id)), [layers]);
   stateRef.current.visibleLayerIds = visibleLayerIds;
   const layerById = useMemo(() => new Map(layers.map(l => [l.id, l])), [layers]);
@@ -288,27 +318,103 @@ export default function SignalFlowMap() {
   };
 
   const traced = useMemo(() => {
-    if (!traceId) return { devices: new Set<string>(), connections: new Set<string>() };
+    if (!traceId) return { devices: new Set<string>(), connections: new Set<string>(), ports: new Set<string>() };
     const dSet = new Set<string>([traceId]);
     const cSet = new Set<string>();
-    const visit = (id: string, dir: 'up' | 'down') => {
-      connections.forEach(c => {
-        if (!isConnVisible(c)) return;
-        if (dir === 'up' && c.to_device === id && !cSet.has(c.id)) {
-          cSet.add(c.id);
-          if (!dSet.has(c.from_device)) { dSet.add(c.from_device); visit(c.from_device, 'up'); }
+    const pSet = new Set<string>(); // "devId:portName" 형식으로 경유 포트 표기
+
+    // 하류 방향 추적: 어느 OUT 포트에서 시작해 허브 내부까지 따라가며 최종 non-hub 도착점
+    const traceDown = (fromDevId: string, fromPort: string, depth: number = 0, seen: Set<string> = new Set()) => {
+      if (depth > 20) return;
+      const key = `${fromDevId}:${fromPort}`;
+      if (seen.has(key)) return;
+      const nextSeen = new Set(seen); nextSeen.add(key);
+      pSet.add(key);
+
+      // 이 OUT 포트에서 나가는 connection
+      const c = connections.find(x =>
+        x.from_device === fromDevId && x.from_port === fromPort &&
+        !(x.from_device === x.to_device && x.is_patch)
+      );
+      if (!c) return;
+      cSet.add(c.id);
+      dSet.add(c.to_device);
+      pSet.add(`${c.to_device}:${c.to_port}`);
+
+      const destDev = devById.get(c.to_device);
+      if (!destDev) return;
+
+      if (destDev.role === 'patchbay' || destDev.role === 'router' || destDev.role === 'switcher') {
+        // 허브 내부 통과: IN → OUT 매핑으로 다음 OUT 찾아 재귀
+        // 스위처는 selectedInput만 매핑되어 있어 실제 신호 경로만 추적됨
+        const nextOut = hubInternalMap.get(`${destDev.id}:${c.to_port}`);
+        if (nextOut) {
+          pSet.add(`${destDev.id}:${nextOut}`);
+          traceDown(destDev.id, nextOut, depth + 1, nextSeen);
         }
-        if (dir === 'down' && c.from_device === id && !cSet.has(c.id)) {
-          cSet.add(c.id);
-          if (!dSet.has(c.to_device)) { dSet.add(c.to_device); visit(c.to_device, 'down'); }
-        }
-      });
+      }
+      // 일반 장비면 여기가 끝 — 추가로 그 장비에서 다른 OUT으로 downstream 계속하려면?
+      // TD MON 같은 display는 스위처로부터 여러 경로로 받지만, 시작점이 display면 upstream만 의미 있음
+      // 시작이 source면 source OUT이 여러 장비로 가도 downstream 전부 추적
     };
-    if (traceMode === 'both' || traceMode === 'upstream') visit(traceId, 'up');
-    if (traceMode === 'both' || traceMode === 'downstream') visit(traceId, 'down');
-    return { devices: dSet, connections: cSet };
+
+    // 상류 방향 추적: 이 IN 포트로 들어오는 신호의 근원까지 거슬러 올라감
+    const traceUp = (toDevId: string, toPort: string, depth: number = 0, seen: Set<string> = new Set()) => {
+      if (depth > 20) return;
+      const key = `${toDevId}:${toPort}`;
+      if (seen.has(key)) return;
+      const nextSeen = new Set(seen); nextSeen.add(key);
+      pSet.add(key);
+
+      // 이 IN 포트로 들어오는 connection
+      const c = connections.find(x =>
+        x.to_device === toDevId && x.to_port === toPort &&
+        !(x.from_device === x.to_device && x.is_patch)
+      );
+      if (!c) return;
+      cSet.add(c.id);
+      dSet.add(c.from_device);
+      pSet.add(`${c.from_device}:${c.from_port}`);
+
+      const srcDev = devById.get(c.from_device);
+      if (!srcDev) return;
+
+      if (srcDev.role === 'patchbay' || srcDev.role === 'router' || srcDev.role === 'switcher') {
+        // 허브 내부를 거슬러: OUT → IN 역매핑
+        // hubInternalMap은 IN→OUT이므로 역으로 스캔
+        // 스위처인 경우 selectedInput만 매핑되어 있으므로 자연히 그 IN만 찾아짐
+        let foundIn: string | undefined;
+        srcDev.inputs.forEach(inP => {
+          if (hubInternalMap.get(`${srcDev.id}:${inP}`) === c.from_port) foundIn = inP;
+        });
+        if (foundIn) {
+          pSet.add(`${srcDev.id}:${foundIn}`);
+          traceUp(srcDev.id, foundIn, depth + 1, nextSeen);
+        }
+      }
+    };
+
+    const startDev = devById.get(traceId);
+    if (!startDev) return { devices: dSet, connections: cSet, ports: pSet };
+
+    // 시작 장비 각 OUT 포트에 대해 downstream
+    if (traceMode === 'both' || traceMode === 'downstream') {
+      startDev.outputs.forEach(p => {
+        pSet.add(`${traceId}:${p}`);
+        traceDown(traceId, p);
+      });
+    }
+    // 시작 장비 각 IN 포트에 대해 upstream
+    if (traceMode === 'both' || traceMode === 'upstream') {
+      startDev.inputs.forEach(p => {
+        pSet.add(`${traceId}:${p}`);
+        traceUp(traceId, p);
+      });
+    }
+
+    return { devices: dSet, connections: cSet, ports: pSet };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [traceId, connections, traceMode, visibleLayerIds, devices]);
+  }, [traceId, connections, traceMode, visibleLayerIds, devices, hubInternalMap]);
 
   // ===== 시그널 시뮬레이션 =====
   // "이 장비의 이 입력 포트에 어떤 소스의 이미지가 도착하는지" 계산
@@ -512,32 +618,6 @@ export default function SignalFlowMap() {
   //   - 실제로는 라우터는 selectedInput만 통과하지만, 도면 추적 목적으론 모든 IN→모든 OUT 매핑 가능하다고 표시
   //   - 대신 라우터는 IN ↔ 실제 외부 연결된 OUT들을 일대일로 매핑: "첫 OUT에 매핑된 외부 장비"가 가장 의미있음
   //   - 단순화: 라우터의 각 IN은 "같은 index의 OUT으로" (1:1) 가정 — 실제 정상 연결은 selectedInput으로 결정됨
-  const hubInternalMap = useMemo(() => {
-    const m = new Map<string, string>(); // "hubId:inPort" → outPort
-    devices.forEach(d => {
-      if (d.role === 'patchbay') {
-        // normals: IN → OUT
-        Object.entries(d.normals ?? {}).forEach(([inPort, outPort]) => {
-          m.set(`${d.id}:${inPort}`, outPort);
-        });
-      } else if (d.role === 'router') {
-        // 라우터: 각 IN(index i) → 같은 index의 OUT (1:1 기본 매핑)
-        // selectedInput이면 모든 OUT으로 방송, 나머지 IN은 같은 index OUT으로 (도면 추적용)
-        d.inputs.forEach((inPort, i) => {
-          const outPort = d.outputs[i] ?? d.outputs[0];
-          if (outPort) m.set(`${d.id}:${inPort}`, outPort);
-        });
-      }
-    });
-    // 수동 패치가 normals 덮어씀
-    connections.forEach(c => {
-      if (c.from_device === c.to_device && c.is_patch) {
-        m.set(`${c.from_device}:${c.to_port}`, c.from_port);
-      }
-    });
-    return m;
-  }, [devices, connections]);
-
   // OUT 포트에서 시작해 "패치베이를 투명하게 통과"한 뒤의 최종 도착점 추적
   // 결과: 체인(경유 노드 목록) + 최종 도착 Device/Connection
   //   예) Switcher OUT → Patchbay#1 IN-05 →(normal) OUT-05 → MAIN PGM IN-1
@@ -1708,16 +1788,14 @@ export default function SignalFlowMap() {
 
             {connections.map(c => {
               if (!isConnVisible(c)) return null;
-              // self-loop 패치(패치베이 내부 패치)는 메인 캔버스에 렌더 안함
               if (c.from_device === c.to_device && c.is_patch) return null;
+              // Trace 중이면 traced가 아닌 연결은 즉시 컷 — 렌더 작업 절약
+              if (traceId && !traced.connections.has(c.id)) return null;
               const from = devById.get(c.from_device)!;
               const to = devById.get(c.to_device)!;
-              // 라우터/패치베이와 연결된 선은 기본 숨김 — "inspectHubs"에 그 hub가 있을 때만 표시
-              // (trace 중이면 traced 연결은 예외로 보여줌)
               const fromIsHub = from.role === 'router' || from.role === 'patchbay';
               const toIsHub = to.role === 'router' || to.role === 'patchbay';
-              // hidePatchbay 모드: 허브 관련 연결선은 전부 숨김 (카드가 없으니 선도 허공)
-              if (!traceId && hidePatchbay && (fromIsHub || toIsHub)) return null;
+              if (hidePatchbay && (fromIsHub || toIsHub)) return null;
               const hubConn = fromIsHub || toIsHub;
               if (hubConn) {
                 const inspectedHere =
@@ -1744,8 +1822,6 @@ export default function SignalFlowMap() {
               const ctrl = Math.max(80, dxAbs / 1.8, dyAbs / 2.5);
               const path = `M ${x1} ${y1} C ${x1 + ctrl} ${y1}, ${x2 - ctrl} ${y2}, ${x2} ${y2}`;
               const isTraced = traced.connections.has(c.id);
-              // Trace 모드: 추적에 포함되지 않은 연결선 완전 숨김
-              if (traceId && !isTraced) return null;
               const isDim = false;
               const ct = c.conn_type ?? from.outputsMeta?.[c.from_port]?.connType;
               const style = ct ? CONN_TYPE_STYLES[ct] : undefined;
@@ -1766,15 +1842,16 @@ export default function SignalFlowMap() {
 
               return (
                 <g key={c.id} opacity={isDim ? 0.1 : 1} style={{ pointerEvents: 'none' }}>
-                  {(isTraced || isPgm || isPatch || isLive) && (
-                    <path d={path} stroke={cableColor} strokeWidth={isLive ? 7 : isPgm ? 7 : 6} fill="none"
-                          opacity={isLive ? 0.38 : isPgm ? 0.35 : isPatch ? 0.3 : 0.25} filter="url(#glow-strong)" />
+                  {/* Trace 중에만 glow 레이어 — 평상시엔 생략해 성능 확보 */}
+                  {isTraced && (
+                    <path d={path} stroke={cableColor} strokeWidth={isLive ? 7 : 6} fill="none"
+                          opacity={isLive ? 0.38 : 0.25} filter="url(#glow-strong)" />
                   )}
                   {/* 베이스 라인 */}
-                  <path d={path} stroke={cableColor} strokeWidth={isLive ? 2.8 : isPgm ? 3 : isTraced ? 2.5 : isPatch ? 2 : 1.4}
+                  <path d={path} stroke={cableColor} strokeWidth={isTraced ? (isLive ? 2.8 : 2.5) : isPgm ? 2.2 : isPatch ? 2 : 1.4}
                         strokeDasharray={cableDash} fill="none"
-                        opacity={isLive || isTraced || isPgm || isPatch ? 1 : 0.55}
-                        filter={isLive || isTraced || isPgm ? 'url(#glow)' : undefined} />
+                        opacity={isTraced ? 1 : isPgm || isPatch ? 0.85 : 0.55}
+                        filter={isTraced ? 'url(#glow)' : undefined} />
                   {/* 흐름 애니메이션 오버레이 */}
                   <path
                     d={path}
@@ -1782,12 +1859,12 @@ export default function SignalFlowMap() {
                     strokeWidth={isLive ? 2.8 : isPgm ? 3 : isTraced ? 2.5 : isPatch ? 2 : 1.4}
                     fill="none"
                     strokeLinecap="round"
-                    strokeDasharray="6 12"
-                    className="flow-line"
+                    strokeDasharray={isTraced || isPatch ? "6 12" : undefined}
+                    className={isTraced ? "flow-line" : ""}
                     style={{
-                      filter: isLive || isTraced || isPgm || isPatch ? 'drop-shadow(0 0 3px currentColor)' : undefined,
-                      animationDuration: isLive ? '1.0s' : isPatch ? '0.9s' : isTraced || isPgm ? '1.2s' : '2.8s',
-                      opacity: isLive || isTraced || isPgm || isPatch ? 1 : 0.85,
+                      filter: isTraced ? 'drop-shadow(0 0 3px currentColor)' : undefined,
+                      animationDuration: isTraced ? (isLive ? '1.0s' : '1.2s') : undefined,
+                      opacity: isTraced || isPgm || isPatch ? 1 : 0.7,
                     }}
                   />
                   {/* 편집모드에선 클릭 가능한 넓은 투명 path (선 hit area) */}
@@ -1830,18 +1907,19 @@ export default function SignalFlowMap() {
             })}
 
             {/* hidePatchbay 모드: 라벨-to-라벨 가상 케이블 */}
-            {/* CAM1 OUT 라벨 "1-01" → MAIN IN 라벨 "1-01" 사이를 선으로 연결 */}
-            {hidePatchbay && !traceId && (() => {
-              const LABEL_WIDTH = 130;    // 라벨 박스 추정 너비
-              const LABEL_H_OFFSET = 8;   // 라벨 박스 수직 중앙 보정
-              const LABEL_PAD = 6;        // 라벨과 케이블 사이 여백
+            {/* Trace 중이면 trace 경로에 해당하는 vc만, 아니면 전체 */}
+            {hidePatchbay && (() => {
+              const LABEL_WIDTH = 130;
+              const LABEL_H_OFFSET = 8;
+              const LABEL_PAD = 6;
 
               type VirtualCable = {
                 id: string;
                 fromDev: Device; fromPortIdx: number;
                 toDev: Device; toPortIdx: number;
-                code: string;    // 공통 표식 "01-05"
+                code: string;
                 color: string;
+                isTraced: boolean;
               };
               const vcs: VirtualCable[] = [];
 
@@ -1854,12 +1932,18 @@ export default function SignalFlowMap() {
                   const followed = followPathFromOut(d.id, p.name);
                   if (!followed || followed.chain.length === 0) return;
                   if (followed.finalDev.role === 'patchbay' || followed.finalDev.role === 'router') return;
-                  // finalDev의 IN 포트 idx
                   const destCache = visiblePortsCache.get(followed.finalDev.id);
                   if (!destCache) return;
                   const toIdx = destCache.in.findIndex(x => x.name === followed.finalPort);
                   if (toIdx < 0) return;
-                  // 공통 라벨: 첫 허브의 종류+인덱스+포트 번호 (PB=패치베이, RT=라우터)
+
+                  // trace 모드면 이 경로가 trace 체인에 포함되는지 확인
+                  const isVcTraced = !!traceId
+                    && traced.ports.has(`${d.id}:${p.name}`)
+                    && traced.ports.has(`${followed.finalDev.id}:${followed.finalPort}`);
+                  // trace 중인데 이 경로가 포함 안 되면 건너뜀
+                  if (traceId && !isVcTraced) return;
+
                   const firstHop = followed.chain[0];
                   const isRtHop = firstHop.hub.role === 'router';
                   const hubList = devices.filter(x => x.role === firstHop.hub.role);
@@ -1867,7 +1951,6 @@ export default function SignalFlowMap() {
                   const portNum = firstHop.hub.inputs.indexOf(firstHop.inPort) + 1;
                   const prefix = isRtHop ? 'R' : 'P';
                   const code = `${prefix}${String(hubIdx).padStart(2, '0')}-${String(portNum).padStart(2, '0')}`;
-                  // 레이어 색상
                   const lid = d.outputsMeta?.[p.name]?.layerId;
                   const layerColor = lid ? layerById.get(lid)?.color : undefined;
                   const clr = layerColor ?? (d.type === 'audio' ? TYPE_COLORS.audio.main : d.type === 'combined' ? TYPE_COLORS.combined.main : TYPE_COLORS.video.main);
@@ -1875,7 +1958,7 @@ export default function SignalFlowMap() {
                     id: `vc_${d.id}_${p.name}`,
                     fromDev: d, fromPortIdx: idx,
                     toDev: followed.finalDev, toPortIdx: toIdx,
-                    code, color: clr,
+                    code, color: clr, isTraced: isVcTraced,
                   });
                 });
               });
@@ -1901,24 +1984,20 @@ export default function SignalFlowMap() {
 
                     return (
                       <g key={vc.id}>
-                        {/* Glow */}
-                        {isLive && (
-                          <path d={path} stroke={vc.color} strokeWidth={6} fill="none"
-                                opacity={0.3} filter="url(#glow-strong)" />
+                        {vc.isTraced && (
+                          <path d={path} stroke={vc.color} strokeWidth={7} fill="none"
+                                opacity={0.4} filter="url(#glow-strong)" />
                         )}
-                        {/* 점선 패치베이 경유 표시 */}
-                        <path d={path} stroke={vc.color} strokeWidth={isLive ? 2.5 : 1.6}
-                              strokeDasharray="2 4" fill="none"
-                              opacity={isLive ? 0.85 : 0.5}
-                              filter={isLive ? 'url(#glow)' : undefined} />
-                        {/* 흐름 애니메이션 */}
-                        <path d={path} stroke={vc.color} strokeWidth={isLive ? 2.5 : 1.6}
-                              fill="none" strokeLinecap="round" strokeDasharray="6 12"
-                              className="flow-line"
-                              style={{
-                                animationDuration: isLive ? '1.2s' : '3s',
-                                opacity: isLive ? 1 : 0.6,
-                              }} />
+                        <path d={path}
+                              stroke={vc.color}
+                              strokeWidth={vc.isTraced ? 2.8 : 1.6}
+                              strokeDasharray={vc.isTraced ? "6 12" : "2 4"}
+                              fill="none"
+                              opacity={vc.isTraced ? 1 : 0.5}
+                              filter={vc.isTraced ? 'url(#glow)' : undefined}
+                              className={vc.isTraced ? "flow-line" : ""}
+                              style={vc.isTraced ? { animationDuration: '1.2s' } : undefined}
+                        />
                       </g>
                     );
                   })}
@@ -1940,8 +2019,8 @@ export default function SignalFlowMap() {
           {/* Devices */}
           {devices.map(d => {
             if (!isDeviceVisible(d)) return null;
-            // Trace 모드가 아니고 허브 숨김 ON이면 허브 카드 숨김
-            if (!traceId && hidePatchbay && (d.role === 'patchbay' || d.role === 'router')) return null;
+            // 허브 숨김 ON: trace 중에도 허브 카드는 숨김 (text-to-text 가상 케이블로 대체)
+            if (hidePatchbay && (d.role === 'patchbay' || d.role === 'router')) return null;
             // Trace 모드: 추적에 포함되지 않은 장비 완전 숨김
             if (traceId && !traced.devices.has(d.id)) return null;
             const color = TYPE_COLORS[d.type];
