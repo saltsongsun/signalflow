@@ -328,6 +328,121 @@ export default function SignalFlowMap() {
     return isDeviceVisible(from) && isDeviceVisible(to);
   };
 
+  // ===== 시그널 시뮬레이션 =====
+  // "이 장비의 이 입력 포트에 어떤 소스의 이미지가 도착하는지" 계산
+  // source 장비 자신도 자기 imageUrl을 가지고 있다고 본다.
+  const signalByOutput = useMemo(() => {
+    const out = new Map<string, string>();
+    const inSignal = new Map<string, string>();
+
+    devices.forEach(d => {
+      if (d.role === 'source' && (d.imageUrl || d.audioUrl)) {
+        d.outputs.forEach(p => out.set(`${d.id}:${p}`, d.id));
+      }
+    });
+
+    const iterations = Math.max(8, devices.length + 2);
+    for (let iter = 0; iter < iterations; iter++) {
+      let changed = false;
+
+      connections.forEach(c => {
+        const fromKey = `${c.from_device}:${c.from_port}`;
+        const toKey = `${c.to_device}:${c.to_port}`;
+        const src = out.get(fromKey);
+        if (src && inSignal.get(toKey) !== src) {
+          inSignal.set(toKey, src);
+          changed = true;
+        }
+      });
+
+      devices.forEach(d => {
+        if (d.role === 'source') return;
+        if (d.role === 'display') return;
+
+        if (d.role === 'switcher' || d.role === 'router') {
+          const sel = d.selectedInput;
+          if (!sel) return;
+          const srcSig = inSignal.get(`${d.id}:${sel}`);
+          if (!srcSig) return;
+          d.outputs.forEach(p => {
+            const k = `${d.id}:${p}`;
+            if (out.get(k) !== srcSig) { out.set(k, srcSig); changed = true; }
+          });
+          return;
+        }
+
+        if (d.role === 'splitter') {
+          const firstIn = d.inputs[0];
+          if (!firstIn) return;
+          const srcSig = inSignal.get(`${d.id}:${firstIn}`);
+          if (!srcSig) return;
+          d.outputs.forEach(p => {
+            const k = `${d.id}:${p}`;
+            if (out.get(k) !== srcSig) { out.set(k, srcSig); changed = true; }
+          });
+          return;
+        }
+
+        if (d.role === 'patchbay') {
+          const patches = new Map<string, string>();
+          connections.forEach(c => {
+            if (c.from_device === d.id && c.to_device === d.id && c.is_patch) {
+              patches.set(c.to_port, c.from_port);
+            }
+          });
+          d.outputs.forEach(outPort => {
+            let sourceIn: string | undefined;
+            for (const [pIn, pOut] of patches.entries()) {
+              if (pOut === outPort) { sourceIn = pIn; break; }
+            }
+            if (!sourceIn && d.normals) {
+              for (const [nIn, nOut] of Object.entries(d.normals)) {
+                if (nOut === outPort) { sourceIn = nIn; break; }
+              }
+            }
+            if (!sourceIn) return;
+            const srcSig = inSignal.get(`${d.id}:${sourceIn}`);
+            if (!srcSig) return;
+            const k = `${d.id}:${outPort}`;
+            if (out.get(k) !== srcSig) { out.set(k, srcSig); changed = true; }
+          });
+          return;
+        }
+
+        if (d.role === 'wallbox' || d.role === 'connector' || d.role === 'standard') {
+          d.outputs.forEach(p => {
+            let srcSig = inSignal.get(`${d.id}:${p}`);
+            if (!srcSig && d.inputs.length > 0) {
+              srcSig = inSignal.get(`${d.id}:${d.inputs[0]}`);
+            }
+            if (!srcSig) return;
+            const k = `${d.id}:${p}`;
+            if (out.get(k) !== srcSig) { out.set(k, srcSig); changed = true; }
+          });
+          return;
+        }
+      });
+
+      if (!changed) break;
+    }
+
+    return { out, inSignal };
+  }, [devices, connections]);
+
+  const displaySources = useMemo(() => {
+    const m = new Map<string, Device>();
+    devices.filter(d => d.role === 'display').forEach(d => {
+      for (const inp of d.inputs) {
+        const srcId = signalByOutput.inSignal.get(`${d.id}:${inp}`);
+        if (srcId) {
+          const srcDev = devById.get(srcId);
+          if (srcDev) { m.set(d.id, srcDev); break; }
+        }
+      }
+    });
+    return m;
+  }, [devices, signalByOutput, devById]);
+
   const traced = useMemo(() => {
     if (!traceId) return { devices: new Set<string>(), connections: new Set<string>(), ports: new Set<string>() };
     const dSet = new Set<string>([traceId]);
@@ -433,141 +548,6 @@ export default function SignalFlowMap() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [traceId, connections, visibleLayerIds, devices, signalByOutput]);
 
-  // ===== 시그널 시뮬레이션 =====
-  // "이 장비의 이 입력 포트에 어떤 소스의 이미지가 도착하는지" 계산
-  // source 장비 자신도 자기 imageUrl을 가지고 있다고 본다.
-  // 장비별 "출력 포트 → 어디서 온 source device id" 매핑
-  const signalByOutput = useMemo(() => {
-    const out = new Map<string, string>(); // key: "deviceId:portName" → sourceDeviceId
-    const inSignal = new Map<string, string>(); // key: "deviceId:portName" (input) → sourceDeviceId
-
-    // 1) source 장비들의 모든 출력 포트는 자신을 소스로 가짐 (이미지 또는 오디오가 있으면)
-    devices.forEach(d => {
-      if (d.role === 'source' && (d.imageUrl || d.audioUrl)) {
-        d.outputs.forEach(p => out.set(`${d.id}:${p}`, d.id));
-      }
-    });
-
-    // 2) 반복 전파 (fixed point): 최대 devices.length + 1 번 반복
-    const iterations = Math.max(8, devices.length + 2);
-    for (let iter = 0; iter < iterations; iter++) {
-      let changed = false;
-
-      // 입력 포트로 신호 전파 (from_device OUT → to_device IN)
-      connections.forEach(c => {
-        const fromKey = `${c.from_device}:${c.from_port}`;
-        const toKey = `${c.to_device}:${c.to_port}`;
-        const src = out.get(fromKey);
-        if (src && inSignal.get(toKey) !== src) {
-          inSignal.set(toKey, src);
-          changed = true;
-        }
-      });
-
-      // 장비의 출력으로 전파 (role별)
-      devices.forEach(d => {
-        if (d.role === 'source') return; // source는 이미 처리됨
-
-        if (d.role === 'display') {
-          // display는 전파 안함 (입력만 표시)
-          return;
-        }
-
-        if (d.role === 'switcher' || d.role === 'router') {
-          // 선택된 입력의 신호를 모든 출력으로 전달
-          const sel = d.selectedInput;
-          if (!sel) return;
-          const srcSig = inSignal.get(`${d.id}:${sel}`);
-          if (!srcSig) return;
-          d.outputs.forEach(p => {
-            const k = `${d.id}:${p}`;
-            if (out.get(k) !== srcSig) { out.set(k, srcSig); changed = true; }
-          });
-          return;
-        }
-
-        if (d.role === 'splitter') {
-          // 첫 번째 입력을 모든 출력으로
-          const firstIn = d.inputs[0];
-          if (!firstIn) return;
-          const srcSig = inSignal.get(`${d.id}:${firstIn}`);
-          if (!srcSig) return;
-          d.outputs.forEach(p => {
-            const k = `${d.id}:${p}`;
-            if (out.get(k) !== srcSig) { out.set(k, srcSig); changed = true; }
-          });
-          return;
-        }
-
-        if (d.role === 'patchbay') {
-          // normal 매핑 기반 + 패치 케이블 기반 전달
-          // 우선순위: 수동 패치(self-loop is_patch=true)가 normal을 덮어씀
-          const patches = new Map<string, string>(); // OUT → IN (역방향: IN → OUT 매핑을 생성)
-          connections.forEach(c => {
-            if (c.from_device === d.id && c.to_device === d.id && c.is_patch) {
-              patches.set(c.to_port, c.from_port); // 이 IN 신호를 이 OUT으로 보냄
-            }
-          });
-          // 모든 OUT에 대해: 패치 > normal
-          d.outputs.forEach(outPort => {
-            // 이 OUT 포트로 보낼 IN을 찾음
-            // patches는 IN → OUT 매핑이므로 여기선 역탐색
-            let sourceIn: string | undefined;
-            for (const [pIn, pOut] of patches.entries()) {
-              if (pOut === outPort) { sourceIn = pIn; break; }
-            }
-            if (!sourceIn && d.normals) {
-              // normals: IN → OUT 매핑. 이 OUT으로 연결된 IN 찾기
-              for (const [nIn, nOut] of Object.entries(d.normals)) {
-                if (nOut === outPort) { sourceIn = nIn; break; }
-              }
-            }
-            if (!sourceIn) return;
-            const srcSig = inSignal.get(`${d.id}:${sourceIn}`);
-            if (!srcSig) return;
-            const k = `${d.id}:${outPort}`;
-            if (out.get(k) !== srcSig) { out.set(k, srcSig); changed = true; }
-          });
-          return;
-        }
-
-        if (d.role === 'wallbox' || d.role === 'connector' || d.role === 'standard') {
-          // 1:1 passthrough (input 이름과 output 이름이 일치하거나, 첫 입력 → 각 출력)
-          // 일반적으로 wallbox/connector는 IN → OUT 1:1 이 관례. 이름 기반 시도 후 없으면 첫 입력 → 모든 출력
-          d.outputs.forEach(p => {
-            let srcSig = inSignal.get(`${d.id}:${p}`); // 같은 이름의 입력이 있는가
-            if (!srcSig && d.inputs.length > 0) {
-              srcSig = inSignal.get(`${d.id}:${d.inputs[0]}`);
-            }
-            if (!srcSig) return;
-            const k = `${d.id}:${p}`;
-            if (out.get(k) !== srcSig) { out.set(k, srcSig); changed = true; }
-          });
-          return;
-        }
-      });
-
-      if (!changed) break;
-    }
-
-    return { out, inSignal };
-  }, [devices, connections]);
-
-  // 디스플레이 장비별로 "지금 어느 소스가 도착하는가" 계산 (첫 입력 포트 기준)
-  const displaySources = useMemo(() => {
-    const m = new Map<string, Device>(); // displayDeviceId → sourceDevice
-    devices.filter(d => d.role === 'display').forEach(d => {
-      // 각 입력 포트 중 신호가 들어오는 첫 번째를 사용
-      for (const inp of d.inputs) {
-        const srcId = signalByOutput.inSignal.get(`${d.id}:${inp}`);
-        if (srcId) {
-          const srcDev = devById.get(srcId);
-          if (srcDev) { m.set(d.id, srcDev); break; }
-        }
-      }
-    });
-    return m;
-  }, [devices, signalByOutput, devById]);
 
   // ===== 성능 최적화: connection 인덱스 =====
   // O(1)로 "이 OUT 포트가 어디로 가는지" 조회
