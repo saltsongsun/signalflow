@@ -84,9 +84,11 @@ const ConnectionCanvas = forwardRef<ConnectionCanvasHandle, Props>(function Conn
     if (!ctx) return;
     const s = stateRef.current;
     const { cables: cs, virtualCables: vcs, scale, offsetX, offsetY, width: w, height: h, dragOffset } = s;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
 
+    // DPR 재설정 — 매 프레임 초기화 (ctx.scale이 누적되지 않도록)
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
-    ctx.save();
     ctx.translate(offsetX, offsetY);
     ctx.scale(scale, scale);
 
@@ -127,8 +129,6 @@ const ConnectionCanvas = forwardRef<ConnectionCanvasHandle, Props>(function Conn
       if (!c.isTraced) continue;
       drawCable(ctx, applyOffset(c), flowOffsetRef.current, true);
     }
-
-    ctx.restore();
 
     const hasTraced = cs.some(c => c.isTraced) || vcs.some(c => c.isTraced);
     if (hasTraced) {
