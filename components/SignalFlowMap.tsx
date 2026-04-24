@@ -1072,27 +1072,35 @@ export default function SignalFlowMap() {
     setDevices(prev => prev.map(d => d.id === targetId ? { ...d, ...updates } : d));
     setEditingDevice(null);
 
-    const { error } = await (supabase as any).from('devices').update(cleanUpdates).eq('id', targetId);
-
-    if (error) {
-      console.error('[DB save error]', error);
-      const KNOWN_NEW_COLS = ['model', 'location', 'roomNumber', 'normals', 'pgmPort', 'role'];
-      const missing = KNOWN_NEW_COLS.filter(k =>
-        (error.message ?? '').includes(k) || (error.details ?? '').includes(k)
-      );
-      if (missing.length > 0) {
-        const fallback = { ...cleanUpdates };
-        missing.forEach(k => delete fallback[k]);
-        const { error: err2 } = await (supabase as any).from('devices').update(fallback).eq('id', targetId);
-        if (err2) {
-          alert(`저장 실패: ${err2.message ?? err2}\n\nSupabase SQL Editor에서 schema.sql을 한 번 실행해주세요.`);
-        } else {
-          alert(`⚠️  일부 컬럼을 DB에 저장하지 못했습니다: ${missing.join(', ')}\nSupabase SQL Editor에서 schema.sql 실행 필요.`);
-        }
-      } else {
-        alert(`저장 실패: ${error.message ?? JSON.stringify(error)}`);
+    // 스마트 저장: 컬럼 누락 에러가 뜨면 해당 컬럼을 자동 제거하고 재시도 (최대 10회)
+    const trySave = async (payload: Record<string, any>, removed: string[] = []): Promise<{ ok: boolean; removed: string[]; err?: any }> => {
+      if (removed.length > 10) return { ok: false, removed, err: new Error('너무 많은 컬럼 누락') };
+      const { error } = await (supabase as any).from('devices').update(payload).eq('id', targetId);
+      if (!error) return { ok: true, removed };
+      // PostgREST 에러 메시지에서 누락된 컬럼명 추출
+      // 예: "Could not find the 'audioStoragePath' column of 'devices'"
+      const msg = `${error.message ?? ''} ${error.details ?? ''} ${error.hint ?? ''}`;
+      const match = msg.match(/['"]([A-Za-z_][A-Za-z0-9_]*)['"].*column/i) || msg.match(/column\s+['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/i);
+      if (match && match[1] && payload[match[1]] !== undefined) {
+        const col = match[1];
+        const next = { ...payload };
+        delete next[col];
+        return trySave(next, [...removed, col]);
       }
+      return { ok: false, removed, err: error };
+    };
+
+    const result = await trySave(cleanUpdates);
+
+    if (!result.ok) {
+      console.error('[DB save error]', result.err);
+      alert(`저장 실패: ${result.err?.message ?? JSON.stringify(result.err)}\n\nSupabase SQL Editor에서 schema.sql을 실행해 누락된 컬럼을 추가해주세요.`);
       return;
+    }
+
+    if (result.removed.length > 0) {
+      console.warn('[DB] 누락된 컬럼 자동 제거:', result.removed);
+      alert(`⚠️  일부 컬럼이 DB에 없어 건너뛰었습니다: ${result.removed.join(', ')}\nSupabase SQL Editor에서 schema.sql을 실행하면 다음부터 저장됩니다.`);
     }
 
     // 성공 시 undo 등록
