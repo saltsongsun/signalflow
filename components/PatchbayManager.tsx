@@ -41,7 +41,19 @@ export default function PatchbayManager({ devices, connections, layers, racks, o
   const [selectedRackId, setSelectedRackId] = useState<string>(racks[0]?.id ?? '');
   const [drag, setDrag] = useState<DragState | null>(null);
   const [hoverTarget, setHoverTarget] = useState<{ deviceId: string; portName: string } | null>(null);
+  const [editingLabel, setEditingLabel] = useState<{ pbId: string; dir: 'in' | 'out'; portName: string; value: string } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // 잭 이름(label) 저장
+  const saveJackLabel = async (pbId: string, dir: 'in' | 'out', portName: string, label: string) => {
+    const pb = devById.get(pbId);
+    if (!pb) return;
+    const metaKey = dir === 'in' ? 'inputsMeta' : 'outputsMeta';
+    const cur = { ...(pb[metaKey] ?? {}) };
+    cur[portName] = { ...(cur[portName] ?? { name: portName }), label: label.trim() || undefined };
+    const updates: any = { [metaKey]: cur };
+    await (supabase as any).from('devices').update(updates).eq('id', pbId);
+  };
 
   useEffect(() => {
     if (!selectedRackId && racks[0]) setSelectedRackId(racks[0].id);
@@ -342,7 +354,7 @@ export default function PatchbayManager({ devices, connections, layers, racks, o
           </div>
 
           {/* IN 행 (상단) — 각 장비에서 오는 소스가 꽂히는 자리 */}
-          <div className="flex" style={{ width: railW }}>
+          <div className="flex items-end" style={{ width: railW }}>
             {pb.inputs.map((portName, idx) => {
               const meta = pb.inputsMeta?.[portName];
               const layer = meta?.layerId ? layerById.get(meta.layerId) : undefined;
@@ -351,6 +363,7 @@ export default function PatchbayManager({ devices, connections, layers, racks, o
               const patched = Array.from(patches.values()).includes(portName);
               const hasExt = !!connections.find(c => c.to_device === pb.id && c.to_port === portName);
               const hasNormal = !!pb.normals?.[portName];
+              const isEditing = editingLabel?.pbId === pb.id && editingLabel?.dir === 'in' && editingLabel?.portName === portName;
               return (
                 <div
                   key={portName}
@@ -358,9 +371,42 @@ export default function PatchbayManager({ devices, connections, layers, racks, o
                   data-in-device={pb.id}
                   data-in-port={portName}
                   className="relative flex flex-col items-center shrink-0"
-                  style={{ width: jackW, height: FULL_JACK_SIZE + 14 }}
+                  style={{ width: jackW, height: FULL_JACK_SIZE + 38 }}
                   title={`${pb.name} IN ${idx + 1}: ${portName}${hasNormal ? ` · normal → ${pb.normals![portName]}` : ''}`}
                 >
+                  {/* 라벨 (잭 위쪽, IN 행이니 상단) */}
+                  {isEditing ? (
+                    <input
+                      autoFocus
+                      value={editingLabel!.value}
+                      onChange={e => setEditingLabel({ ...editingLabel!, value: e.target.value })}
+                      onBlur={async () => {
+                        await saveJackLabel(pb.id, 'in', portName, editingLabel!.value);
+                        setEditingLabel(null);
+                      }}
+                      onKeyDown={async e => {
+                        if (e.key === 'Enter') {
+                          await saveJackLabel(pb.id, 'in', portName, editingLabel!.value);
+                          setEditingLabel(null);
+                        } else if (e.key === 'Escape') setEditingLabel(null);
+                      }}
+                      className="text-[9px] text-center w-full bg-sky-500/20 border border-sky-400 rounded px-0.5 text-white font-mono outline-none"
+                      style={{ height: 18 }}
+                      placeholder="이름"
+                    />
+                  ) : (
+                    <button
+                      onClick={e => {
+                        e.stopPropagation();
+                        setEditingLabel({ pbId: pb.id, dir: 'in', portName, value: meta?.label ?? '' });
+                      }}
+                      className={`text-[9px] font-mono truncate w-full px-0.5 rounded hover:bg-white/10 transition ${meta?.label ? 'text-teal-300' : 'text-neutral-600 italic'}`}
+                      style={{ height: 18, lineHeight: '18px' }}
+                      title="클릭하여 잭 이름 설정"
+                    >
+                      {meta?.label ?? '+ 이름'}
+                    </button>
+                  )}
                   <div style={{ marginTop: 2 }}>
                     {isAudio
                       ? audioJack(FULL_JACK_SIZE - 4, portColor, { active: patched, extCable: hasExt, normal: hasNormal, hover: isHoverDrop })
@@ -391,15 +437,20 @@ export default function PatchbayManager({ devices, connections, layers, racks, o
               const isDragFrom = drag?.fromDeviceId === pb.id && drag.fromPortName === portName;
               const patched = patches.has(portName);
               const hasExt = !!connections.find(c => c.from_device === pb.id && c.from_port === portName);
+              const meta = pb.outputsMeta?.[portName];
+              const isEditing = editingLabel?.pbId === pb.id && editingLabel?.dir === 'out' && editingLabel?.portName === portName;
               return (
                 <div
                   key={portName}
                   data-out-jack
                   data-out-device={pb.id}
                   data-out-port={portName}
-                  onMouseDown={e => onJackMouseDown(e, pb.id, portName)}
+                  onMouseDown={e => {
+                    if ((e.target as HTMLElement).closest('input, button')) return;
+                    onJackMouseDown(e, pb.id, portName);
+                  }}
                   className="relative flex flex-col items-center shrink-0 cursor-grab active:cursor-grabbing"
-                  style={{ width: jackW, height: FULL_JACK_SIZE + 14 }}
+                  style={{ width: jackW, height: FULL_JACK_SIZE + 38 }}
                   title={`${pb.name} OUT ${idx + 1}: ${portName}`}
                 >
                   <div className="text-[7.5px] font-mono font-bold text-neutral-400 mb-0.5 leading-none mt-0.5">
@@ -408,6 +459,41 @@ export default function PatchbayManager({ devices, connections, layers, racks, o
                   {isAudio
                     ? audioJack(FULL_JACK_SIZE - 4, portColor, { active: patched || isDragFrom, extCable: hasExt })
                     : videoJack(FULL_JACK_SIZE - 4, portColor, { active: patched || isDragFrom, extCable: hasExt })}
+                  {/* 라벨 (잭 아래쪽, OUT 행이니 하단) */}
+                  {isEditing ? (
+                    <input
+                      autoFocus
+                      value={editingLabel!.value}
+                      onChange={e => setEditingLabel({ ...editingLabel!, value: e.target.value })}
+                      onBlur={async () => {
+                        await saveJackLabel(pb.id, 'out', portName, editingLabel!.value);
+                        setEditingLabel(null);
+                      }}
+                      onMouseDown={e => e.stopPropagation()}
+                      onKeyDown={async e => {
+                        if (e.key === 'Enter') {
+                          await saveJackLabel(pb.id, 'out', portName, editingLabel!.value);
+                          setEditingLabel(null);
+                        } else if (e.key === 'Escape') setEditingLabel(null);
+                      }}
+                      className="text-[9px] text-center w-full bg-sky-500/20 border border-sky-400 rounded px-0.5 text-white font-mono outline-none mt-1"
+                      style={{ height: 18 }}
+                      placeholder="이름"
+                    />
+                  ) : (
+                    <button
+                      onClick={e => {
+                        e.stopPropagation();
+                        setEditingLabel({ pbId: pb.id, dir: 'out', portName, value: meta?.label ?? '' });
+                      }}
+                      onMouseDown={e => e.stopPropagation()}
+                      className={`text-[9px] font-mono truncate w-full px-0.5 rounded hover:bg-white/10 transition mt-1 ${meta?.label ? 'text-teal-300' : 'text-neutral-600 italic'}`}
+                      style={{ height: 18, lineHeight: '18px' }}
+                      title="클릭하여 잭 이름 설정"
+                    >
+                      {meta?.label ?? '+ 이름'}
+                    </button>
+                  )}
                 </div>
               );
             })}
