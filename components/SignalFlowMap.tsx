@@ -757,6 +757,9 @@ export default function SignalFlowMap() {
           setSelectedIds(new Set(inside));
         }
         setMarqueeRect(null);
+      } else if (p.type === 'canvas' && !p.moved) {
+        // 빈 공간 탭 (드래그 안 함) → 보기 모드면 trace 해제
+        if (!stateRef.current.editMode) setTraceId(null);
       }
 
       pointerRef.current = { type: 'none', downX: 0, downY: 0, shiftKey: false, moved: false };
@@ -969,7 +972,15 @@ export default function SignalFlowMap() {
   const onDeviceClickView = (e: React.MouseEvent, d: Device) => {
     if (editMode) return;
     e.stopPropagation();
-    setTraceId(t => t === d.id ? null : d.id);
+    setTraceId(t => {
+      // 동일 장비 다시 클릭 → 트레이스 해제
+      if (t === d.id) return null;
+      // 소스 → 하향(다운스트림)만, 디스플레이 → 상향(업스트림)만 자동 설정
+      if (d.role === 'source') setTraceMode('downstream');
+      else if (d.role === 'display') setTraceMode('upstream');
+      else setTraceMode('both');
+      return d.id;
+    });
   };
 
   const onPortClick = async (e: React.MouseEvent, deviceId: string, port: string, isOutput: boolean) => {
@@ -1475,13 +1486,23 @@ export default function SignalFlowMap() {
           })()}
 
           {!editMode && traceId && (
-            <div className="flex items-center gap-0.5 bg-sky-500/10 border border-sky-500/30 rounded-lg p-0.5">
-              {(['both','upstream','downstream'] as TraceMode[]).map(m => (
-                <button key={m} onClick={() => setTraceMode(m)}
-                  className={`px-2.5 py-1 text-[11.5px] font-medium rounded-md transition ${traceMode === m ? 'bg-sky-500 text-white' : 'text-sky-300 hover:text-white'}`}
-                >{m === 'both' ? '양방향' : m === 'upstream' ? '⬅ 상류' : '하류 ➡'}</button>
-              ))}
-            </div>
+            <>
+              <div className="flex items-center gap-0.5 bg-sky-500/10 border border-sky-500/30 rounded-lg p-0.5">
+                {(['both','upstream','downstream'] as TraceMode[]).map(m => (
+                  <button key={m} onClick={() => setTraceMode(m)}
+                    className={`px-2.5 py-1 text-[11.5px] font-medium rounded-md transition ${traceMode === m ? 'bg-sky-500 text-white' : 'text-sky-300 hover:text-white'}`}
+                  >{m === 'both' ? '양방향' : m === 'upstream' ? '⬅ 상류' : '하류 ➡'}</button>
+                ))}
+              </div>
+              <button
+                onClick={() => setTraceId(null)}
+                className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg border bg-white/5 border-white/15 text-neutral-300 hover:bg-red-500/20 hover:text-red-200 hover:border-red-500/40 transition-all flex items-center gap-1"
+                title="신호 추적 해제"
+              >
+                <span className="text-[13px]">✕</span>
+                <span>추적 해제</span>
+              </button>
+            </>
           )}
 
           {editMode && (
@@ -1696,7 +1717,7 @@ export default function SignalFlowMap() {
               const fromIsHub = from.role === 'router' || from.role === 'patchbay';
               const toIsHub = to.role === 'router' || to.role === 'patchbay';
               // hidePatchbay 모드: 허브 관련 연결선은 전부 숨김 (카드가 없으니 선도 허공)
-              if (hidePatchbay && (fromIsHub || toIsHub)) return null;
+              if (!traceId && hidePatchbay && (fromIsHub || toIsHub)) return null;
               const hubConn = fromIsHub || toIsHub;
               if (hubConn) {
                 const inspectedHere =
@@ -1723,7 +1744,9 @@ export default function SignalFlowMap() {
               const ctrl = Math.max(80, dxAbs / 1.8, dyAbs / 2.5);
               const path = `M ${x1} ${y1} C ${x1 + ctrl} ${y1}, ${x2 - ctrl} ${y2}, ${x2} ${y2}`;
               const isTraced = traced.connections.has(c.id);
-              const isDim = traceId && !isTraced;
+              // Trace 모드: 추적에 포함되지 않은 연결선 완전 숨김
+              if (traceId && !isTraced) return null;
+              const isDim = false;
               const ct = c.conn_type ?? from.outputsMeta?.[c.from_port]?.connType;
               const style = ct ? CONN_TYPE_STYLES[ct] : undefined;
               const fromLayerId = from.outputsMeta?.[c.from_port]?.layerId;
@@ -1808,7 +1831,7 @@ export default function SignalFlowMap() {
 
             {/* hidePatchbay 모드: 라벨-to-라벨 가상 케이블 */}
             {/* CAM1 OUT 라벨 "1-01" → MAIN IN 라벨 "1-01" 사이를 선으로 연결 */}
-            {hidePatchbay && (() => {
+            {hidePatchbay && !traceId && (() => {
               const LABEL_WIDTH = 130;    // 라벨 박스 추정 너비
               const LABEL_H_OFFSET = 8;   // 라벨 박스 수직 중앙 보정
               const LABEL_PAD = 6;        // 라벨과 케이블 사이 여백
@@ -1917,12 +1940,15 @@ export default function SignalFlowMap() {
           {/* Devices */}
           {devices.map(d => {
             if (!isDeviceVisible(d)) return null;
-            if (hidePatchbay && (d.role === 'patchbay' || d.role === 'router')) return null;
+            // Trace 모드가 아니고 허브 숨김 ON이면 허브 카드 숨김
+            if (!traceId && hidePatchbay && (d.role === 'patchbay' || d.role === 'router')) return null;
+            // Trace 모드: 추적에 포함되지 않은 장비 완전 숨김
+            if (traceId && !traced.devices.has(d.id)) return null;
             const color = TYPE_COLORS[d.type];
             const isSelected = selectedIds.has(d.id);
             const isTraceTarget = traceId === d.id;
             const isTraced = traced.devices.has(d.id);
-            const isDim = traceId && !isTraced;
+            const isDim = false; // trace 모드에선 이미 숨겼으니 dim 효과 없음
             const isHovered = hoveredId === d.id;
             const w = deviceWidth(d);
             const h = deviceHeight(d, visibleLayerIds);
