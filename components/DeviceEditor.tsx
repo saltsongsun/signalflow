@@ -164,7 +164,7 @@ export default function DeviceEditor({ device, layers, allDevices, selectionCoun
       imageStoragePath: role === 'source' ? (imageStoragePath.trim() || null) : null,
       audioUrl: role === 'source' ? (audioUrl.trim() || null) : null,
       audioStoragePath: role === 'source' ? (audioStoragePath.trim() || null) : null,
-      selectedInput: (role === 'switcher' || role === 'router') ? (selectedInput || null) : null,
+      selectedInput: role === 'switcher' ? (selectedInput || null) : null,
       multiviewLayout: role === 'multiview' ? multiviewLayout : null,
       multiviewPgmInput: role === 'multiview' ? (multiviewPgmInput || null) : null,
       multiviewPvwInput: role === 'multiview' ? (multiviewPvwInput || null) : null,
@@ -384,7 +384,7 @@ export default function DeviceEditor({ device, layers, allDevices, selectionCoun
           </div>
           <div className="mt-1.5 text-[10px] text-neutral-600 leading-relaxed">
             {role === 'switcher' && '⇆ 여러 입력 중 선택된 소스를 출력으로. PGM 출력 + 현재 선택된 입력 지정.'}
-            {role === 'router' && '⇅ 지정된 입력을 출력으로 라우팅.'}
+            {role === 'router' && '⇅ 크로스포인트 라우터. 각 OUT마다 독립적으로 IN을 선택 (상시 동작, 스위처와 달리 여러 경로 동시).'}
             {role === 'splitter' && '⇶ 하나의 입력을 여러 출력으로 분배 (VDA/DA).'}
             {role === 'patchbay' && '⊟ 물리 패치베이. 기본 배선(normal)과 수동 패치(patch) 구분.'}
             {role === 'wallbox' && '▦ 벽면 판넬 월박스. 현장 장소별 포트 접점.'}
@@ -586,18 +586,14 @@ export default function DeviceEditor({ device, layers, allDevices, selectionCoun
           </div>
         )}
 
-        {/* Switcher/Router 현재 선택 입력 */}
-        {(role === 'switcher' || role === 'router') && inputs.length > 0 && (
+        {/* Switcher 현재 선택 입력 */}
+        {role === 'switcher' && inputs.length > 0 && (
           <div className="bg-gradient-to-br from-cyan-500/10 to-transparent border border-cyan-500/20 rounded-lg p-3 space-y-2">
             <div className="flex items-center gap-2">
-              <span className="text-[15px]">{role === 'switcher' ? '⇆' : '⇅'}</span>
+              <span className="text-[15px]">⇆</span>
               <div>
                 <div className="text-[11px] font-bold text-cyan-300">현재 선택된 입력 (시뮬레이션)</div>
-                <div className="text-[10px] text-neutral-500">
-                  {role === 'switcher'
-                    ? '이 입력의 신호가 PGM/모든 출력으로 나감'
-                    : '이 입력의 신호가 출력으로 전달됨'}
-                </div>
+                <div className="text-[10px] text-neutral-500">이 입력의 신호가 PGM/모든 출력으로 나감</div>
               </div>
             </div>
             <select
@@ -612,6 +608,52 @@ export default function DeviceEditor({ device, layers, allDevices, selectionCoun
                 </option>
               ))}
             </select>
+          </div>
+        )}
+
+        {/* Router crosspoint 라우팅 매트릭스 */}
+        {role === 'router' && inputs.length > 0 && outputs.length > 0 && (
+          <div className="bg-gradient-to-br from-orange-500/10 to-transparent border border-orange-500/20 rounded-lg p-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <span className="text-[15px]">⇅</span>
+              <div>
+                <div className="text-[11px] font-bold text-orange-300">크로스포인트 라우팅</div>
+                <div className="text-[10px] text-neutral-500">각 OUT마다 입력을 독립 선택 (상시 동작, 한 IN이 여러 OUT 가능)</div>
+              </div>
+            </div>
+            <div className="space-y-1.5 max-h-64 overflow-y-auto">
+              {outputs.map((o, outIdx) => {
+                const currentIn = (device.routing?.[o.name]) ?? inputs[outIdx]?.name ?? inputs[0]?.name;
+                return (
+                  <div key={o.name} className="flex items-center gap-2">
+                    <span className="text-[10.5px] font-mono text-orange-200 font-bold shrink-0" style={{ minWidth: 60 }}>
+                      {o.name}
+                    </span>
+                    <span className="text-[10px] text-neutral-500">←</span>
+                    <select
+                      value={currentIn ?? ''}
+                      onChange={async e => {
+                        const newRouting = { ...(device.routing ?? {}), [o.name]: e.target.value };
+                        await (supabase as any).from('devices').update({ routing: newRouting }).eq('id', device.id);
+                        // 낙관적 업데이트는 부모가 처리하게 closing 후 save 버튼으로 반영
+                        // 여기선 바로 반영되도록 onSave 호출
+                        onSave({ routing: newRouting });
+                      }}
+                      className="flex-1 bg-neutral-900 border border-orange-500/30 rounded px-2 py-1 text-[10.5px] font-mono text-orange-100 focus:border-orange-400 focus:outline-none"
+                    >
+                      {inputs.map(i => (
+                        <option key={i.name} value={i.name}>
+                          {i.name}{i.label ? ` — ${i.label}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="text-[9.5px] text-orange-200/70 bg-orange-500/5 border border-orange-500/15 rounded p-2 mt-1">
+              💡 빈 셀은 자동으로 같은 번호의 IN으로 기본 매핑됩니다. 도면 OUT을 클릭하면 다음 IN으로 바로 전환.
+            </div>
           </div>
         )}
 

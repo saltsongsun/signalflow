@@ -364,8 +364,16 @@ export default function SignalFlowMap() {
           });
         }
       } else if (d.role === 'router') {
+        // 라우터: routing 매핑 (OUT → IN) 또는 1:1 기본
+        // hubInternalMap은 IN → OUT 방향이므로 routing을 뒤집어 저장
+        const routing = d.routing ?? {};
+        const reverseMap = new Map<string, string>(); // inPort → outPort
+        Object.entries(routing).forEach(([outPort, inPort]) => {
+          if (inPort && typeof inPort === 'string') reverseMap.set(inPort, outPort);
+        });
+        // routing에 없는 IN은 1:1 fallback
         d.inputs.forEach((inPort, i) => {
-          const outPort = d.outputs[i] ?? d.outputs[0];
+          const outPort = reverseMap.get(inPort) ?? d.outputs[i] ?? d.outputs[0];
           if (outPort) m.set(`${d.id}:${inPort}`, outPort);
         });
       } else if (d.role === 'switcher') {
@@ -436,13 +444,29 @@ export default function SignalFlowMap() {
         if (d.role === 'source') return;
         if (d.role === 'display') return;
 
-        if (d.role === 'switcher' || d.role === 'router') {
+        if (d.role === 'switcher') {
+          // 스위처: selectedInput 하나의 신호가 모든 OUT으로 방송
           const sel = d.selectedInput;
           if (!sel) return;
           const srcSig = inSignal.get(`${d.id}:${sel}`);
           if (!srcSig) return;
           d.outputs.forEach(p => {
             const k = `${d.id}:${p}`;
+            if (out.get(k) !== srcSig) { out.set(k, srcSig); changed = true; }
+          });
+          return;
+        }
+
+        if (d.role === 'router') {
+          // 라우터: 각 OUT마다 독립 IN 매핑 (crosspoint)
+          // routing: { 'OUT-1': 'IN-3', 'OUT-2': 'IN-5', ... }
+          // 매핑 없으면 1:1 기본 (IN-N → OUT-N)
+          d.outputs.forEach((outPort, outIdx) => {
+            const mappedIn = d.routing?.[outPort] ?? d.inputs[outIdx] ?? d.inputs[0];
+            if (!mappedIn) return;
+            const srcSig = inSignal.get(`${d.id}:${mappedIn}`);
+            if (!srcSig) return;
+            const k = `${d.id}:${outPort}`;
             if (out.get(k) !== srcSig) { out.set(k, srcSig); changed = true; }
           });
           return;
@@ -1244,7 +1268,7 @@ export default function SignalFlowMap() {
     });
   };
 
-  // 스위처/라우터: selectedInput 변경
+  // 스위처/디스플레이: selectedInput 변경
   const setSelectedInput = async (deviceId: string, inputPort: string) => {
     const d = devById.get(deviceId);
     if (!d) return;
@@ -1255,6 +1279,24 @@ export default function SignalFlowMap() {
     pushUndo(`"${d.name}" 입력 되돌리기`, async () => {
       setDevices(ps => ps.map(x => x.id === deviceId ? { ...x, selectedInput: prev } : x));
       await (supabase as any).from('devices').update({ selectedInput: prev ?? null }).eq('id', deviceId);
+    });
+  };
+
+  // 라우터: OUT 포트를 다음 IN으로 순차 변경 (crosspoint cycling)
+  const cycleRouterOutput = async (deviceId: string, outPort: string) => {
+    const d = devById.get(deviceId);
+    if (!d || d.role !== 'router') return;
+    const currentIn = d.routing?.[outPort] ?? d.inputs[d.outputs.indexOf(outPort)] ?? d.inputs[0];
+    const idx = d.inputs.indexOf(currentIn);
+    const nextIn = d.inputs[(idx + 1) % d.inputs.length];
+    if (!nextIn) return;
+    const newRouting = { ...(d.routing ?? {}), [outPort]: nextIn };
+    const prev = d.routing;
+    setDevices(prevDs => prevDs.map(x => x.id === deviceId ? { ...x, routing: newRouting } : x));
+    await (supabase as any).from('devices').update({ routing: newRouting }).eq('id', deviceId);
+    pushUndo(`"${d.name}" 라우팅 되돌리기`, async () => {
+      setDevices(ps => ps.map(x => x.id === deviceId ? { ...x, routing: prev } : x));
+      await (supabase as any).from('devices').update({ routing: prev ?? null }).eq('id', deviceId);
     });
   };
 
@@ -1662,11 +1704,11 @@ export default function SignalFlowMap() {
   return (
     <div className="h-screen w-screen bg-gradient-to-br from-neutral-950 via-black to-neutral-950 text-white overflow-hidden relative select-none">
       {/* Top bar */}
-      <div data-ui className="absolute top-0 left-0 right-0 z-30 h-14 bg-black/60 backdrop-blur-2xl border-b border-white/10 shadow-xl shadow-black/40">
-        <div className="h-full flex items-center gap-3 px-4 overflow-x-auto overflow-y-hidden scrollbar-thin" style={{ scrollbarWidth: 'thin' }}>
-          <div className="flex items-center gap-2.5">
-            <div className="relative w-7 h-7 rounded-lg bg-gradient-to-br from-sky-400 to-purple-600 flex items-center justify-center shadow-lg shadow-sky-500/30">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <div data-ui className="absolute top-0 left-0 right-0 z-30 h-12 md:h-14 bg-black/80 border-b border-white/10 shadow-xl shadow-black/40">
+        <div className="h-full flex items-center gap-1.5 md:gap-2 px-2 md:px-3 overflow-x-auto overflow-y-hidden scrollbar-thin flex-nowrap toolbar" style={{ scrollbarWidth: 'thin' }}>
+          <div className="flex items-center gap-1.5 md:gap-2 shrink-0">
+            <div className="relative w-6 h-6 md:w-7 md:h-7 rounded-lg bg-gradient-to-br from-sky-400 to-purple-600 flex items-center justify-center shadow-lg shadow-sky-500/30">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                 <circle cx="3" cy="3" r="1.5" fill="white"/>
                 <circle cx="13" cy="3" r="1.5" fill="white"/>
                 <circle cx="3" cy="13" r="1.5" fill="white"/>
@@ -1674,59 +1716,59 @@ export default function SignalFlowMap() {
                 <path d="M3 3 L13 13 M13 3 L3 13" stroke="white" strokeWidth="0.8" opacity="0.6"/>
               </svg>
             </div>
-            <div>
-              <div className="text-[13px] font-bold tracking-tight leading-tight">Signal Flow Map</div>
-              <div className="text-[10.5px] text-neutral-500 leading-tight font-mono">경남이스포츠 · UHD</div>
+            <div className="hidden lg:block">
+              <div className="text-[12px] font-bold tracking-tight leading-tight">Signal Flow Map</div>
+              <div className="text-[10px] text-neutral-500 leading-tight font-mono">경남이스포츠 · UHD</div>
             </div>
           </div>
 
-          <div className="w-px h-7 bg-white/10"></div>
+          <div className="w-px h-6 bg-white/10 shrink-0"></div>
 
-          <div className="flex items-center gap-0.5 bg-white/5 rounded-lg p-0.5 border border-white/10">
+          <div className="flex items-center gap-0.5 bg-white/5 rounded-lg p-0.5 border border-white/10 shrink-0">
             <button
               onClick={() => { setEditMode(false); setPendingFrom(null); setSelectedIds(new Set()); }}
-              className={`px-3 py-1.5 text-[11px] font-medium rounded-md transition-all ${!editMode ? 'bg-gradient-to-r from-neutral-700 to-neutral-600 text-white shadow-md' : 'text-neutral-400 hover:text-white'}`}
-            >👁 보기</button>
+              className={`px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-md whitespace-nowrap ${!editMode ? 'bg-gradient-to-r from-neutral-700 to-neutral-600 text-white shadow-md' : 'text-neutral-400 hover:text-white'}`}
+              title="보기 모드"
+            >👁<span className="hidden sm:inline ml-1">보기</span></button>
             <button
               onClick={() => { setEditMode(true); setTraceId(null); }}
-              className={`px-3 py-1.5 text-[11px] font-medium rounded-md transition-all ${editMode ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md shadow-amber-500/30' : 'text-neutral-400 hover:text-white'}`}
-            >✎ 편집</button>
+              className={`px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-md whitespace-nowrap ${editMode ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md shadow-amber-500/30' : 'text-neutral-400 hover:text-white'}`}
+              title="편집 모드"
+            >✎<span className="hidden sm:inline ml-1">편집</span></button>
           </div>
 
           <button
             onClick={() => setShowLayerPanel(s => !s)}
-            className={`px-3 py-1.5 text-[11px] font-medium rounded-lg border transition-all ${showLayerPanel ? 'bg-gradient-to-r from-purple-500 to-purple-600 text-white border-purple-400 shadow-md shadow-purple-500/30' : 'bg-white/5 border-white/10 text-neutral-300 hover:text-white hover:bg-white/10'}`}
-          >⧉ 레이어 <span className="font-mono opacity-70">{layers.filter(l => l.visible).length}/{layers.length}</span></button>
+            className={`px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border whitespace-nowrap shrink-0 ${showLayerPanel ? 'bg-gradient-to-r from-purple-500 to-purple-600 text-white border-purple-400 shadow-md shadow-purple-500/30' : 'bg-white/5 border-white/10 text-neutral-300 hover:text-white hover:bg-white/10'}`}
+            title="레이어 관리"
+          >⧉<span className="hidden sm:inline ml-1">레이어</span> <span className="font-mono opacity-70">{layers.filter(l => l.visible).length}/{layers.length}</span></button>
 
           <button
             onClick={() => setShowPatchbayMgr(true)}
-            className="px-3 py-1.5 text-[11px] font-medium rounded-lg border bg-white/5 border-teal-500/30 text-teal-300 hover:text-white hover:bg-teal-500/20 transition-all"
-            title="패치베이 관리 페이지"
-          >⊟ 패치베이 <span className="font-mono opacity-70">{devices.filter(d => d.role === 'patchbay').length}</span></button>
+            className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border bg-white/5 border-teal-500/30 text-teal-300 hover:text-white hover:bg-teal-500/20 whitespace-nowrap shrink-0"
+            title="패치베이 관리"
+          >⊟<span className="hidden sm:inline ml-1">패치베이</span> <span className="font-mono opacity-70">{devices.filter(d => d.role === 'patchbay').length}</span></button>
 
-          {/* 도면에서 허브(라우터/패치베이) 숨김 토글 */}
           {devices.some(d => d.role === 'patchbay' || d.role === 'router') && (
             <button
               onClick={() => setHidePatchbay(v => !v)}
-              className={`px-2.5 py-1.5 text-[11px] font-medium rounded-lg border transition-all flex items-center gap-1.5 ${
+              className={`px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border flex items-center gap-1 whitespace-nowrap shrink-0 ${
                 hidePatchbay
                   ? 'bg-teal-500 border-teal-400 text-white shadow-md shadow-teal-500/30'
                   : 'bg-white/5 border-white/15 text-neutral-400 hover:bg-teal-500/20 hover:text-teal-200 hover:border-teal-500/40'
               }`}
-              title={hidePatchbay
-                ? '허브(라우터/패치베이)가 도면에서 숨겨져 있음 — 클릭하면 표시됨'
-                : '허브가 도면에 표시됨 — 클릭하면 숨겨짐'}
+              title={hidePatchbay ? '허브가 숨겨짐 — 클릭하면 표시' : '허브 표시중 — 클릭하면 숨김'}
             >
-              <span className="font-mono text-[12px]">{hidePatchbay ? '⊘' : '⊟'}</span>
-              <span>허브 {hidePatchbay ? '숨김' : '표시'}</span>
+              <span className="font-mono">{hidePatchbay ? '⊘' : '⊟'}</span>
+              <span className="hidden sm:inline">허브{hidePatchbay ? ' 숨김' : ''}</span>
             </button>
           )}
 
           <button
             onClick={() => setShowWallboxMgr(true)}
-            className="px-3 py-1.5 text-[11px] font-medium rounded-lg border bg-white/5 border-amber-500/30 text-amber-300 hover:text-white hover:bg-amber-500/20 transition-all"
-            title="월박스 관리 페이지"
-          >▦ 월박스 <span className="font-mono opacity-70">{devices.filter(d => d.role === 'wallbox').length}</span></button>
+            className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border bg-white/5 border-amber-500/30 text-amber-300 hover:text-white hover:bg-amber-500/20 whitespace-nowrap shrink-0"
+            title="월박스 관리"
+          >▦<span className="hidden sm:inline ml-1">월박스</span> <span className="font-mono opacity-70">{devices.filter(d => d.role === 'wallbox').length}</span></button>
 
           {/* 라우터/패치베이 선 전체 보기 토글 */}
           {(() => {
@@ -1738,31 +1780,21 @@ export default function SignalFlowMap() {
             return (
               <button
                 onClick={() => {
-                  if (allOn) {
-                    // 모두 켜진 상태 → 전부 끄기
-                    setInspectHubs(new Set());
-                  } else {
-                    // 일부/아무것도 안 켜진 → 전부 켜기
-                    setInspectHubs(new Set(allHubs.map(h => h.id)));
-                  }
+                  if (allOn) setInspectHubs(new Set());
+                  else setInspectHubs(new Set(allHubs.map(h => h.id)));
                 }}
-                className={`px-2.5 py-1.5 text-[11px] font-medium rounded-lg border transition-all flex items-center gap-1.5 ${
+                className={`px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border flex items-center gap-1 whitespace-nowrap shrink-0 ${
                   allOn
                     ? 'bg-fuchsia-500 border-fuchsia-400 text-white shadow-md shadow-fuchsia-500/40'
                     : someOn
-                      ? 'bg-fuchsia-500/30 border-fuchsia-500/50 text-fuchsia-100 hover:bg-fuchsia-500/50'
+                      ? 'bg-fuchsia-500/30 border-fuchsia-500/50 text-fuchsia-100'
                       : 'bg-white/5 border-white/15 text-neutral-400 hover:bg-fuchsia-500/20 hover:text-fuchsia-200 hover:border-fuchsia-500/40'
                 }`}
-                title={allOn
-                  ? '모든 라우터/패치베이 연결선 숨기기'
-                  : someOn
-                    ? `일부 표시 중 (${activeCount}/${allHubs.length}) — 클릭하면 전부 표시`
-                    : '모든 라우터/패치베이 연결선 보기'}
+                title={`허브 연결선: ${allOn ? '전체 표시' : someOn ? `${activeCount}/${allHubs.length}` : '숨김'}`}
               >
                 <span className="font-mono text-[13px]">👁</span>
-                <span>
-                  Hub 선 {allOn ? 'ON' : someOn ? `${activeCount}/${allHubs.length}` : 'OFF'}
-                </span>
+                <span className="hidden md:inline">Hub선</span>
+                <span className="text-[10px]">{allOn ? 'ON' : someOn ? `${activeCount}/${allHubs.length}` : 'OFF'}</span>
               </button>
             );
           })()}
@@ -1773,13 +1805,13 @@ export default function SignalFlowMap() {
             if (activeSources === 0 && devices.filter(d => d.role === 'display').length === 0) return null;
             return (
               <div
-                className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-lime-500/10 to-sky-500/10 border border-lime-500/25"
-                title="신호 시뮬레이션 활성 상태"
+                className="flex items-center gap-1.5 px-2 py-1 md:py-1.5 rounded-lg bg-gradient-to-r from-lime-500/10 to-sky-500/10 border border-lime-500/25 whitespace-nowrap shrink-0"
+                title="신호 시뮬레이션 활성"
               >
                 <div className="w-1.5 h-1.5 rounded-full bg-lime-400 animate-pulse shadow-md shadow-lime-400/60"></div>
                 <span className="text-[11px] font-medium">
                   <span className="text-lime-300 font-mono">▶{activeSources}</span>
-                  <span className="text-neutral-500 mx-1">→</span>
+                  <span className="text-neutral-500 mx-0.5">→</span>
                   <span className="text-sky-300 font-mono">🖵{liveDisplays}</span>
                 </span>
               </div>
@@ -1788,20 +1820,21 @@ export default function SignalFlowMap() {
 
           {!editMode && traceId && (
             <>
-              <div className="flex items-center gap-0.5 bg-sky-500/10 border border-sky-500/30 rounded-lg p-0.5">
+              <div className="flex items-center gap-0.5 bg-sky-500/10 border border-sky-500/30 rounded-lg p-0.5 shrink-0">
                 {(['both','upstream','downstream'] as TraceMode[]).map(m => (
                   <button key={m} onClick={() => setTraceMode(m)}
-                    className={`px-2.5 py-1 text-[11.5px] font-medium rounded-md transition ${traceMode === m ? 'bg-sky-500 text-white' : 'text-sky-300 hover:text-white'}`}
-                  >{m === 'both' ? '양방향' : m === 'upstream' ? '⬅ 상류' : '하류 ➡'}</button>
+                    className={`px-2 py-1 text-[11px] font-medium rounded-md ${traceMode === m ? 'bg-sky-500 text-white' : 'text-sky-300 hover:text-white'}`}
+                    title={m === 'both' ? '양방향' : m === 'upstream' ? '상류' : '하류'}
+                  >{m === 'both' ? '↔' : m === 'upstream' ? '⬅' : '➡'}</button>
                 ))}
               </div>
               <button
                 onClick={() => setTraceId(null)}
-                className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg border bg-white/5 border-white/15 text-neutral-300 hover:bg-red-500/20 hover:text-red-200 hover:border-red-500/40 transition-all flex items-center gap-1"
+                className="px-2 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border bg-red-500/15 border-red-500/40 text-red-300 hover:bg-red-500 hover:text-white flex items-center gap-1 whitespace-nowrap shrink-0"
                 title="신호 추적 해제"
               >
-                <span className="text-[13px]">✕</span>
-                <span>추적 해제</span>
+                <span>✕</span>
+                <span className="hidden sm:inline">추적 해제</span>
               </button>
             </>
           )}
@@ -1809,9 +1842,9 @@ export default function SignalFlowMap() {
           {editMode && (
             <>
               <button onClick={handleAddDevice}
-                className="px-3 py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-sky-500 to-sky-600 hover:from-sky-400 hover:to-sky-500 text-white shadow-md shadow-sky-500/30 transition">＋ 장비</button>
+                className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-sky-500 to-sky-600 hover:from-sky-400 hover:to-sky-500 text-white shadow-md shadow-sky-500/30 whitespace-nowrap shrink-0" title="장비 추가">＋<span className="hidden sm:inline ml-1">장비</span></button>
               <button onClick={handleAddMultiview}
-                className="px-3 py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-white shadow-md shadow-violet-500/30 transition">▦ 멀티뷰</button>
+                className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-white shadow-md shadow-violet-500/30 whitespace-nowrap shrink-0" title="멀티뷰 추가">▦<span className="hidden sm:inline ml-1">멀티뷰</span></button>
               {selectedIds.size > 0 && (
                 <>
                   <div className="px-2.5 py-1 text-[11px] rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 font-medium">
@@ -1954,14 +1987,14 @@ export default function SignalFlowMap() {
         }}
       >
         {/* Connection Canvas — screen space에 그려 DOM scale 영향 없음 */}
-        <div style={{ position: 'absolute', top: 56, left: 0, right: 0, bottom: 0, overflow: 'hidden', pointerEvents: 'none' }}>
+        <div className="absolute inset-x-0 bottom-0 top-12 md:top-14 overflow-hidden pointer-events-none">
           <ConnectionCanvas
             ref={connectionCanvasRef}
             width={viewport.w}
-            height={viewport.h - 56}
+            height={viewport.h - (viewport.w >= 768 ? 56 : 48)}
             scale={scale}
             offsetX={offset.x}
-            offsetY={offset.y - 56}
+            offsetY={offset.y - (viewport.w >= 768 ? 56 : 48)}
             cables={canvasCables}
           />
         </div>
@@ -2490,7 +2523,9 @@ export default function SignalFlowMap() {
                       const portColor = layer?.color ?? color.main;
                       const isSel = d.selectedInput === p.name;
                       // 보기 모드에서 스위처/라우터/디스플레이의 IN을 클릭해 활성 입력 변경
-                      const canSelect = !editMode && (d.role === 'switcher' || d.role === 'router' || d.role === 'display');
+                      // 보기 모드에서 스위처/디스플레이의 IN을 클릭해 활성 입력 변경
+                      // 라우터는 선택이 아니라 크로스포인트 — IN 클릭으로는 아무 일도 안 일어남
+                      const canSelect = !editMode && (d.role === 'switcher' || d.role === 'display');
                       return (
                         <div
                           key={p.name}
@@ -2540,13 +2575,32 @@ export default function SignalFlowMap() {
                       const isPending = pendingFrom?.device === d.id && pendingFrom?.port === p.name;
                       const isPgm = d.role === 'switcher' && d.pgmPort === p.name;
                       const isSwitcherViewMode = !editMode && d.role === 'switcher';
+                      const isRouterViewMode = !editMode && d.role === 'router';
+                      // 라우터 OUT에 매핑된 현재 IN (routing 또는 index fallback)
+                      const routedIn = isRouterViewMode
+                        ? (d.routing?.[p.name] ?? d.inputs[d.outputs.indexOf(p.name)] ?? d.inputs[0])
+                        : null;
                       return (
                         <div
                           key={p.name}
-                          className={`flex items-center justify-end ${isSwitcherViewMode ? 'cursor-pointer hover:bg-emerald-500/10 rounded' : ''}`}
+                          className={`flex items-center justify-end ${
+                            isSwitcherViewMode ? 'cursor-pointer hover:bg-emerald-500/10 rounded'
+                            : isRouterViewMode ? 'cursor-pointer hover:bg-orange-500/10 rounded'
+                            : ''
+                          }`}
                           style={{ height: PORT_H }}
-                          onClick={isSwitcherViewMode ? (e) => { e.stopPropagation(); setSwitcherPgm(d.id, p.name); } : undefined}
-                          title={isSwitcherViewMode ? `클릭하여 ${p.name}을(를) PGM으로 지정 / 해제` : undefined}
+                          onClick={
+                            isSwitcherViewMode
+                              ? (e) => { e.stopPropagation(); setSwitcherPgm(d.id, p.name); }
+                              : isRouterViewMode
+                              ? (e) => { e.stopPropagation(); cycleRouterOutput(d.id, p.name); }
+                              : undefined
+                          }
+                          title={
+                            isSwitcherViewMode ? `클릭: ${p.name}을 PGM으로 지정/해제`
+                            : isRouterViewMode ? `클릭: 다음 입력으로 전환 (현재 ← ${routedIn ?? 'N/A'})`
+                            : undefined
+                          }
                         >
                           <div className="flex-1 flex items-center justify-end gap-1.5 min-w-0 mr-2">
                             {meta?.label && <span className="text-[10.5px] text-neutral-500 truncate text-right">{meta.label}</span>}
@@ -2554,6 +2608,13 @@ export default function SignalFlowMap() {
                               <span className="text-[9.5px] px-2 py-[2px] rounded font-mono font-bold shrink-0"
                                 style={{ background: 'linear-gradient(90deg, #10b981, #059669)', color: 'white', boxShadow: '0 0 8px rgba(16,185,129,0.6)' }}>
                                 PGM
+                              </span>
+                            )}
+                            {/* 라우터 OUT에 현재 매핑된 IN 표시 */}
+                            {isRouterViewMode && routedIn && (
+                              <span className="text-[9px] px-1.5 py-[2px] rounded font-mono font-bold shrink-0"
+                                style={{ background: 'rgba(249,115,22,0.2)', color: '#FB923C', border: '0.5px solid rgba(251,146,60,0.5)' }}>
+                                ← {routedIn}
                               </span>
                             )}
                             {ct && (
