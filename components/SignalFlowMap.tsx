@@ -9,6 +9,7 @@ import PatchbayManager from './PatchbayManager';
 import WallboxManager from './WallboxManager';
 import BulkEditor from './BulkEditor';
 import ConnectionCanvas from './ConnectionCanvas';
+import AudioMixerEditor from './AudioMixerEditor';
 
 type TraceMode = 'both' | 'upstream' | 'downstream';
 
@@ -194,6 +195,7 @@ export default function SignalFlowMap() {
   // 도면에 패치베이 카드/관련 연결선 숨김 토글 — 기본 ON
   const [hidePatchbay, setHidePatchbay] = useState<boolean>(true);
   const [editingDevice, setEditingDevice] = useState<Device | null>(null);
+  const [editingMixer, setEditingMixer] = useState<Device | null>(null);
   const [editingCable, setEditingCable] = useState<Connection | null>(null);
   const [showLayerPanel, setShowLayerPanel] = useState(false);
   const [showPatchbayMgr, setShowPatchbayMgr] = useState(false);
@@ -743,9 +745,13 @@ export default function SignalFlowMap() {
 
       const outVis = visiblePortsCache.get(from.id)?.out ?? [];
       const inVis = visiblePortsCache.get(to.id)?.in ?? [];
-      const fi = outVis.findIndex(p => p.name === c.from_port);
-      const ti = inVis.findIndex(p => p.name === c.to_port);
-      if (fi < 0 || ti < 0) return;
+      let fi = outVis.findIndex(p => p.name === c.from_port);
+      let ti = inVis.findIndex(p => p.name === c.to_port);
+      // Fallback: 레이어 필터로 숨겨진 포트면 전체 목록에서 index 찾아 강제 렌더
+      // (visiblePortsCache가 stale 할 때도 대비)
+      if (fi < 0) fi = from.outputs.indexOf(c.from_port);
+      if (ti < 0) ti = to.inputs.indexOf(c.to_port);
+      if (fi < 0 || ti < 0) return;  // 포트가 진짜로 삭제된 경우만 skip
 
       const x1 = from.x + deviceWidth(from);
       const y1 = portYFromRenderIdx(from, fi);
@@ -963,8 +969,14 @@ export default function SignalFlowMap() {
               finalPositions[dev.id] ? { ...dev, ...finalPositions[dev.id] } : dev
             ));
           }
-          dragOffsetRef.current = null;
-          connectionCanvasRef.current?.updateDragOffset(null);
+          // setDevices가 실제로 commit된 다음 프레임에 dragOffset 해제
+          // (너무 일찍 해제하면 Canvas가 old devices + no dragOffset 상태에서 깜빡임)
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              dragOffsetRef.current = null;
+              connectionCanvasRef.current?.updateDragOffset(null);
+            });
+          });
           // DB 저장
           const saves = Object.entries(finalPositions).map(([id, pos]) =>
             (supabase as any).from('devices').update({ x: pos.x, y: pos.y }).eq('id', id)
@@ -1003,7 +1015,11 @@ export default function SignalFlowMap() {
                 });
               } else {
                 setSelectedIds(new Set(groupMates));
-                setEditingDevice(clickedDev);
+                if (clickedDev.role === 'audio_mixer') {
+                  setEditingMixer(clickedDev);
+                } else {
+                  setEditingDevice(clickedDev);
+                }
               }
             } else {
               setTraceId(t => t === clickedId ? null : clickedId);
@@ -1380,6 +1396,37 @@ export default function SignalFlowMap() {
       await (supabase as any).from('devices').delete().eq('id', id);
     });
     setEditingDevice(d);
+  };
+
+  // 오디오 콘솔 추가 — 기본: 16 IN / 8 OUT, 채널/버스 비어있음
+  const handleAddAudioMixer = async () => {
+    const id = `mxr_${Date.now().toString(36)}`;
+    const audioLayer = layers.find(l => l.id === 'layer_audio')?.id ?? layers[0]?.id ?? 'layer_audio';
+    const inputs = Array.from({ length: 16 }, (_, i) => `IN-${i + 1}`);
+    const outputs = Array.from({ length: 8 }, (_, i) => `OUT-${i + 1}`);
+    const inputsMeta: Record<string, any> = {};
+    const outputsMeta: Record<string, any> = {};
+    inputs.forEach(p => { inputsMeta[p] = { name: p, layerId: audioLayer, connType: 'XLR' }; });
+    outputs.forEach(p => { outputsMeta[p] = { name: p, layerId: audioLayer, connType: 'XLR' }; });
+    const d: Device = {
+      id, name: '오디오 콘솔', type: 'audio', role: 'audio_mixer',
+      x: (-offset.x + 400) / scale, y: (-offset.y + 200) / scale,
+      width: 280,
+      inputs, outputs,
+      inputsMeta, outputsMeta,
+      audioChannels: [],
+      audioBuses: [{ id: 'main', name: 'MAIN L/R', type: 'main', stereo: true, color: '#10B981' }],
+      audioPatch: {},
+      audioOutPatch: {},
+      mixMatrix: {},
+      physPorts: {}, routing: {},
+    };
+    await (supabase as any).from('devices').insert(d);
+    pushUndo('오디오 콘솔 추가 되돌리기', async () => {
+      await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
+      await (supabase as any).from('devices').delete().eq('id', id);
+    });
+    setEditingMixer(d);
   };
 
   const handleDuplicateDevice = async () => {
@@ -1845,6 +1892,8 @@ export default function SignalFlowMap() {
                 className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-sky-500 to-sky-600 hover:from-sky-400 hover:to-sky-500 text-white shadow-md shadow-sky-500/30 whitespace-nowrap shrink-0" title="장비 추가">＋<span className="hidden sm:inline ml-1">장비</span></button>
               <button onClick={handleAddMultiview}
                 className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-white shadow-md shadow-violet-500/30 whitespace-nowrap shrink-0" title="멀티뷰 추가">▦<span className="hidden sm:inline ml-1">멀티뷰</span></button>
+              <button onClick={handleAddAudioMixer}
+                className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-rose-500 to-rose-600 hover:from-rose-400 hover:to-rose-500 text-white shadow-md shadow-rose-500/30 whitespace-nowrap shrink-0" title="오디오 콘솔 추가">🎛<span className="hidden sm:inline ml-1">콘솔</span></button>
               {selectedIds.size > 0 && (
                 <>
                   <div className="px-2.5 py-1 text-[11px] rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 font-medium">
@@ -2320,6 +2369,7 @@ export default function SignalFlowMap() {
               : role === 'source' ? '▶'
               : role === 'display' ? '🖵'
               : role === 'multiview' ? '▦'
+              : role === 'audio_mixer' ? '🎛'
               : role === 'connector' ? '━'
               : null;
             const isPatchbay = role === 'patchbay';
@@ -2327,6 +2377,7 @@ export default function SignalFlowMap() {
             const isSource = role === 'source';
             const isDisplay = role === 'display';
             const isMultiview = role === 'multiview';
+            const isAudioMixer = role === 'audio_mixer';
             const currentDisplaySource = isDisplay ? displaySources.get(d.id) : undefined;
 
             // 이 장비의 IN 포트에 연결된 hub (precomputed)
@@ -2416,6 +2467,7 @@ export default function SignalFlowMap() {
                               : isPatchbay ? 'rgba(20,184,166,0.15)'
                               : role === 'router' ? 'rgba(249,115,22,0.18)'
                               : isMultiview ? 'rgba(139,92,246,0.18)'
+                              : isAudioMixer ? 'rgba(244,63,94,0.18)'
                               : isSource ? 'rgba(132,204,22,0.2)'
                               : isDisplay ? 'rgba(14,165,233,0.18)'
                               : role === 'connector' ? 'rgba(148,163,184,0.15)'
@@ -2425,6 +2477,7 @@ export default function SignalFlowMap() {
                               : isPatchbay ? '#2DD4BF'
                               : role === 'router' ? '#FB923C'
                               : isMultiview ? '#A78BFA'
+                              : isAudioMixer ? '#FB7185'
                               : isSource ? '#A3E635'
                               : isDisplay ? '#38BDF8'
                               : role === 'connector' ? '#CBD5E1'
@@ -2434,6 +2487,7 @@ export default function SignalFlowMap() {
                               : isPatchbay ? 'rgba(45,212,191,0.4)'
                               : role === 'router' ? 'rgba(251,146,60,0.45)'
                               : isMultiview ? 'rgba(167,139,250,0.45)'
+                              : isAudioMixer ? 'rgba(251,113,133,0.45)'
                               : isSource ? 'rgba(163,230,53,0.4)'
                               : isDisplay ? 'rgba(56,189,248,0.4)'
                               : role === 'connector' ? 'rgba(203,213,225,0.3)'
@@ -2847,6 +2901,66 @@ export default function SignalFlowMap() {
                   );
                 })()}
 
+                {/* 오디오 콘솔 preview — 채널/버스 미니뷰 */}
+                {isAudioMixer && (() => {
+                  const channels = d.audioChannels ?? [];
+                  const buses = d.audioBuses ?? [];
+                  const matrix = d.mixMatrix ?? {};
+                  // 각 버스마다 활성 채널 수 카운트
+                  const busActiveCounts = buses.map(b => {
+                    const count = channels.filter(ch => matrix[ch.id]?.[b.id]?.enabled).length;
+                    return { bus: b, count };
+                  });
+                  return (
+                    <div className="mx-2.5 mb-2.5 space-y-1.5">
+                      {/* 채널 페이더 미니뷰 (최대 16개) */}
+                      {channels.length > 0 && (
+                        <div className="bg-rose-950/30 border border-rose-500/15 rounded p-1.5">
+                          <div className="text-[8.5px] text-rose-300/70 font-mono mb-1 flex items-center justify-between">
+                            <span>채널</span>
+                            <span>{channels.length}ch</span>
+                          </div>
+                          <div className="flex items-end gap-[2px] h-7">
+                            {channels.slice(0, 24).map(ch => (
+                              <div
+                                key={ch.id}
+                                className="flex-1 rounded-sm relative"
+                                style={{ background: ch.color ?? '#888', minWidth: 3 }}
+                                title={ch.name}
+                              >
+                                {ch.stereo && (
+                                  <div className="absolute -top-1 left-0 right-0 text-[6.5px] text-pink-300 text-center">ST</div>
+                                )}
+                              </div>
+                            ))}
+                            {channels.length > 24 && (
+                              <div className="text-[8px] text-neutral-500 ml-1">+{channels.length - 24}</div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      {/* 버스 출력 목록 */}
+                      {buses.length > 0 && (
+                        <div className="space-y-0.5">
+                          {busActiveCounts.map(({ bus, count }) => (
+                            <div key={bus.id} className="flex items-center gap-1.5 px-1.5 py-1 rounded bg-white/[0.03]">
+                              <div className="w-1 h-3 rounded shrink-0" style={{ background: bus.color }}></div>
+                              <span className="text-[9.5px] font-mono text-neutral-300 truncate flex-1">{bus.name}</span>
+                              {bus.stereo && <span className="text-[8px] text-pink-300 px-1 rounded bg-pink-500/15">ST</span>}
+                              <span className="text-[8.5px] font-mono text-emerald-300">{count}/{channels.length}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {channels.length === 0 && (
+                        <div className="text-[10px] text-neutral-500 italic text-center py-2">
+                          더블클릭 → 채널/버스 설정
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
               </div>
 
               {/* 왼쪽: IN 쪽 Hub 연결 배지 (각 IN 포트와 y좌표 정렬) */}
@@ -3207,6 +3321,34 @@ export default function SignalFlowMap() {
               await (supabase as any).from('connections').insert(snapshot);
             });
             setEditingCable(null);
+          }}
+        />
+      )}
+
+      {editingMixer && (
+        <AudioMixerEditor
+          device={editingMixer}
+          onClose={() => setEditingMixer(null)}
+          onSave={async (updates) => {
+            // 낙관적 업데이트
+            setDevices(prev => prev.map(d => d.id === editingMixer.id ? { ...d, ...updates } : d));
+            // DB 저장 — 누락 컬럼 자동 fallback (handleSaveDevice 패턴)
+            try {
+              await (supabase as any).from('devices').update(updates).eq('id', editingMixer.id);
+            } catch (err: any) {
+              const msg = String(err?.message ?? err);
+              const m = msg.match(/Could not find the '(\w+)' column/);
+              if (m) {
+                const missing = m[1];
+                const clean: any = { ...updates };
+                delete clean[missing];
+                await (supabase as any).from('devices').update(clean).eq('id', editingMixer.id);
+                console.warn(`[AudioMixer] '${missing}' 컬럼 없음 — 해당 필드 제외 저장. supabase/schema.sql 실행 필요.`);
+              } else {
+                console.error('[AudioMixer] 저장 실패', err);
+              }
+            }
+            setEditingMixer(null);
           }}
         />
       )}

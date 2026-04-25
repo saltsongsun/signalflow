@@ -398,6 +398,7 @@ export default function DeviceEditor({ device, layers, allDevices, selectionCoun
             {role === 'source' && '▶ 신호 소스 (카메라, 플레이어 등). 이미지를 올리면 디스플레이에 재생됨.'}
             {role === 'display' && '🖵 신호 디스플레이 (모니터, 벽). 연결된 소스의 이미지를 표시.'}
             {role === 'multiview' && '▦ 멀티뷰 모니터. 여러 입력 신호를 한 화면에 PGM/PVW/소스로 배치해 동시 표시.'}
+            {role === 'audio_mixer' && '🎛 오디오 콘솔. 채널 ↔ 버스 믹스 매트릭스로 멀티 출력 (메인/AUX/그룹). 더블클릭으로 콘솔 전용 에디터 진입.'}
             {role === 'connector' && '━ 통과 장비 (케이블, 변환기). 신호를 그대로 흘려보냄.'}
             {role === 'standard' && '◻ 일반 장비. 1:1 포트 매핑.'}
           </div>

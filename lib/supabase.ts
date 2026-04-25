@@ -27,22 +27,70 @@ export type PortInfo = {
 // 장비 역할
 export const DEVICE_ROLES = [
   'standard', 'switcher', 'router', 'splitter', 'patchbay', 'wallbox',
-  'source', 'display', 'multiview', 'connector',
+  'source', 'display', 'multiview', 'audio_mixer', 'connector',
 ] as const;
 export type DeviceRole = typeof DEVICE_ROLES[number];
 
 export const DEVICE_ROLE_LABELS: Record<DeviceRole, string> = {
-  standard:  '일반',
-  switcher:  '스위처',
-  router:    '라우터',
-  splitter:  '스플리터',
-  patchbay:  '패치베이',
-  wallbox:   '월박스',
-  source:    '소스',
-  display:   '디스플레이',
-  multiview: '멀티뷰',
-  connector: '연결',
+  standard:    '일반',
+  switcher:    '스위처',
+  router:      '라우터',
+  splitter:    '스플리터',
+  patchbay:    '패치베이',
+  wallbox:     '월박스',
+  source:      '소스',
+  display:     '디스플레이',
+  multiview:   '멀티뷰',
+  audio_mixer: '오디오 콘솔',
+  connector:   '연결',
 };
+
+// ===== 오디오 콘솔 =====
+// 채널: 콘솔 내부 처리 단위
+export type AudioChannel = {
+  id: string;          // 'ch1', 'ch2'...
+  name: string;        // 'Vocal', 'BGM' 등
+  stereo: boolean;     // 스테레오 채널 여부 (L/R 페어)
+  color?: string;      // 채널 색상 (UI용)
+};
+
+// 버스: 메인/AUX/그룹
+export type AudioBusType = 'main' | 'aux' | 'group' | 'matrix';
+export const AUDIO_BUS_TYPE_LABELS: Record<AudioBusType, string> = {
+  main:   'MAIN',
+  aux:    'AUX',
+  group:  'GROUP',
+  matrix: 'MATRIX',
+};
+
+export type AudioBus = {
+  id: string;          // 'main', 'aux1'...
+  name: string;        // 'MAIN L/R', '무대 모니터'
+  type: AudioBusType;
+  stereo: boolean;
+  color?: string;
+};
+
+// 패치: 물리 IN 단자 → 채널 매핑
+export type AudioPatchEntry = {
+  channelId: string;
+  side?: 'mono' | 'L' | 'R';  // 스테레오 채널의 L/R 또는 모노
+};
+
+// 출력 패치: 버스 → 물리 OUT 단자
+export type AudioOutPatchEntry = {
+  busId: string;
+  side?: 'mono' | 'L' | 'R';
+};
+
+// 믹스 매트릭스 셀: 채널 → 버스로 보내는 양
+export type MixMatrixCell = {
+  enabled: boolean;
+  level: number;       // dB (-100 ~ +10), -100 = mute
+  pan?: number;        // -100 (L) ~ 0 (center) ~ +100 (R), 모노 채널이 스테레오 버스로 갈 때
+  prePost?: 'pre' | 'post';  // AUX용: 페이더 적용 전/후
+};
+
 
 // 멀티뷰 레이아웃 프리셋
 // PGM/PVW 2칸 + 나머지 소스 모니터 셀 구조
@@ -103,6 +151,13 @@ export type Device = {
   multiviewPvwInput?: string;  // PVW로 표시할 IN 포트명 (linkedSwitcher가 없을 때만 사용)
   multiviewLinkedSwitcherId?: string;  // 연동 스위처 ID — 설정되면 자동으로 PGM/PVW/소스 가져옴
   // 나머지 IN들은 자동으로 소스 모니터 셀에 순서대로 배치됨
+
+  // 오디오 콘솔 전용
+  audioChannels?: AudioChannel[];                                // 채널 목록
+  audioBuses?: AudioBus[];                                       // 버스 목록
+  audioPatch?: Record<string, AudioPatchEntry>;                  // 물리 IN → 채널
+  audioOutPatch?: Record<string, AudioOutPatchEntry>;            // 버스 → 물리 OUT
+  mixMatrix?: Record<string, Record<string, MixMatrixCell>>;     // mixMatrix[chId][busId]
   // 그룹화
   groupId?: string;    // 같은 그룹끼리는 동일 id
   groupName?: string;  // 그룹 표시명 (같은 groupId면 동일)
