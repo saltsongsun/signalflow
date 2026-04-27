@@ -663,4 +663,8 @@ export const CONN_TYPE_STYLES: Record<string, { dash?: string; label: string }> 
   'LAN':        { dash: '6 3', label: 'LAN' },
   'RS-422':     { dash: '3 2', label: 'RS-422' },
   'TIE':        { dash: '1 4', label: 'TIE' },
+  // 일반 카테고리
+  'POWER':      { label: 'POWER' },
+  'NETWORK':    { dash: '6 3', label: 'NETWORK' },
+  'SIGNAL':     { dash: '4 4', label: 'SIGNAL' },
 };

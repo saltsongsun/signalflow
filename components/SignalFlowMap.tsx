@@ -1950,10 +1950,14 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
             className="px-1.5 md:px-2 py-1 md:py-1.5 text-[11px] rounded-md hover:bg-white/10 text-neutral-400 hover:text-white whitespace-nowrap shrink-0"
             title="프로젝트 목록"
           >←</a>
-          <div className="relative w-6 h-6 md:w-7 md:h-7 rounded-lg flex items-center justify-center shadow-lg shrink-0"
-               style={{ background: currentProject?.thumbnail_color ? `linear-gradient(135deg, ${currentProject.thumbnail_color}, ${currentProject.thumbnail_color}cc)` : 'linear-gradient(135deg, #38bdf8, #a855f7)' }}>
-            <span className="text-base">{currentProject?.icon ?? '📡'}</span>
-          </div>
+          <button
+            onClick={() => setShowProjectSettings(true)}
+            className="relative w-8 h-8 md:w-9 md:h-9 rounded-lg flex items-center justify-center shadow-lg shrink-0 hover:ring-2 hover:ring-white/40 transition"
+            style={{ background: currentProject?.thumbnail_color ? `linear-gradient(135deg, ${currentProject.thumbnail_color}, ${currentProject.thumbnail_color}cc)` : 'linear-gradient(135deg, #38bdf8, #a855f7)' }}
+            title="프로젝트 설정 (이름·색·배경이미지·활성 역할·용어 변경)"
+          >
+            <span className="text-lg">{currentProject?.icon ?? '📡'}</span>
+          </button>
           <button
             onClick={() => setShowProjectSettings(true)}
             className="hidden lg:block min-w-0 max-w-[200px] text-left hover:bg-white/5 px-1 rounded transition"
@@ -1961,6 +1965,16 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
           >
             <div className="text-[12px] font-bold tracking-tight leading-tight truncate">{currentProject?.name ?? 'Signal Flow Map'}</div>
             <div className="text-[10px] text-neutral-500 leading-tight font-mono truncate">{currentProject?.description ?? '신호 흐름 도면'}</div>
+          </button>
+          {/* 명확한 편집 버튼 — 모든 화면에서 보임 */}
+          <button
+            onClick={() => setShowProjectSettings(true)}
+            className="px-2.5 md:px-3 py-1.5 md:py-2 text-[11px] md:text-[12px] font-medium rounded-lg bg-gradient-to-r from-sky-500/80 to-purple-500/80 hover:from-sky-400 hover:to-purple-400 text-white shadow-md shadow-purple-500/30 whitespace-nowrap shrink-0 flex items-center gap-1"
+            title="프로젝트 편집 (이름·색·배경이미지·활성 역할·용어 변경)"
+          >
+            <span>⚙</span>
+            <span className="hidden sm:inline">프로젝트 편집</span>
+            <span className="sm:hidden">편집</span>
           </button>
         </div>
 

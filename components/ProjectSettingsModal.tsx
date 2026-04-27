@@ -8,6 +8,54 @@ type Props = {
   onSaved: (updated: Project) => void;
 };
 
+// 이미지를 최대 변(longest edge) 기준으로 줄이고 JPEG로 인코딩해 base64 반환.
+// 원본이 이미 작으면 그대로 두되 형식만 정리.
+// 사용자가 도면에서 scale을 1보다 크게 키우는 것은 별개 — 여기서는 저장 크기만 제한.
+async function resizeImageToFit(file: File, maxEdge = 2000, quality = 0.85): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('파일 읽기 실패'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('이미지 디코딩 실패'));
+      img.onload = () => {
+        const { naturalWidth: w, naturalHeight: h } = img;
+        const longest = Math.max(w, h);
+        // 이미 충분히 작으면 원본 데이터 URL 그대로
+        if (longest <= maxEdge) {
+          resolve(String(reader.result ?? ''));
+          return;
+        }
+        // 비율 유지하며 축소
+        const ratio = maxEdge / longest;
+        const targetW = Math.round(w * ratio);
+        const targetH = Math.round(h * ratio);
+        const canvas = document.createElement('canvas');
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Canvas 컨텍스트 생성 실패'));
+          return;
+        }
+        // 리샘플링 품질을 높이기 위한 옵션
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, targetW, targetH);
+        // PNG는 알파를 유지하지만 용량이 매우 큼.
+        // JPEG는 작지만 알파 X. 평면도/단선도는 흰 배경이 보통이라 JPEG로 충분.
+        // 단, 원본이 PNG이고 알파가 있을 가능성이 높을 때는 PNG로.
+        const isPng = file.type === 'image/png';
+        const mime = isPng ? 'image/png' : 'image/jpeg';
+        const dataUrl = canvas.toDataURL(mime, isPng ? undefined : quality);
+        resolve(dataUrl);
+      };
+      img.src = String(reader.result ?? '');
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function ProjectSettingsModal({ project, onClose, onSaved }: Props) {
   const [name, setName] = useState(project.name);
   const [description, setDescription] = useState(project.description ?? '');
@@ -209,33 +257,30 @@ export default function ProjectSettingsModal({ project, onClose, onSaved }: Prop
                   onChange={async (e) => {
                     const file = e.target.files?.[0];
                     if (!file) return;
-                    if (file.size > 5 * 1024 * 1024) {
-                      alert('이미지 크기가 너무 큽니다 (5MB 초과). 압축 후 다시 시도하세요.');
+                    // 원본 크기 제한은 좀 넉넉하게 (자동 리사이즈로 줄어들 것이므로)
+                    if (file.size > 30 * 1024 * 1024) {
+                      alert('파일이 너무 큽니다 (30MB 초과).');
                       return;
                     }
                     setUploading(true);
                     try {
-                      // 간단히 base64 data URL로 저장 (Supabase Storage 없이)
-                      const reader = new FileReader();
-                      reader.onload = () => {
-                        setBackgroundImageUrl(String(reader.result ?? ''));
-                        setUploading(false);
-                      };
-                      reader.onerror = () => {
-                        alert('이미지 읽기 실패');
-                        setUploading(false);
-                      };
-                      reader.readAsDataURL(file);
+                      const resized = await resizeImageToFit(file, 2000, 0.85);
+                      setBackgroundImageUrl(resized);
                     } catch (err) {
                       console.error(err);
+                      alert('이미지 처리 실패: ' + (err as any)?.message);
+                    } finally {
                       setUploading(false);
                     }
                   }}
                 />
                 <div className="px-3 py-2 text-[12px] text-center rounded border border-dashed border-white/20 hover:border-white/40 hover:bg-white/[0.02] transition">
-                  {uploading ? '업로드 중...' : '📁 이미지 파일 선택 (PNG/JPG, 최대 5MB)'}
+                  {uploading ? '이미지 최적화 중...' : '📁 이미지 파일 선택 (PNG/JPG)'}
                 </div>
               </label>
+              <div className="text-[9.5px] text-neutral-500 text-center -mt-1">
+                자동으로 최대 2000px로 줄여 저장됩니다. 도면에서 손가락/마우스로 확대 가능.
+              </div>
               <div className="text-center text-[10px] text-neutral-600">또는</div>
               <input
                 type="text"
@@ -294,7 +339,7 @@ export default function ProjectSettingsModal({ project, onClose, onSaved }: Prop
                 </label>
 
                 <div className="text-[10px] text-neutral-500 bg-white/[0.02] border border-white/10 rounded p-2">
-                  💡 도면에서 배경 이미지를 <strong>드래그하여 위치 이동</strong>하거나 <strong>모서리를 끌어 크기 조정</strong>할 수 있습니다 (잠금 해제 상태).
+                  💡 도면에서 배경 이미지를 <strong>드래그하여 위치 이동</strong>하거나 <strong>모서리를 끌어 크기 조정</strong>할 수 있습니다 (잠금 해제 상태). 저장 시 자동으로 줄어들었어도 도면에서 1~10배까지 자유롭게 확대할 수 있어요.
                 </div>
               </div>
             )}

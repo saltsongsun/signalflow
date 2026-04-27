@@ -13,6 +13,8 @@ export const CONNECTION_TYPES = [
   'AES', 'DANTE', 'MADI', 'AoIP',
   'XLR', 'ANALOG',
   'USB', 'GPIO', 'LAN', 'RS-422', 'TIE',
+  // 전력 / 네트워크 / 일반 신호
+  'POWER', 'NETWORK', 'SIGNAL',
 ] as const;
 
 export type ConnectionType = typeof CONNECTION_TYPES[number];
