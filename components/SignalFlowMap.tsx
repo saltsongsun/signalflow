@@ -2588,15 +2588,15 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
           WebkitTouchCallout: 'none',
         }}
       >
-        {/* Connection Canvas — 화면 전체. 툴바 높이만큼 offsetY 보정 */}
-        <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        {/* Connection Canvas — 도면 컨테이너와 같은 좌표계 (부모의 padding 시작점부터) */}
+        <div className="absolute inset-x-0 bottom-0 top-12 md:top-[88px] overflow-hidden pointer-events-none">
           <ConnectionCanvas
             ref={connectionCanvasRef}
             width={viewport.w}
-            height={viewport.h}
+            height={viewport.h - (viewport.w >= 768 ? 88 : 48)}
             scale={scale}
             offsetX={offset.x}
-            offsetY={offset.y + (viewport.w >= 768 ? 88 : 48)}
+            offsetY={offset.y}
             cables={canvasCables}
           />
         </div>
