@@ -640,6 +640,8 @@ export const TYPE_COLORS = {
   video:    { main: '#3B82F6', glow: '#60A5FA', bg: 'rgba(59,130,246,0.08)',  border: 'rgba(59,130,246,0.5)' },
   audio:    { main: '#EF4444', glow: '#F87171', bg: 'rgba(239,68,68,0.08)',   border: 'rgba(239,68,68,0.5)' },
   combined: { main: '#A855F7', glow: '#C084FC', bg: 'rgba(168,85,247,0.08)',  border: 'rgba(168,85,247,0.5)' },
+  power:    { main: '#FACC15', glow: '#FDE047', bg: 'rgba(250,204,21,0.10)',  border: 'rgba(250,204,21,0.5)' },
+  network:  { main: '#FFFFFF', glow: '#FFFFFF', bg: 'rgba(255,255,255,0.08)', border: 'rgba(255,255,255,0.4)' },
 };
 
 // 연결방식별 선 스타일 (dash pattern)

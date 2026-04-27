@@ -921,6 +921,9 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       const isTraced = traced.connections.has(c.id);
       const color = isPatch ? '#F97316' : baseColor;
 
+      // NaN/undefined 좌표 가드 — 어떤 이유든 잘못된 값이면 케이블 skip
+      if (!Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(x2) || !Number.isFinite(y2)) return;
+
       list.push({
         fromId: from.id, toId: to.id,
         x1, y1, x2, y2, color,
@@ -2116,10 +2119,9 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     <div className="h-screen w-screen bg-gradient-to-br from-neutral-950 via-black to-neutral-950 text-white overflow-hidden relative select-none">
       {/* Top bar */}
       <div data-ui className="absolute top-0 left-0 right-0 z-30 bg-black/85 border-b border-white/10 shadow-xl shadow-black/40 backdrop-blur-md">
-        {/* 컨테이너: 모바일 1줄 가로 스크롤 / md+ 2줄 자동 줄바꿈 */}
         <div className="px-2 md:px-3 py-1.5 md:py-2">
           <div className="flex items-center gap-1.5 md:gap-2 overflow-x-auto md:overflow-visible md:flex-wrap scrollbar-thin md:scrollbar-none" style={{ scrollbarWidth: 'thin' }}>
-          <div className="flex items-center gap-1.5 md:gap-2 shrink-0 md:contents">
+          <div className="flex items-center gap-1.5 md:gap-2 shrink-0">
           <a
             href="/"
             className="px-1.5 md:px-2 py-1 md:py-1.5 text-[11px] rounded-md hover:bg-white/10 text-neutral-400 hover:text-white whitespace-nowrap shrink-0"
@@ -2264,9 +2266,6 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
           >
             {iconMode ? '🔍' : '🗺'}<span className="hidden sm:inline ml-1">{iconMode ? '상세' : '아이콘'}</span>
           </button>
-
-          {/* md+에서 줄바꿈 spacer — 두 줄로 자연스럽게 흐름 */}
-          <div className="hidden md:block w-full md:basis-full md:h-0"></div>
 
           {/* 신호 유형 범례 토글 */}
           <button
@@ -2936,7 +2935,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
             if (d.x + w < viewWorldLeft || d.x > viewWorldRight) return null;
             if (d.y + h < viewWorldTop || d.y > viewWorldBottom) return null;
 
-            const color = TYPE_COLORS[d.type];
+            const color = TYPE_COLORS[d.type] ?? TYPE_COLORS.video;
             const isSelected = selectedIds.has(d.id);
             const isTraceTarget = traceId === d.id;
             const isTraced = traced.devices.has(d.id);
