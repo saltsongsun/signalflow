@@ -1,6 +1,6 @@
 'use client';
 import { useState } from 'react';
-import { Device, Breaker, BreakerKind, BREAKER_KIND_LABELS, PhaseType, PHASE_LABELS, PHASE_VOLTAGE, BREAKER_CAPACITIES, BreakerCapacity } from '../lib/supabase';
+import { Device, Breaker, BreakerKind, BREAKER_KIND_LABELS, PhaseType, PHASE_LABELS, PHASE_VOLTAGE, BREAKER_CAPACITIES, BreakerCapacity, MAIN_BREAKER_CAPACITIES, MainBreakerCapacity } from '../lib/supabase';
 import { breakerCapacityWatts, formatWatts } from '../lib/powerCalc';
 
 type Props = {
@@ -14,10 +14,16 @@ const COLORS = ['#06B6D4', '#10B981', '#F59E0B', '#EC4899', '#8B5CF6', '#EF4444'
 export default function PanelboardEditor({ device, onSave, onClose }: Props) {
   const [breakers, setBreakers] = useState<Breaker[]>(device.breakers ?? []);
   const [mainPhase, setMainPhase] = useState<PhaseType>(device.panelMainPhase ?? 'three');
-  const [mainCapacity, setMainCapacity] = useState<BreakerCapacity>(device.panelMainCapacity ?? 100);
+  const [mainCapacity, setMainCapacity] = useState<MainBreakerCapacity>((device.panelMainCapacity as MainBreakerCapacity) ?? 100);
+  const [mainKind, setMainKind] = useState<BreakerKind>(device.panelMainKind ?? 'MCCB');
   const [outputs, setOutputs] = useState<string[]>(device.outputs ?? []);
 
   const addBreaker = (kind: BreakerKind, phase: PhaseType, capacityA: BreakerCapacity) => {
+    // 메인 용량 검증 — 부하측 차단기 1개의 용량은 메인 용량 이하여야 함
+    if (capacityA > mainCapacity) {
+      alert(`부하측 차단기 용량 ${capacityA}A는 메인 차단기 용량 ${mainCapacity}A보다 클 수 없습니다.`);
+      return;
+    }
     const id = `br_${Date.now().toString(36)}`;
     const idx = breakers.length + 1;
     // 자동으로 OUT 포트도 하나 만들어 매핑
@@ -65,6 +71,7 @@ export default function PanelboardEditor({ device, onSave, onClose }: Props) {
       breakers,
       panelMainPhase: mainPhase,
       panelMainCapacity: mainCapacity,
+      panelMainKind: mainKind,
       outputs,
       outputsMeta,
       // inputs은 1개 (메인 인입)
@@ -81,11 +88,11 @@ export default function PanelboardEditor({ device, onSave, onClose }: Props) {
         <div className="flex-1 min-w-0">
           <div className="text-base font-bold truncate">{device.name} <span className="text-neutral-500 font-normal text-sm">— 배전반 설정</span></div>
           <div className="text-[11px] text-neutral-500 font-mono">
-            메인: <span className="text-amber-300">{PHASE_LABELS[mainPhase]} {mainCapacity}A</span>
+            메인: <span className="text-amber-300">{mainKind} · {PHASE_LABELS[mainPhase]} {mainCapacity}A</span>
             <span className="mx-1">·</span>
             <span className="text-amber-300">{formatWatts(totalCapacityW)}</span>
             <span className="mx-1">·</span>
-            차단기: <span className="text-cyan-300">{breakers.length}</span>
+            부하측: <span className="text-cyan-300">{breakers.length}</span>
           </div>
         </div>
         <button onClick={handleSave} className="px-4 py-2 text-[12px] font-bold rounded-lg bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 text-white shadow-lg">✓ 저장</button>
@@ -93,56 +100,98 @@ export default function PanelboardEditor({ device, onSave, onClose }: Props) {
       </div>
 
       <div className="flex-1 overflow-auto p-4 space-y-4">
-        {/* 메인 인입 설정 */}
-        <section className="bg-gradient-to-br from-amber-500/10 to-transparent border border-amber-500/25 rounded-lg p-3">
-          <div className="text-[11px] font-bold text-amber-300 mb-2 uppercase tracking-wider">메인 인입</div>
-          <div className="grid grid-cols-2 gap-3">
+        {/* 메인 차단기 (인입부) */}
+        <section className="bg-gradient-to-br from-amber-500/10 to-transparent border border-amber-500/30 rounded-lg p-3">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-[15px]">🔝</span>
+            <div className="flex-1">
+              <div className="text-[11px] font-bold text-amber-300 uppercase tracking-wider">메인 차단기 (인입부)</div>
+              <div className="text-[10px] text-neutral-500">배전반 전체로 들어오는 전기를 한 번에 차단. 부하측보다 용량이 큼.</div>
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
             <div>
-              <label className="text-[10.5px] text-neutral-400 block mb-1">상 (위상)</label>
+              <label className="text-[10.5px] text-neutral-400 block mb-1">종류</label>
+              <select
+                value={mainKind}
+                onChange={e => setMainKind(e.target.value as BreakerKind)}
+                className="w-full bg-neutral-900 border border-amber-500/30 rounded px-2 py-1.5 text-[12px]"
+              >
+                <option value="MCCB">MCCB (배선차단기)</option>
+                <option value="ELCB">ELCB (누전차단기)</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-[10.5px] text-neutral-400 block mb-1">상</label>
               <select
                 value={mainPhase}
                 onChange={e => setMainPhase(e.target.value as PhaseType)}
                 className="w-full bg-neutral-900 border border-amber-500/30 rounded px-2 py-1.5 text-[12px]"
               >
-                <option value="single">{PHASE_LABELS.single}</option>
-                <option value="three">{PHASE_LABELS.three}</option>
+                <option value="single">단상 220V</option>
+                <option value="three">3상 380V</option>
               </select>
             </div>
             <div>
-              <label className="text-[10.5px] text-neutral-400 block mb-1">메인 차단기 용량 (A)</label>
+              <label className="text-[10.5px] text-neutral-400 block mb-1">메인 용량 (A)</label>
               <select
                 value={mainCapacity}
-                onChange={e => setMainCapacity(parseInt(e.target.value) as BreakerCapacity)}
-                className="w-full bg-neutral-900 border border-amber-500/30 rounded px-2 py-1.5 text-[12px]"
+                onChange={e => {
+                  const newCap = parseInt(e.target.value) as MainBreakerCapacity;
+                  // 부하측에 newCap보다 큰 게 있으면 경고
+                  const exceed = breakers.filter(b => b.capacityA > newCap);
+                  if (exceed.length > 0) {
+                    if (!confirm(`메인을 ${newCap}A로 줄이면 다음 부하측 차단기가 메인을 초과합니다:\n${exceed.map(b => `• ${b.name} (${b.capacityA}A)`).join('\n')}\n\n계속하시겠습니까? (부하측은 그대로 유지됨)`)) {
+                      return;
+                    }
+                  }
+                  setMainCapacity(newCap);
+                }}
+                className="w-full bg-neutral-900 border border-amber-500/30 rounded px-2 py-1.5 text-[12px] font-mono font-bold"
               >
-                {BREAKER_CAPACITIES.map(c => (
+                {MAIN_BREAKER_CAPACITIES.map(c => (
                   <option key={c} value={c}>{c}A</option>
                 ))}
               </select>
             </div>
           </div>
-          <div className="mt-2 text-[10.5px] text-amber-200/80 bg-amber-500/5 border border-amber-500/15 rounded p-2">
-            💡 최대 공급 전력: <span className="font-mono font-bold">{formatWatts(totalCapacityW)}</span>
-            <span className="text-neutral-500 ml-2">({PHASE_VOLTAGE[mainPhase]}V × {mainCapacity}A)</span>
+          <div className="mt-2 text-[10.5px] text-amber-200/80 bg-amber-500/5 border border-amber-500/15 rounded p-2 flex items-center justify-between">
+            <span>최대 공급 전력</span>
+            <span className="font-mono font-bold">{formatWatts(totalCapacityW)}</span>
+            <span className="text-neutral-500">({PHASE_VOLTAGE[mainPhase]}V × {mainCapacity}A)</span>
           </div>
         </section>
 
-        {/* 차단기 추가 */}
+        {/* 부하측 차단기 추가 */}
         <section className="bg-white/[0.03] border border-white/10 rounded-lg p-3">
           <div className="flex items-center justify-between mb-2">
-            <div className="text-[11px] font-bold text-neutral-300 uppercase tracking-wider">차단기 추가</div>
+            <div>
+              <div className="text-[11px] font-bold text-neutral-300 uppercase tracking-wider">부하측 차단기 추가 (분기)</div>
+              <div className="text-[10px] text-neutral-500">메인 차단기 ({mainCapacity}A) 이하 용량만 선택 가능</div>
+            </div>
             <div className="text-[10px] text-neutral-500">현재 <span className="text-cyan-300 font-bold">{breakers.length}</span>개 차단기</div>
           </div>
           <div className="grid grid-cols-2 gap-2 mb-2">
-            <BreakerAddGroup label="배선차단기 (MCCB)" kind="MCCB" onAdd={addBreaker} />
-            <BreakerAddGroup label="누전차단기 (ELCB)" kind="ELCB" onAdd={addBreaker} />
+            <BreakerAddGroup label="배선차단기 (MCCB)" kind="MCCB" mainCapacity={mainCapacity} onAdd={addBreaker} />
+            <BreakerAddGroup label="누전차단기 (ELCB)" kind="ELCB" mainCapacity={mainCapacity} onAdd={addBreaker} />
           </div>
         </section>
 
-        {/* 차단기 목록 */}
+        {/* 부하측 차단기 목록 */}
         <section className="bg-white/[0.02] border border-white/10 rounded-lg overflow-hidden">
-          <div className="px-3 py-2 border-b border-white/10 text-[11px] font-bold text-neutral-300 uppercase tracking-wider">
-            차단기 목록 — OUT 포트는 자동 매핑됨
+          <div className="px-3 py-2 border-b border-white/10 text-[11px] font-bold text-neutral-300 uppercase tracking-wider flex items-center justify-between">
+            <span>부하측 차단기 목록 — OUT 포트는 자동 매핑됨</span>
+            {breakers.length > 0 && (() => {
+              const sumA = breakers.reduce((s, b) => s + b.capacityA, 0);
+              const overSum = sumA > mainCapacity;
+              return (
+                <span className={`text-[9.5px] font-mono font-bold px-2 py-0.5 rounded ${
+                  overSum ? 'bg-rose-500/20 text-rose-300' : 'bg-emerald-500/15 text-emerald-300'
+                }`} title={overSum ? '부하측 합계가 메인을 초과 — 동시 사용 불가' : '정상'}>
+                  Σ {sumA}A / 메인 {mainCapacity}A
+                </span>
+              );
+            })()}
           </div>
           {breakers.length === 0 ? (
             <div className="p-6 text-center text-[12px] text-neutral-500 italic">차단기를 추가하세요. 위에서 종류/상/용량 선택 후 ＋ 버튼.</div>
@@ -190,11 +239,20 @@ export default function PanelboardEditor({ device, onSave, onClose }: Props) {
                   </select>
                   <select
                     value={b.capacityA}
-                    onChange={e => updateBreaker(b.id, { capacityA: parseInt(e.target.value) as BreakerCapacity })}
+                    onChange={e => {
+                      const newCap = parseInt(e.target.value) as BreakerCapacity;
+                      if (newCap > mainCapacity) {
+                        alert(`부하측 차단기 용량 ${newCap}A는 메인 차단기 용량 ${mainCapacity}A보다 클 수 없습니다.`);
+                        return;
+                      }
+                      updateBreaker(b.id, { capacityA: newCap });
+                    }}
                     className="bg-neutral-900 border border-white/10 rounded px-1.5 py-1 text-[10.5px] text-right font-mono"
                   >
                     {BREAKER_CAPACITIES.map(c => (
-                      <option key={c} value={c}>{c}A</option>
+                      <option key={c} value={c} disabled={c > mainCapacity}>
+                        {c}A{c > mainCapacity ? ' ⛔' : ''}
+                      </option>
                     ))}
                   </select>
                   <button
@@ -203,12 +261,22 @@ export default function PanelboardEditor({ device, onSave, onClose }: Props) {
                   >삭제</button>
                 </div>
               ))}
-              <div className="px-3 py-2 bg-amber-500/5 text-[10.5px] text-amber-200/80 flex items-center justify-between">
-                <span>총 차단 용량 합계</span>
-                <span className="font-mono font-bold">
-                  {formatWatts(breakers.reduce((s, b) => s + breakerCapacityWatts(b), 0))}
-                </span>
-              </div>
+              {/* 합계 정보 */}
+              {(() => {
+                const sumA = breakers.reduce((s, b) => s + b.capacityA, 0);
+                const sumW = breakers.reduce((s, b) => s + breakerCapacityWatts(b), 0);
+                const overSum = sumA > mainCapacity;
+                return (
+                  <div className={`px-3 py-2 text-[10.5px] flex items-center justify-between ${
+                    overSum ? 'bg-rose-500/10 text-rose-200' : 'bg-amber-500/5 text-amber-200/80'
+                  }`}>
+                    <span>{overSum ? '⚠ 부하측 합계가 메인 초과' : '부하측 차단 용량 합계'}</span>
+                    <span className="font-mono font-bold">
+                      {sumA}A {overSum && `> ${mainCapacity}A`} ({formatWatts(sumW)})
+                    </span>
+                  </div>
+                );
+              })()}
             </div>
           )}
         </section>
@@ -225,9 +293,10 @@ export default function PanelboardEditor({ device, onSave, onClose }: Props) {
   );
 }
 
-function BreakerAddGroup({ label, kind, onAdd }: {
+function BreakerAddGroup({ label, kind, mainCapacity, onAdd }: {
   label: string;
   kind: BreakerKind;
+  mainCapacity: MainBreakerCapacity;
   onAdd: (k: BreakerKind, p: PhaseType, c: BreakerCapacity) => void;
 }) {
   return (
@@ -238,20 +307,29 @@ function BreakerAddGroup({ label, kind, onAdd }: {
           <div key={phase}>
             <div className="text-[9.5px] text-neutral-500 mb-0.5">{PHASE_LABELS[phase]}</div>
             <div className="flex gap-1">
-              {BREAKER_CAPACITIES.map(c => (
-                <button
-                  key={c}
-                  onClick={() => onAdd(kind, phase, c)}
-                  className={`flex-1 px-1.5 py-1 text-[10px] font-mono font-bold rounded border hover:scale-105 transition ${
-                    kind === 'MCCB'
-                      ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200 hover:bg-cyan-500/30'
-                      : 'border-rose-500/40 bg-rose-500/10 text-rose-200 hover:bg-rose-500/30'
-                  }`}
-                  title={`${kind} ${phase === 'single' ? '단상' : '3상'} ${c}A 추가`}
-                >
-                  {c}A
-                </button>
-              ))}
+              {BREAKER_CAPACITIES.map(c => {
+                const exceedsMain = c > mainCapacity;
+                return (
+                  <button
+                    key={c}
+                    onClick={() => onAdd(kind, phase, c)}
+                    disabled={exceedsMain}
+                    className={`flex-1 px-1.5 py-1 text-[10px] font-mono font-bold rounded border transition ${
+                      exceedsMain
+                        ? 'border-white/5 bg-white/[0.02] text-neutral-600 cursor-not-allowed'
+                        : kind === 'MCCB'
+                          ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200 hover:bg-cyan-500/30 hover:scale-105'
+                          : 'border-rose-500/40 bg-rose-500/10 text-rose-200 hover:bg-rose-500/30 hover:scale-105'
+                    }`}
+                    title={exceedsMain
+                      ? `${c}A는 메인 ${mainCapacity}A 초과 — 선택 불가`
+                      : `${kind} ${phase === 'single' ? '단상' : '3상'} ${c}A 추가`
+                    }
+                  >
+                    {c}A{exceedsMain ? '⛔' : ''}
+                  </button>
+                );
+              })}
             </div>
           </div>
         ))}

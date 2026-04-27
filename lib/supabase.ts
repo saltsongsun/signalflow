@@ -86,9 +86,13 @@ export const PHASE_VOLTAGE: Record<PhaseType, number> = {
   three:  380,
 };
 
-// 차단기 용량 (A)
+// 차단기 용량 (A) — 부하측(분기) 차단기용
 export const BREAKER_CAPACITIES = [20, 30, 50, 75, 100] as const;
 export type BreakerCapacity = typeof BREAKER_CAPACITIES[number];
+
+// 메인 차단기 용량 (A) — 부하측보다 큰 용량까지 선택 가능
+export const MAIN_BREAKER_CAPACITIES = [50, 75, 100, 150, 200, 225, 300, 400, 500, 600, 800] as const;
+export type MainBreakerCapacity = typeof MAIN_BREAKER_CAPACITIES[number];
 
 // 차단기 1개 = 배전반 안의 회로 1개
 export type Breaker = {
@@ -275,9 +279,10 @@ export type Device = {
   ioBoxSlot?: string;             // 옵션카드: 콘솔의 슬롯 번호 (예: 'Slot A')
 
   // 배전반 전용
-  breakers?: Breaker[];           // 차단기 목록
+  breakers?: Breaker[];           // 부하측(분기) 차단기 목록
   panelMainPhase?: PhaseType;     // 메인 인입 상 (단상/3상)
-  panelMainCapacity?: BreakerCapacity;  // 메인 차단기 용량
+  panelMainCapacity?: MainBreakerCapacity;  // 메인 차단기 용량 (50~800A)
+  panelMainKind?: BreakerKind;    // 메인 차단기 종류 (MCCB/ELCB)
   // 전력 공급/소비 장비 전용
   power?: PowerSpec;
   // 그룹화

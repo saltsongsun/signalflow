@@ -93,6 +93,7 @@ alter table public.devices add column if not exists "ioBoxSlot" text;
 alter table public.devices add column if not exists "breakers" jsonb;
 alter table public.devices add column if not exists "panelMainPhase" text;
 alter table public.devices add column if not exists "panelMainCapacity" integer;
+alter table public.devices add column if not exists "panelMainKind" text;
 alter table public.devices add column if not exists "power" jsonb;
 -- 프로젝트 배경 이미지
 alter table public.projects add column if not exists "background_image_url" text;

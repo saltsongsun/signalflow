@@ -1553,6 +1553,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       outputsMeta: {},
       panelMainPhase: 'three',
       panelMainCapacity: 100,
+      panelMainKind: 'MCCB',
       breakers: [],
       physPorts: {}, routing: {},
       project_id: projectId,
@@ -3273,19 +3274,26 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                   const panelBreakers = d.breakers ?? [];
                   const mainPhase = d.panelMainPhase ?? 'three';
                   const mainCap = d.panelMainCapacity ?? 100;
+                  const mainKind = d.panelMainKind ?? 'MCCB';
                   const mainV = mainPhase === 'three' ? 380 : 220;
                   const totalCapW = mainV * mainCap;
                   const innerLoads = breakerLoads.get(d.id);
                   const sumLoadW = panelBreakers.reduce((s, b) => s + (innerLoads?.get(b.id)?.totalWatts ?? 0), 0);
                   const mainLoadPct = totalCapW > 0 ? (sumLoadW / totalCapW) * 100 : 0;
                   const mainOverload = mainLoadPct > 100;
+                  const sumBranchA = panelBreakers.reduce((s, b) => s + b.capacityA, 0);
+                  const branchExceedsMain = sumBranchA > mainCap;
                   return (
                     <div className="mx-2.5 mb-2.5 space-y-1.5">
-                      {/* 메인 인입 헤더 */}
-                      <div className={`rounded p-1.5 ${mainOverload ? 'overload-blink' : 'bg-amber-500/10 border border-amber-500/25'}`}>
+                      {/* 메인 인입 헤더 — 종류 + 상 + 용량 */}
+                      <div className={`rounded p-1.5 ${mainOverload ? 'overload-blink' : 'bg-amber-500/15 border border-amber-500/30'}`}>
                         <div className="flex items-center justify-between gap-1.5">
-                          <span className={`text-[10px] font-bold ${mainOverload ? 'overload-text-blink' : 'text-amber-200'}`}>
-                            ⚡ 메인 {mainPhase === 'three' ? '3상' : '단상'} {mainCap}A
+                          <span className={`text-[10px] font-bold flex items-center gap-1 ${mainOverload ? 'overload-text-blink' : 'text-amber-200'}`}>
+                            🔝 메인
+                            <span className={`text-[8.5px] font-mono px-1 rounded ${
+                              mainKind === 'MCCB' ? 'bg-cyan-500/25 text-cyan-200' : 'bg-rose-500/25 text-rose-200'
+                            }`}>{mainKind}</span>
+                            <span>{mainPhase === 'three' ? '3상' : '단상'} {mainCap}A</span>
                           </span>
                           <span className={`text-[9.5px] font-mono font-bold ${mainOverload ? 'overload-text-blink' : 'text-amber-300'}`}>
                             {Math.round(mainLoadPct)}%
@@ -3295,10 +3303,16 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                           {formatWatts(sumLoadW)} / {formatWatts(totalCapW)}
                         </div>
                       </div>
-                      {/* 차단기 목록 */}
+                      {/* 부하측 합계가 메인 초과 시 경고 */}
+                      {panelBreakers.length > 0 && branchExceedsMain && (
+                        <div className="rounded px-1.5 py-1 bg-rose-500/15 border border-rose-500/40 text-[9px] text-rose-200 flex items-center gap-1">
+                          ⚠ 부하측 합계 {sumBranchA}A &gt; 메인 {mainCap}A
+                        </div>
+                      )}
+                      {/* 부하측 차단기 목록 */}
                       {panelBreakers.length === 0 ? (
                         <div className="text-[10px] text-neutral-500 italic text-center py-2">
-                          더블클릭 → 차단기 추가
+                          더블클릭 → 부하측 차단기 추가
                         </div>
                       ) : (
                         <div className="space-y-0.5">
