@@ -11,7 +11,7 @@ type Props = {
 // 이미지를 최대 변(longest edge) 기준으로 줄이고 JPEG로 인코딩해 base64 반환.
 // 원본이 이미 작으면 그대로 두되 형식만 정리.
 // 사용자가 도면에서 scale을 1보다 크게 키우는 것은 별개 — 여기서는 저장 크기만 제한.
-async function resizeImageToFit(file: File, maxEdge = 2000, quality = 0.85): Promise<string> {
+async function resizeImageToFit(file: File, maxEdge = 4000, quality = 0.85): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error('파일 읽기 실패'));
@@ -274,7 +274,7 @@ export default function ProjectSettingsModal({ project, onClose, onSaved }: Prop
                     }
                     setUploading(true);
                     try {
-                      const resized = await resizeImageToFit(file, 2000, 0.85);
+                      const resized = await resizeImageToFit(file, 4000, 0.85);
                       setBackgroundImageUrl(resized);
                     } catch (err) {
                       console.error(err);
@@ -289,7 +289,7 @@ export default function ProjectSettingsModal({ project, onClose, onSaved }: Prop
                 </div>
               </label>
               <div className="text-[9.5px] text-neutral-500 text-center -mt-1">
-                자동으로 최대 2000px로 줄여 저장됩니다. 도면에서 손가락/마우스로 확대 가능.
+                자동으로 최대 4000px로 줄여 저장됩니다. 도면 슬라이더로 ÷10 ~ ×20배 자유 조절.
               </div>
               <div className="text-center text-[10px] text-neutral-600">또는</div>
               <input
@@ -422,8 +422,8 @@ export default function ProjectSettingsModal({ project, onClose, onSaved }: Prop
                       <input
                         type="range"
                         min={10}
-                        max={500}
-                        step={5}
+                        max={2000}
+                        step={10}
                         value={100}
                         onChange={e => {
                           const pct = parseInt(e.target.value);
@@ -433,7 +433,7 @@ export default function ProjectSettingsModal({ project, onClose, onSaved }: Prop
                           const newH = Math.max(20, baseH * (pct / 100));
                           setBackgroundWidth(newW.toFixed(0));
                           setBackgroundHeight(newH.toFixed(0));
-                          // 슬라이더는 변경 후 즉시 100으로 돌아가게 — 즉, 매번 "현재 크기 기준" 배율로 동작
+                          // 슬라이더는 변경 후 즉시 100으로 돌아가게 — 매번 현재 크기 기준 배율
                           setTimeout(() => { (e.target as HTMLInputElement).value = '100'; }, 0);
                         }}
                         className="w-full accent-emerald-500"
@@ -441,7 +441,7 @@ export default function ProjectSettingsModal({ project, onClose, onSaved }: Prop
                       <div className="text-[9px] text-neutral-600 flex justify-between">
                         <span>÷10</span>
                         <span>현재</span>
-                        <span>×5</span>
+                        <span>×20</span>
                       </div>
                     </div>
                   )}
@@ -454,6 +454,8 @@ export default function ProjectSettingsModal({ project, onClose, onSaved }: Prop
                       { label: '1.5×', factor: 1.5 },
                       { label: '2×', factor: 2 },
                       { label: '3×', factor: 3 },
+                      { label: '5×', factor: 5 },
+                      { label: '10×', factor: 10 },
                     ].map(p => (
                       <button
                         key={p.label}
@@ -490,8 +492,21 @@ export default function ProjectSettingsModal({ project, onClose, onSaved }: Prop
                         setBackgroundHeight((targetW * ratio).toFixed(0));
                       }}
                       className="px-2 py-1 text-[10.5px] font-mono rounded bg-sky-500/15 hover:bg-sky-500/30 border border-sky-500/30 text-sky-200"
-                      title="도면 폭에 맞춤 (1500px)"
-                    >📐 fit</button>
+                      title="도면 절반 폭 (1500px)"
+                    >📐 절반</button>
+                    <button
+                      onClick={() => {
+                        // 도면 전체 폭 (4000px)
+                        const targetW = 4000;
+                        const w = parseFloat(backgroundWidth) || 800;
+                        const h = parseFloat(backgroundHeight) || 600;
+                        const ratio = h / w;
+                        setBackgroundWidth(String(targetW));
+                        setBackgroundHeight((targetW * ratio).toFixed(0));
+                      }}
+                      className="px-2 py-1 text-[10.5px] font-mono rounded bg-purple-500/15 hover:bg-purple-500/30 border border-purple-500/30 text-purple-200"
+                      title="도면 전체 폭 (4000px)"
+                    >📐 전체</button>
                   </div>
 
                   <div className="text-[10px] text-neutral-500">

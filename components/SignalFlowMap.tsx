@@ -849,11 +849,31 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       const inVis = visiblePortsCache.get(to.id)?.in ?? [];
       let fi = outVis.findIndex(p => p.name === c.from_port);
       let ti = inVis.findIndex(p => p.name === c.to_port);
-      // Fallback: 레이어 필터로 숨겨진 포트면 전체 목록에서 index 찾아 강제 렌더
-      // (visiblePortsCache가 stale 할 때도 대비)
-      if (fi < 0) fi = from.outputs.indexOf(c.from_port);
-      if (ti < 0) ti = to.inputs.indexOf(c.to_port);
-      if (fi < 0 || ti < 0) return;  // 포트가 진짜로 삭제된 경우만 skip
+      // 포트가 레이어 필터로 숨겨졌을 때:
+      // — 원본 outputs/inputs에서의 위치를 보이는 포트들 사이에 비례 보간으로 매핑
+      // — 카드 밖으로 튀어나가지 않게
+      if (fi < 0) {
+        const origIdx = from.outputs.indexOf(c.from_port);
+        if (origIdx < 0) return;  // 포트 진짜 삭제됨
+        // 보이는 포트가 없으면 인덱스 0 (카드 첫 행)
+        if (outVis.length === 0) fi = 0;
+        else {
+          // 원본 인덱스를 보이는 인덱스 비율로 스케일
+          const ratio = origIdx / Math.max(1, from.outputs.length - 1);
+          fi = Math.round(ratio * (outVis.length - 1));
+          fi = Math.max(0, Math.min(outVis.length - 1, fi));
+        }
+      }
+      if (ti < 0) {
+        const origIdx = to.inputs.indexOf(c.to_port);
+        if (origIdx < 0) return;
+        if (inVis.length === 0) ti = 0;
+        else {
+          const ratio = origIdx / Math.max(1, to.inputs.length - 1);
+          ti = Math.round(ratio * (inVis.length - 1));
+          ti = Math.max(0, Math.min(inVis.length - 1, ti));
+        }
+      }
 
       // 아이콘 모드: 모든 케이블이 카드 헤더 중앙에 모이도록
       // 카드 width=96, height=36으로 강제됨
