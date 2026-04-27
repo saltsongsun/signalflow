@@ -84,15 +84,15 @@ export default function PanelboardEditor({ device, onSave, onClose }: Props) {
   return (
     <div data-ui className="fixed inset-0 z-[60] bg-gradient-to-br from-neutral-950 via-black to-neutral-950 text-white flex flex-col">
       <div className="px-4 py-3 border-b border-white/10 flex items-center gap-3">
-        <span className="text-2xl">⚡</span>
+        <span className="text-2xl">{device.role === 'power_strip' ? '🔌' : '⚡'}</span>
         <div className="flex-1 min-w-0">
-          <div className="text-base font-bold truncate">{device.name} <span className="text-neutral-500 font-normal text-sm">— 배전반 설정</span></div>
+          <div className="text-base font-bold truncate">{device.name} <span className="text-neutral-500 font-normal text-sm">— {device.role === 'power_strip' ? '멀티탭 설정 (16A · 8구)' : '배전반 설정'}</span></div>
           <div className="text-[11px] text-neutral-500 font-mono">
-            메인: <span className="text-amber-300">{mainKind} · {PHASE_LABELS[mainPhase]} {mainCapacity}A</span>
+            {device.role === 'power_strip' ? '인입' : '메인'}: <span className="text-amber-300">{mainKind} · {PHASE_LABELS[mainPhase]} {mainCapacity}A</span>
             <span className="mx-1">·</span>
             <span className="text-amber-300">{formatWatts(totalCapacityW)}</span>
             <span className="mx-1">·</span>
-            부하측: <span className="text-cyan-300">{breakers.length}</span>
+            {device.role === 'power_strip' ? '구' : '부하측'}: <span className="text-cyan-300">{breakers.length}</span>
           </div>
         </div>
         <button onClick={handleSave} className="px-4 py-2 text-[12px] font-bold rounded-lg bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 text-white shadow-lg">✓ 저장</button>

@@ -144,41 +144,43 @@ body.is-dragging [class*="backdrop-blur"] {
   animation: overload-text-blink 0.7s steps(1, end) infinite;
 }
 
-/* 아이콘 모드 — 카드를 작은 박스로 압축. 헤더만 남김 */
+/* 아이콘 모드 — 카드를 작은 박스로 압축. 첫 자식(헤더)만 남김 */
 [data-device-id][data-icon-mode="1"] {
-  overflow: hidden;
+  overflow: hidden !important;
 }
-/* 헤더 첫 자식만 보임. 나머지 미니뷰는 모두 숨김 */
-[data-device-id][data-icon-mode="1"] > div > div:not(:first-child),
-[data-device-id][data-icon-mode="1"] > div > section,
-[data-device-id][data-icon-mode="1"] > div > .panel-mini,
-[data-device-id][data-icon-mode="1"] > div > svg {
+/* 첫 자식(헤더) 외 모두 숨김 */
+[data-device-id][data-icon-mode="1"] > *:not(:first-child) {
   display: none !important;
 }
-/* 헤더 자체도 짧게 */
-[data-device-id][data-icon-mode="1"] > div:first-child {
-  padding: 4px 8px !important;
+/* 헤더 자체를 카드 전체에 맞춤 */
+[data-device-id][data-icon-mode="1"] > :first-child {
+  height: 100% !important;
   min-height: 0 !important;
-  max-height: 36px !important;
+  padding: 4px 8px !important;
+  border-bottom: none !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 4px !important;
 }
-[data-device-id][data-icon-mode="1"] > div:first-child > div {
-  font-size: 10px !important;
-  line-height: 1.1 !important;
+/* 헤더 안의 작은 폰트는 숨김 */
+[data-device-id][data-icon-mode="1"] > :first-child .text-\[10\.5px\],
+[data-device-id][data-icon-mode="1"] > :first-child .text-\[10px\],
+[data-device-id][data-icon-mode="1"] > :first-child .text-\[9px\],
+[data-device-id][data-icon-mode="1"] > :first-child .text-\[9\.5px\],
+[data-device-id][data-icon-mode="1"] > :first-child .text-\[8\.5px\],
+[data-device-id][data-icon-mode="1"] > :first-child .text-\[8px\],
+[data-device-id][data-icon-mode="1"] > :first-child .text-xs,
+[data-device-id][data-icon-mode="1"] > :first-child .font-mono.text-neutral-500 {
+  display: none !important;
 }
-[data-device-id][data-icon-mode="1"] > div:first-child .text-\[14px\],
-[data-device-id][data-icon-mode="1"] > div:first-child .text-\[13px\],
-[data-device-id][data-icon-mode="1"] > div:first-child .text-base,
-[data-device-id][data-icon-mode="1"] > div:first-child .text-sm {
+/* 이름 텍스트는 너무 길면 잘림 */
+[data-device-id][data-icon-mode="1"] > :first-child .truncate {
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
   font-size: 11px !important;
 }
-[data-device-id][data-icon-mode="1"] > div:first-child .text-\[10\.5px\],
-[data-device-id][data-icon-mode="1"] > div:first-child .text-\[10px\],
-[data-device-id][data-icon-mode="1"] > div:first-child .text-\[9px\],
-[data-device-id][data-icon-mode="1"] > div:first-child .text-\[9\.5px\],
-[data-device-id][data-icon-mode="1"] > div:first-child .text-xs {
+/* 아이콘 모드 활성 — 도면 컨테이너에 클래스 부여 시 케이블 라벨 숨김 */
+.icon-mode-active .cable-label {
   display: none !important;
-}
-/* 외부 핸들/포트 라벨 등도 숨김 (절대 위치 자식들) */
-[data-icon-mode="1"][data-device-id] ~ * {
-  /* 형제 마커 등 — 영향 적음 */
 }

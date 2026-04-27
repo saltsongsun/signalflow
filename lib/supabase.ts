@@ -19,6 +19,27 @@ export const CONNECTION_TYPES = [
 
 export type ConnectionType = typeof CONNECTION_TYPES[number];
 
+// 신호 카테고리 — 드롭다운 그룹핑용
+export const CONNECTION_CATEGORIES: Record<string, ConnectionType[]> = {
+  '🎬 비디오': ['SDI', '12G-SDI', 'HDMI', 'DVI', 'FIBER', 'NDI', 'SMPTE-2110', 'IP'],
+  '🎵 오디오': ['AES', 'DANTE', 'MADI', 'AoIP', 'XLR', 'ANALOG'],
+  '⚡ 전력':    ['POWER'],
+  '🌐 네트워크': ['NETWORK', 'LAN'],
+  '📡 신호':    ['SIGNAL', 'USB', 'GPIO', 'RS-422', 'TIE'],
+};
+
+// 타입별 색상 (케이블 자동 색 지정용)
+export const CONNECTION_TYPE_COLORS: Partial<Record<ConnectionType, string>> = {
+  // 전력 — 노랑
+  'POWER': '#FACC15',
+  // 네트워크 — 흰색
+  'NETWORK': '#FFFFFF',
+  'LAN':     '#FFFFFF',
+  // 일반 신호 — 회색
+  'SIGNAL':  '#94A3B8',
+  // (비디오/오디오는 레이어 색을 그대로 따름 — 색을 강제하지 않음)
+};
+
 export type PortInfo = {
   name: string;
   label?: string;
@@ -30,7 +51,7 @@ export type PortInfo = {
 export const DEVICE_ROLES = [
   'standard', 'switcher', 'router', 'splitter', 'patchbay', 'wallbox',
   'source', 'display', 'multiview', 'audio_mixer', 'io_box',
-  'panelboard', 'power_supply', 'power_consumer',
+  'panelboard', 'power_supply', 'power_consumer', 'power_strip',
   'connector',
 ] as const;
 export type DeviceRole = typeof DEVICE_ROLES[number];
@@ -50,6 +71,7 @@ export const DEVICE_ROLE_LABELS: Record<DeviceRole, string> = {
   panelboard:     '배전반',
   power_supply:   '전력 공급',
   power_consumer: '전력 소비',
+  power_strip:    '멀티탭',
   connector:      '연결',
 };
 
@@ -89,11 +111,11 @@ export const PHASE_VOLTAGE: Record<PhaseType, number> = {
 };
 
 // 차단기 용량 (A) — 부하측(분기) 차단기용
-export const BREAKER_CAPACITIES = [20, 30, 50, 75, 100] as const;
+export const BREAKER_CAPACITIES = [16, 20, 30, 50, 75, 100] as const;
 export type BreakerCapacity = typeof BREAKER_CAPACITIES[number];
 
 // 메인 차단기 용량 (A) — 부하측보다 큰 용량까지 선택 가능
-export const MAIN_BREAKER_CAPACITIES = [50, 75, 100, 150, 200, 225, 300, 400, 500, 600, 800] as const;
+export const MAIN_BREAKER_CAPACITIES = [16, 30, 50, 75, 100, 150, 200, 225, 300, 400, 500, 600, 800] as const;
 export type MainBreakerCapacity = typeof MAIN_BREAKER_CAPACITIES[number];
 
 // 차단기 1개 = 배전반 안의 회로 1개
@@ -241,7 +263,7 @@ export type Device = {
   id: string;
   name: string;
   model?: string;        // 모델명 (예: "XVS-G1", "AVANTIS 48/16", "ADC PPS3")
-  type: 'video' | 'audio' | 'combined';
+  type: 'video' | 'audio' | 'combined' | 'power' | 'network';
   role?: DeviceRole;
   pgmPort?: string;
   // patchbay 전용: 입력 포트명 → 출력 포트명 기본 통로 매핑

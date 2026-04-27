@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { supabase, Device, Connection, ConnectionType, Layer, DEFAULT_LAYERS, DEVICE_ROLE_LABELS, Rack, MULTIVIEW_LAYOUTS, MultiviewLayoutId, Project } from '../lib/supabase';
+import { supabase, Device, Connection, ConnectionType, Layer, DEFAULT_LAYERS, DEVICE_ROLE_LABELS, Rack, MULTIVIEW_LAYOUTS, MultiviewLayoutId, Project, CONNECTION_TYPE_COLORS } from '../lib/supabase';
 import { INITIAL_DEVICES, INITIAL_CONNECTIONS, TYPE_COLORS, CONN_TYPE_STYLES } from '../lib/initialData';
 import DeviceEditor from './DeviceEditor';
 import LayerPanel from './LayerPanel';
@@ -242,6 +242,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   const [editingPanel, setEditingPanel] = useState<Device | null>(null);
   const [editingCable, setEditingCable] = useState<Connection | null>(null);
   const [showLayerPanel, setShowLayerPanel] = useState(false);
+  const [showLegend, setShowLegend] = useState(false);
   const [showPatchbayMgr, setShowPatchbayMgr] = useState(false);
   const [showWallboxMgr, setShowWallboxMgr] = useState(false);
   const [showBulkEditor, setShowBulkEditor] = useState(false);
@@ -853,19 +854,19 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       if (ti < 0) ti = to.inputs.indexOf(c.to_port);
       if (fi < 0 || ti < 0) return;  // 포트가 진짜로 삭제된 경우만 skip
 
-      const x1 = from.x + deviceWidth(from);
-      const y1 = portYFromRenderIdx(from, fi);
-      const x2 = to.x;
-      const y2 = portYFromRenderIdx(to, ti);
+      // 아이콘 모드: 모든 케이블이 카드 헤더 중앙에 모이도록
+      // 카드 width=96, height=36으로 강제됨
+      const ICON_W = 96;
+      const ICON_H = 36;
+      const x1 = iconMode ? from.x + ICON_W : from.x + deviceWidth(from);
+      const y1 = iconMode ? from.y + ICON_H / 2 : portYFromRenderIdx(from, fi);
+      const x2 = iconMode ? to.x : to.x;
+      const y2 = iconMode ? to.y + ICON_H / 2 : portYFromRenderIdx(to, ti);
 
       const fromLayerId = from.outputsMeta?.[c.from_port]?.layerId;
       const layerColor = fromLayerId ? layerById.get(fromLayerId)?.color : undefined;
-      // 연결 타입에 따른 색상 우선 (POWER → 노랑, NETWORK → 흰색, SIGNAL → 회색)
-      let typeColor: string | undefined;
-      const connType = c.conn_type;
-      if (connType === 'POWER') typeColor = '#FACC15';        // 노랑
-      else if (connType === 'NETWORK') typeColor = '#FFFFFF'; // 흰색
-      else if (connType === 'SIGNAL')  typeColor = '#94A3B8'; // 일반 회색
+      // 연결 타입 우선 (POWER/NETWORK/SIGNAL/LAN — 명확한 색)
+      const typeColor = c.conn_type ? CONNECTION_TYPE_COLORS[c.conn_type as ConnectionType] : undefined;
       const baseColor = typeColor ?? layerColor ?? (from.type === 'audio' ? TYPE_COLORS.audio.main : from.type === 'combined' ? TYPE_COLORS.combined.main : TYPE_COLORS.video.main);
       const isPgm = from.role === 'switcher' && from.pgmPort === c.from_port;
       const isPatch = c.is_patch === true;
@@ -884,7 +885,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     return list;
     // dragOffset/viewport/offset/scale 제외 — 드래그/팬 중 재계산 안 되게
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connections, devices, traced, hidePatchbay, inspectHubs, visiblePortsCache, traceId, layerById]);
+  }, [connections, devices, traced, hidePatchbay, inspectHubs, visiblePortsCache, traceId, layerById, iconMode]);
 
   // 허브(패치베이/라우터) IN → OUT 매핑
   // 패치베이: normals(IN→OUT) + 수동 패치(OUT,IN)
@@ -1126,7 +1127,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                   // 그냥 선택만, 편집 진입 X
                 } else if (clickedDev.role === 'audio_mixer') {
                   setEditingMixer(clickedDev);
-                } else if (clickedDev.role === 'panelboard') {
+                } else if (clickedDev.role === 'panelboard' || clickedDev.role === 'power_strip') {
                   setEditingPanel(clickedDev);
                 } else {
                   setEditingDevice(clickedDev);
@@ -1648,6 +1649,50 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     setEditingDevice(d);
   };
 
+  // 멀티탭 — 16A 인입, 8구 출력
+  const handleAddPowerStrip = async () => {
+    const id = `pst_${Date.now().toString(36)}`;
+    const powerLayer = layers.find(l => (l.name ?? '').toLowerCase().includes('power') || (l.name ?? '').includes('전력'))?.id ?? layers[0]?.id ?? 'layer_video';
+    const inputs = ['IN-1'];
+    const outputs = Array.from({ length: 8 }, (_, i) => `OUT-${i + 1}`);
+    const inputsMeta: Record<string, any> = {
+      'IN-1': { name: 'IN-1', layerId: powerLayer, connType: 'POWER', label: '16A 인입' },
+    };
+    const outputsMeta: Record<string, any> = {};
+    outputs.forEach((p, i) => {
+      outputsMeta[p] = { name: p, layerId: powerLayer, connType: 'POWER', label: `${i + 1}구` };
+    });
+    const d: Device = {
+      id, name: '멀티탭', type: 'power', role: 'power_strip',
+      x: (-offset.x + 400) / scale, y: (-offset.y + 200) / scale,
+      width: 240,
+      inputs, outputs,
+      inputsMeta, outputsMeta,
+      // 멀티탭은 입력에서 받은 전력을 8구로 분배. 입력 차단기 16A.
+      // 메인 차단기를 16A MCCB 단상으로 흉내냄.
+      panelMainPhase: 'single',
+      panelMainCapacity: 16 as any,    // 멀티탭 전용 16A
+      panelMainKind: 'MCCB',
+      breakers: outputs.map((p, i) => ({
+        id: `pst_br_${i}`,
+        name: `${i + 1}구`,
+        kind: 'MCCB' as const,
+        phase: 'single' as const,
+        capacityA: 16 as any,           // 각 구도 16A까지 (실제로는 합쳐서 16A)
+        outputPort: p,
+        color: '#FACC15',
+      })),
+      physPorts: {}, routing: {},
+      project_id: projectId,
+    };
+    await (supabase as any).from('devices').insert(d);
+    pushUndo('멀티탭 추가 되돌리기', async () => {
+      await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
+      await (supabase as any).from('devices').delete().eq('id', id);
+    });
+    setEditingDevice(d);
+  };
+
   const handleDuplicateDevice = async () => {
     if (!editingDevice) return;
     const src = editingDevice;
@@ -1658,10 +1703,8 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       name: `${src.name} 복사`,
       x: src.x + 40,
       y: src.y + 40,
-      // 그룹은 승계하지 않음 (복제본은 독립)
       groupId: undefined,
       groupName: undefined,
-      // 연결은 복제 안함
       inputs: [...src.inputs],
       outputs: [...src.outputs],
       inputsMeta: src.inputsMeta ? JSON.parse(JSON.stringify(src.inputsMeta)) : {},
@@ -1673,7 +1716,6 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     };
     await (supabase as any).from('devices').insert(clone);
     pushUndo('복제 되돌리기', async () => {
-      await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
       await (supabase as any).from('devices').delete().eq('id', id);
     });
     setEditingDevice(clone);
@@ -2077,6 +2119,19 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
             {iconMode ? '🔍' : '🗺'}<span className="hidden sm:inline ml-1">{iconMode ? '상세' : '아이콘'}</span>
           </button>
 
+          {/* 신호 유형 범례 토글 */}
+          <button
+            onClick={() => setShowLegend(s => !s)}
+            className={`px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border whitespace-nowrap shrink-0 ${
+              showLegend
+                ? 'bg-white/15 border-white/30 text-white'
+                : 'bg-white/5 border-white/10 text-neutral-300 hover:text-white hover:bg-white/10'
+            }`}
+            title="신호 유형 범례 (Legend) — 색상별 의미"
+          >
+            🎨<span className="hidden sm:inline ml-1">범례</span>
+          </button>
+
           <button
             onClick={() => setShowPatchbayMgr(true)}
             className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border bg-white/5 border-teal-500/30 text-teal-300 hover:text-white hover:bg-teal-500/20 whitespace-nowrap shrink-0"
@@ -2205,6 +2260,10 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                 <button onClick={handleAddPowerConsumer}
                   className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-400 hover:to-red-400 text-white shadow-md shadow-orange-500/30 whitespace-nowrap shrink-0" title="전력 소비 장비 추가">💡<span className="hidden sm:inline ml-1">{t('소비')}</span></button>
               )}
+              {isRoleEnabled('power_strip') && (
+                <button onClick={handleAddPowerStrip}
+                  className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-amber-400 to-yellow-500 hover:from-amber-300 hover:to-yellow-400 text-black shadow-md shadow-amber-500/30 whitespace-nowrap shrink-0" title="멀티탭 추가 (16A · 8구)">🔌<span className="hidden sm:inline ml-1">{t('멀티탭')}</span></button>
+              )}
               {selectedIds.size > 0 && (
                 <>
                   <div className="px-2.5 py-1 text-[11px] rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 font-medium">
@@ -2296,6 +2355,40 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       </div>
 
       {showLayerPanel && <LayerPanel layers={layers} onClose={() => setShowLayerPanel(false)} />}
+
+      {/* 신호 유형 범례 — 도면 우하단 floating 패널 */}
+      {showLegend && (
+        <div data-ui className="absolute bottom-4 right-4 z-20 bg-neutral-950/95 border border-white/15 rounded-lg shadow-2xl backdrop-blur p-3 min-w-[200px] max-w-[280px]">
+          <div className="flex items-center justify-between mb-2 pb-1.5 border-b border-white/10">
+            <div className="text-[11px] font-bold text-neutral-200 flex items-center gap-1.5">
+              <span>🎨</span> 신호 유형
+            </div>
+            <button onClick={() => setShowLegend(false)} className="text-neutral-500 hover:text-white text-[12px]">✕</button>
+          </div>
+          <div className="space-y-1">
+            {[
+              { name: 'Video',    color: '#3B82F6', desc: '비디오 신호',  dash: undefined },
+              { name: 'Audio',    color: '#EF4444', desc: '오디오 신호',  dash: undefined },
+              { name: 'Tie-Line', color: '#A855F7', desc: '연결선',        dash: '1 4' },
+              { name: 'Control',  color: '#10B981', desc: '제어 신호',    dash: '6 3' },
+              { name: 'Power',    color: '#FACC15', desc: '전력 (W=V×A)', dash: undefined },
+              { name: 'Network',  color: '#FFFFFF', desc: '네트워크',      dash: '6 3' },
+              { name: 'Signal',   color: '#94A3B8', desc: '일반 신호',    dash: '4 4' },
+            ].map(t => (
+              <div key={t.name} className="flex items-center gap-2 py-0.5">
+                <svg width="36" height="10" className="shrink-0">
+                  <line x1="0" y1="5" x2="36" y2="5" stroke={t.color} strokeWidth="2" strokeDasharray={t.dash} />
+                </svg>
+                <span className="text-[10.5px] font-mono font-bold text-white" style={{ minWidth: 56 }}>{t.name}</span>
+                <span className="text-[10px] text-neutral-400">{t.desc}</span>
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 pt-1.5 border-t border-white/10 text-[9.5px] text-neutral-500 leading-relaxed">
+            장비 편집 시 포트 또는 케이블의 <strong>연결 타입</strong>에서 선택하면 해당 색·패턴으로 표시됩니다. 동일 색의 흐름이 신호 흐름도 됩니다.
+          </div>
+        </div>
+      )}
 
       {pendingFrom && (
         <div data-ui className="absolute top-[68px] left-1/2 -translate-x-1/2 z-30 px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500/20 to-orange-500/20 backdrop-blur-xl border border-amber-500/40 shadow-2xl shadow-amber-500/20">
@@ -2511,11 +2604,8 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
               const style = ct ? CONN_TYPE_STYLES[ct] : undefined;
               const fromLayerId = from.outputsMeta?.[c.from_port]?.layerId;
               const layerColor = fromLayerId ? layerById.get(fromLayerId)?.color : undefined;
-              // 연결 타입 우선 (POWER 노랑, NETWORK 흰색, SIGNAL 회색)
-              let typeColor: string | undefined;
-              if (ct === 'POWER') typeColor = '#FACC15';
-              else if (ct === 'NETWORK') typeColor = '#FFFFFF';
-              else if (ct === 'SIGNAL')  typeColor = '#94A3B8';
+              // 연결 타입 우선 (CONNECTION_TYPE_COLORS)
+              const typeColor = ct ? CONNECTION_TYPE_COLORS[ct as ConnectionType] : undefined;
               const color = typeColor ?? layerColor ?? (from.type === 'audio' ? TYPE_COLORS.audio.main : from.type === 'combined' ? TYPE_COLORS.combined.main : TYPE_COLORS.video.main);
               const isPgm = from.role === 'switcher' && from.pgmPort === c.from_port;
               const isPatch = c.is_patch === true;
@@ -2741,6 +2831,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
               : role === 'panelboard' ? '⚡'
               : role === 'power_supply' ? '🔌'
               : role === 'power_consumer' ? '💡'
+              : role === 'power_strip' ? '🔌'
               : role === 'connector' ? '━'
               : null;
             const isPatchbay = role === 'patchbay';
@@ -2753,6 +2844,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
             const isPanelboard = role === 'panelboard';
             const isPowerSupply = role === 'power_supply';
             const isPowerConsumer = role === 'power_consumer';
+            const isPowerStrip = role === 'power_strip';
             const currentDisplaySource = isDisplay ? displaySources.get(d.id) : undefined;
 
             // 이 장비의 IN 포트에 연결된 hub (precomputed)
@@ -2851,6 +2943,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                               : isPanelboard ? 'rgba(245,158,11,0.2)'
                               : isPowerSupply ? 'rgba(234,179,8,0.2)'
                               : isPowerConsumer ? 'rgba(249,115,22,0.2)'
+                              : isPowerStrip ? 'rgba(250,204,21,0.2)'
                               : isSource ? 'rgba(132,204,22,0.2)'
                               : isDisplay ? 'rgba(14,165,233,0.18)'
                               : role === 'connector' ? 'rgba(148,163,184,0.15)'
@@ -2865,6 +2958,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                               : isPanelboard ? '#FBBF24'
                               : isPowerSupply ? '#FACC15'
                               : isPowerConsumer ? '#FB923C'
+                              : isPowerStrip ? '#FACC15'
                               : isSource ? '#A3E635'
                               : isDisplay ? '#38BDF8'
                               : role === 'connector' ? '#CBD5E1'
@@ -2879,6 +2973,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                               : isPanelboard ? 'rgba(251,191,36,0.5)'
                               : isPowerSupply ? 'rgba(250,204,21,0.5)'
                               : isPowerConsumer ? 'rgba(251,146,60,0.5)'
+                              : isPowerStrip ? 'rgba(250,204,21,0.5)'
                               : isSource ? 'rgba(163,230,53,0.4)'
                               : isDisplay ? 'rgba(56,189,248,0.4)'
                               : role === 'connector' ? 'rgba(203,213,225,0.3)'
@@ -3397,7 +3492,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                 })()}
 
                 {/* 배전반 preview — 차단기 목록 + 부하 % + 과부하 깜박 */}
-                {isPanelboard && (() => {
+                {(isPanelboard || isPowerStrip) && (() => {
                   const panelBreakers = d.breakers ?? [];
                   const mainPhase = d.panelMainPhase ?? 'three';
                   const mainCap = d.panelMainCapacity ?? 100;

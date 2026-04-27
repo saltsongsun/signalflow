@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect } from 'react';
-import { Device, CONNECTION_TYPES, ConnectionType, PortInfo, Layer, DEVICE_ROLES, DEVICE_ROLE_LABELS, DeviceRole, MULTIVIEW_LAYOUTS, MultiviewLayoutId, IO_BOX_KIND_LABELS, IoBoxKind, IO_BOX_PROTOCOLS, IoBoxProtocol, PowerSpec, PhaseType, PHASE_LABELS, PHASE_VOLTAGE, supabase } from '../lib/supabase';
+import { Device, CONNECTION_TYPES, CONNECTION_CATEGORIES, ConnectionType, PortInfo, Layer, DEVICE_ROLES, DEVICE_ROLE_LABELS, DeviceRole, MULTIVIEW_LAYOUTS, MultiviewLayoutId, IO_BOX_KIND_LABELS, IoBoxKind, IO_BOX_PROTOCOLS, IoBoxProtocol, PowerSpec, PhaseType, PHASE_LABELS, PHASE_VOLTAGE, supabase } from '../lib/supabase';
 
 type Props = {
   device: Device;
@@ -21,6 +21,8 @@ const TYPE_ACCENT = {
   video:    { grad: 'from-sky-500/20 to-sky-600/5',     ring: 'ring-sky-500/40',    dot: '#3B82F6' },
   audio:    { grad: 'from-rose-500/20 to-rose-600/5',   ring: 'ring-rose-500/40',   dot: '#EF4444' },
   combined: { grad: 'from-purple-500/20 to-purple-600/5', ring: 'ring-purple-500/40', dot: '#A855F7' },
+  power:    { grad: 'from-yellow-500/20 to-orange-600/5', ring: 'ring-yellow-500/40', dot: '#FACC15' },
+  network:  { grad: 'from-neutral-300/20 to-neutral-500/5', ring: 'ring-white/40',  dot: '#FFFFFF' },
 };
 
 export default function DeviceEditor({ device, layers, allDevices, enabledRoles, selectionCount, onSave, onSaveToSelection, onDelete, onDuplicate, onClose }: Props) {
@@ -265,7 +267,11 @@ export default function DeviceEditor({ device, layers, allDevices, enabledRoles,
                   className="bg-neutral-900 border border-white/10 rounded px-1.5 py-1 text-[11px] focus:border-sky-500 focus:outline-none text-neutral-200 font-mono"
                 >
                   <option value="">-</option>
-                  {CONNECTION_TYPES.map(c => <option key={c} value={c}>{c}</option>)}
+                  {Object.entries(CONNECTION_CATEGORIES).map(([cat, types]) => (
+                    <optgroup key={cat} label={cat}>
+                      {types.map(c => <option key={c} value={c}>{c}</option>)}
+                    </optgroup>
+                  ))}
                 </select>
               </div>
               <div className="flex items-center gap-1">
@@ -361,7 +367,7 @@ export default function DeviceEditor({ device, layers, allDevices, enabledRoles,
           <input
             value={model}
             onChange={e => setModel(e.target.value)}
-            placeholder="예: Sony XVS-G1 / Allen & Heath AVANTIS 48/16 / ADC PPS3"
+            placeholder="예: Sony XVS-G1 / AVANTIS 48/16 / Schneider Acti9 / 부산전기"
             className="w-full bg-white/5 border border-white/10 rounded-lg px-3.5 py-2 text-[13px] font-mono text-neutral-300 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none transition"
           />
         </div>
@@ -370,18 +376,18 @@ export default function DeviceEditor({ device, layers, allDevices, enabledRoles,
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="block text-[10px] uppercase tracking-[0.12em] text-neutral-500 mb-2 font-semibold">타입</label>
-            <div className="grid grid-cols-3 gap-1 p-1 bg-white/5 rounded-lg border border-white/10">
-              {(['video','audio','combined'] as const).map(t => {
+            <div className="grid grid-cols-5 gap-1 p-1 bg-white/5 rounded-lg border border-white/10">
+              {(['video','audio','combined','power','network'] as const).map(t => {
                 const a = TYPE_ACCENT[t];
                 const active = type === t;
                 return (
                   <button
                     key={t}
                     onClick={() => setType(t)}
-                    className={`py-1.5 text-[11px] rounded-md font-medium transition ${active ? 'text-white shadow-sm' : 'text-neutral-500 hover:text-white'}`}
-                    style={active ? { background: a.dot, boxShadow: `0 0 12px ${a.dot}80` } : undefined}
+                    className={`py-1.5 text-[10.5px] rounded-md font-medium transition ${active ? 'text-white shadow-sm' : 'text-neutral-500 hover:text-white'}`}
+                    style={active ? { background: a.dot, boxShadow: `0 0 12px ${a.dot}80`, color: t === 'network' ? '#000' : '#fff' } : undefined}
                   >
-                    {t === 'video' ? 'Video' : t === 'audio' ? 'Audio' : 'V+A'}
+                    {t === 'video' ? 'Video' : t === 'audio' ? 'Audio' : t === 'combined' ? 'V+A' : t === 'power' ? '⚡ Power' : '🌐 Net'}
                   </button>
                 );
               })}
