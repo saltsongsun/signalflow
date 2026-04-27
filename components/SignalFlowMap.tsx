@@ -2750,7 +2750,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
               // 경로 계산: 일반 수평 베지어
               const dxAbs = Math.abs(x2 - x1);
               const dyAbs = Math.abs(y2 - y1);
-              const ctrl = Math.min(200 / Math.max(0.1, scale), Math.max(80, dxAbs / 1.8, dyAbs / 2.5));
+              const vCtrl = Math.min(100, Math.max(30, dxAbs * scale / 3)); const ctrl = Math.min(vCtrl / Math.max(0.1, scale), Math.max(80, dyAbs * 1.5, dxAbs * 0.6));
               const path = `M ${x1} ${y1} C ${x1 + ctrl} ${y1}, ${x2 - ctrl} ${y2}, ${x2} ${y2}`;
               const isTraced = traced.connections.has(c.id);
               const isDim = false;
@@ -2885,7 +2885,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
 
                     const dxAbs = Math.abs(x2 - x1);
                     const dyAbs = Math.abs(y2 - y1);
-                    const ctrl = Math.min(200 / Math.max(0.1, scale), Math.max(80, dxAbs / 1.8, dyAbs / 2.5));
+                    const vCtrl = Math.min(100, Math.max(30, dxAbs * scale / 3)); const ctrl = Math.min(vCtrl / Math.max(0.1, scale), Math.max(80, dyAbs * 1.5, dxAbs * 0.6));
                     const path = `M ${x1} ${y1} C ${x1 + ctrl} ${y1}, ${x2 - ctrl} ${y2}, ${x2} ${y2}`;
 
                     const liveSrc = signalByOutput.out.get(`${vc.fromDev.id}:${vc.fromDev.outputs[vc.fromPortIdx]}`);

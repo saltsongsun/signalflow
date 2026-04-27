@@ -191,19 +191,20 @@ export default ConnectionCanvas;
 function drawCable(ctx: CanvasRenderingContext2D, c: CableInfo, flowOffset: number, isTraced: boolean, scale: number = 1) {
   const { x1, y1, x2, y2, color } = c;
 
-  // 베지어 곡선 경로
+  // 베지어 곡선 — viewport 픽셀 기준으로 곡률 계산하면 줌 레벨에 무관하게 자연스러운 모양
   const dxAbs = Math.abs(x2 - x1);
   const dyAbs = Math.abs(y2 - y1);
-  // ctrl을 도면 좌표 기준으로 계산하되, viewport에서 너무 크게 휘지 않도록 상한
-  // — viewport 픽셀 기준 max 200px → 도면 좌표로 200/scale
-  const maxCtrl = 200 / Math.max(0.1, scale);
-  let ctrl = Math.max(80, dxAbs / 1.8, dyAbs / 2.5);
-  ctrl = Math.min(ctrl, maxCtrl);
+  const vDx = dxAbs * scale;  // 화면 픽셀 기준 거리
+  // viewport에서 ctrl은 가로 거리의 1/3 정도 (자연스러운 베지어), max 100px
+  const vCtrl = Math.min(100, Math.max(30, vDx / 3));
+  const ctrl = vCtrl / Math.max(0.1, scale);
+  // 추가: 두 점이 수직으로 너무 가까우면 곡선이 위/아래로 솟구치지 않도록 dyAbs로도 제한
+  const ctrlFinal = Math.min(ctrl, Math.max(80, dyAbs * 1.5, dxAbs * 0.6));
 
   const drawPath = () => {
     ctx.beginPath();
     ctx.moveTo(x1, y1);
-    ctx.bezierCurveTo(x1 + ctrl, y1, x2 - ctrl, y2, x2, y2);
+    ctx.bezierCurveTo(x1 + ctrlFinal, y1, x2 - ctrlFinal, y2, x2, y2);
   };
 
   if (isTraced) {
