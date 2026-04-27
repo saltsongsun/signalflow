@@ -4,7 +4,7 @@ create table if not exists public.devices (
   id text primary key,
   name text not null,
   model text,
-  type text not null check (type in ('video', 'audio', 'combined')),
+  type text not null check (type in ('video', 'audio', 'combined', 'power', 'network')),
   role text default 'standard',
   "pgmPort" text,
   normals jsonb not null default '{}'::jsonb,
@@ -110,6 +110,19 @@ alter table public.devices add column if not exists "groupName" text;
 alter table public.connections add column if not exists conn_type text;
 alter table public.connections add column if not exists tie_line text;
 alter table public.connections add column if not exists is_patch boolean default false;
+
+-- devices.type CHECK 제약 갱신 — power/network 추가 허용
+do $$
+begin
+  if exists (
+    select 1 from pg_constraint
+    where conname = 'devices_type_check' and conrelid = 'public.devices'::regclass
+  ) then
+    alter table public.devices drop constraint devices_type_check;
+  end if;
+  alter table public.devices add constraint devices_type_check
+    check (type in ('video', 'audio', 'combined', 'power', 'network'));
+end $$;
 
 -- ============================================================
 -- 프로젝트 분리 (멀티 프로젝트 지원)

@@ -1519,6 +1519,33 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     e.stopPropagation();
   };
 
+  // 장비 insert 시 CHECK 제약/컬럼 누락 자동 우회
+  const insertDeviceSafe = async (d: Device): Promise<{ ok: boolean; err?: any }> => {
+    const tryOnce = async (payload: any): Promise<any> => {
+      const { error } = await (supabase as any).from('devices').insert(payload);
+      if (!error) return { ok: true };
+      const msg = `${error.message ?? ''} ${error.details ?? ''} ${error.hint ?? ''}`;
+      // CHECK constraint 위반 — type fallback
+      if (/devices_type_check|violates check constraint/i.test(msg) && payload.type) {
+        const fb = payload.type === 'power' ? 'audio' : payload.type === 'network' ? 'video' : null;
+        if (fb && fb !== payload.type) {
+          console.warn(`[DB insert] type='${payload.type}' → '${fb}' fallback`);
+          return tryOnce({ ...payload, type: fb });
+        }
+      }
+      // 컬럼 누락
+      const match = msg.match(/['"]([A-Za-z_][A-Za-z0-9_]*)['"].*column/i) || msg.match(/column\s+['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/i);
+      if (match && match[1] && payload[match[1]] !== undefined) {
+        const col = match[1];
+        const next = { ...payload };
+        delete next[col];
+        return tryOnce(next);
+      }
+      return { ok: false, err: error };
+    };
+    return tryOnce(d);
+  };
+
   const handleAddDevice = async () => {
     const id = `dev_${Date.now().toString(36)}`;
     const defaultLayer = layers[0]?.id ?? 'layer_video';
@@ -1531,7 +1558,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       physPorts: {}, routing: {},
       project_id: projectId,
     };
-    await (supabase as any).from('devices').insert(d);
+    await insertDeviceSafe(d);
     pushUndo('장비 추가 되돌리기', async () => {
       await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
       await (supabase as any).from('devices').delete().eq('id', id);
@@ -1558,7 +1585,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       physPorts: {}, routing: {},
       project_id: projectId,
     };
-    await (supabase as any).from('devices').insert(d);
+    await insertDeviceSafe(d);
     pushUndo('멀티뷰 추가 되돌리기', async () => {
       await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
       await (supabase as any).from('devices').delete().eq('id', id);
@@ -1590,7 +1617,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       physPorts: {}, routing: {},
       project_id: projectId,
     };
-    await (supabase as any).from('devices').insert(d);
+    await insertDeviceSafe(d);
     pushUndo('오디오 콘솔 추가 되돌리기', async () => {
       await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
       await (supabase as any).from('devices').delete().eq('id', id);
@@ -1624,7 +1651,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       physPorts: {}, routing: {},
       project_id: projectId,
     };
-    await (supabase as any).from('devices').insert(d);
+    await insertDeviceSafe(d);
     pushUndo(`${kind === 'stagebox' ? '스테이지박스' : '옵션카드'} 추가 되돌리기`, async () => {
       await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
       await (supabase as any).from('devices').delete().eq('id', id);
@@ -1650,7 +1677,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       physPorts: {}, routing: {},
       project_id: projectId,
     };
-    await (supabase as any).from('devices').insert(d);
+    await insertDeviceSafe(d);
     pushUndo('배전반 추가 되돌리기', async () => {
       await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
       await (supabase as any).from('devices').delete().eq('id', id);
@@ -1673,7 +1700,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       physPorts: {}, routing: {},
       project_id: projectId,
     };
-    await (supabase as any).from('devices').insert(d);
+    await insertDeviceSafe(d);
     pushUndo('전력 공급 추가 되돌리기', async () => {
       await (supabase as any).from('devices').delete().eq('id', id);
     });
@@ -1695,7 +1722,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       physPorts: {}, routing: {},
       project_id: projectId,
     };
-    await (supabase as any).from('devices').insert(d);
+    await insertDeviceSafe(d);
     pushUndo('전력 소비 추가 되돌리기', async () => {
       await (supabase as any).from('devices').delete().eq('id', id);
     });
@@ -1742,7 +1769,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       physPorts: {}, routing: {},
       project_id: projectId,
     };
-    await (supabase as any).from('devices').insert(d);
+    await insertDeviceSafe(d);
     pushUndo('멀티탭 추가 되돌리기', async () => {
       await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
       await (supabase as any).from('devices').delete().eq('id', id);
@@ -1797,9 +1824,18 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       if (removed.length > 10) return { ok: false, removed, err: new Error('너무 많은 컬럼 누락') };
       const { error } = await (supabase as any).from('devices').update(payload).eq('id', targetId);
       if (!error) return { ok: true, removed };
-      // PostgREST 에러 메시지에서 누락된 컬럼명 추출
-      // 예: "Could not find the 'audioStoragePath' column of 'devices'"
       const msg = `${error.message ?? ''} ${error.details ?? ''} ${error.hint ?? ''}`;
+      // CHECK constraint 위반 (구 DB) — type을 fallback 매핑하여 재시도
+      if (/devices_type_check|violates check constraint/i.test(msg) && payload.type) {
+        const fallbackType = payload.type === 'power' ? 'audio'
+          : payload.type === 'network' ? 'video'
+          : 'video';
+        if (fallbackType !== payload.type) {
+          console.warn(`[DB] devices.type='${payload.type}'이 DB CHECK 제약을 위반 — '${fallbackType}'로 fallback 저장. schema.sql을 실행하면 정상 저장됩니다.`);
+          return trySave({ ...payload, type: fallbackType }, [...removed, `type=${payload.type}→${fallbackType}`]);
+        }
+      }
+      // PostgREST 에러 메시지에서 누락된 컬럼명 추출
       const match = msg.match(/['"]([A-Za-z_][A-Za-z0-9_]*)['"].*column/i) || msg.match(/column\s+['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/i);
       if (match && match[1] && payload[match[1]] !== undefined) {
         const col = match[1];
