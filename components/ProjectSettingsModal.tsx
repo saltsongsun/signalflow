@@ -76,6 +76,13 @@ export default function ProjectSettingsModal({ project, onClose, onSaved }: Prop
   const [backgroundImageUrl, setBackgroundImageUrl] = useState(project.background_image_url ?? '');
   const [backgroundOpacity, setBackgroundOpacity] = useState(project.background_opacity ?? 50);
   const [backgroundLocked, setBackgroundLocked] = useState(project.background_locked ?? false);
+  const [backgroundWidth, setBackgroundWidth] = useState<string>(
+    project.background_width ? String(project.background_width) : ''
+  );
+  const [backgroundHeight, setBackgroundHeight] = useState<string>(
+    project.background_height ? String(project.background_height) : ''
+  );
+  const [keepAspectRatio, setKeepAspectRatio] = useState<boolean>(project.background_keep_aspect ?? false);
   const [uploading, setUploading] = useState(false);
 
   const toggleRole = (r: DeviceRole) => {
@@ -113,6 +120,9 @@ export default function ProjectSettingsModal({ project, onClose, onSaved }: Prop
         background_x: project.background_x ?? 0,
         background_y: project.background_y ?? 0,
         background_scale: project.background_scale ?? 1,
+        background_width: backgroundWidth ? parseFloat(backgroundWidth) : project.background_width,
+        background_height: backgroundHeight ? parseFloat(backgroundHeight) : project.background_height,
+        background_keep_aspect: keepAspectRatio,
       };
       await (supabase as any).from('projects').update({
         ...updates,
@@ -334,12 +344,163 @@ export default function ProjectSettingsModal({ project, onClose, onSaved }: Prop
                     className="accent-amber-500"
                   />
                   <span className={backgroundLocked ? 'text-amber-300' : 'text-neutral-400'}>
-                    🔒 배경 이미지 위치/크기 잠금
+                    🔒 배경 이미지 위치/크기 잠금 (실수 방지)
                   </span>
                 </label>
 
+                {/* 너비/높이 직접 입력 */}
+                <div className="space-y-1.5 pt-1">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10.5px] text-neutral-400">크기 (픽셀)</label>
+                    <label className="flex items-center gap-1 text-[10px] cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={keepAspectRatio}
+                        onChange={e => setKeepAspectRatio(e.target.checked)}
+                        className="accent-emerald-500"
+                      />
+                      <span className={keepAspectRatio ? 'text-emerald-300' : 'text-neutral-500'}>
+                        🔗 종횡비 유지
+                      </span>
+                    </label>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <div className="text-[9.5px] text-neutral-500 mb-0.5">너비 (W)</div>
+                      <input
+                        type="number"
+                        value={backgroundWidth}
+                        onChange={e => {
+                          const newW = e.target.value;
+                          setBackgroundWidth(newW);
+                          // 종횡비 유지 켜져있고 height가 있으면 자동 계산
+                          if (keepAspectRatio && backgroundWidth && backgroundHeight && newW) {
+                            const oldW = parseFloat(backgroundWidth);
+                            const oldH = parseFloat(backgroundHeight);
+                            if (oldW > 0 && oldH > 0) {
+                              const ratio = oldH / oldW;
+                              setBackgroundHeight((parseFloat(newW) * ratio).toFixed(0));
+                            }
+                          }
+                        }}
+                        placeholder="예: 800"
+                        className="w-full bg-neutral-950 border border-white/15 rounded px-2 py-1.5 text-[12px] font-mono"
+                      />
+                    </div>
+                    <div>
+                      <div className="text-[9.5px] text-neutral-500 mb-0.5">높이 (H)</div>
+                      <input
+                        type="number"
+                        value={backgroundHeight}
+                        onChange={e => {
+                          const newH = e.target.value;
+                          setBackgroundHeight(newH);
+                          if (keepAspectRatio && backgroundWidth && backgroundHeight && newH) {
+                            const oldW = parseFloat(backgroundWidth);
+                            const oldH = parseFloat(backgroundHeight);
+                            if (oldW > 0 && oldH > 0) {
+                              const ratio = oldW / oldH;
+                              setBackgroundWidth((parseFloat(newH) * ratio).toFixed(0));
+                            }
+                          }
+                        }}
+                        placeholder="예: 600"
+                        className="w-full bg-neutral-950 border border-white/15 rounded px-2 py-1.5 text-[12px] font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  {/* 슬라이더로 비율 조정 (현재 너비 기준 0.1~5배) */}
+                  {backgroundWidth && backgroundHeight && (
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[9.5px] text-neutral-500">크기 슬라이더 (현재 너비 기준)</span>
+                        <span className="text-[9.5px] text-neutral-400 font-mono">
+                          {Math.round(parseFloat(backgroundWidth))}×{Math.round(parseFloat(backgroundHeight))}
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min={10}
+                        max={500}
+                        step={5}
+                        value={100}
+                        onChange={e => {
+                          const pct = parseInt(e.target.value);
+                          const baseW = parseFloat(backgroundWidth);
+                          const baseH = parseFloat(backgroundHeight);
+                          const newW = Math.max(20, baseW * (pct / 100));
+                          const newH = Math.max(20, baseH * (pct / 100));
+                          setBackgroundWidth(newW.toFixed(0));
+                          setBackgroundHeight(newH.toFixed(0));
+                          // 슬라이더는 변경 후 즉시 100으로 돌아가게 — 즉, 매번 "현재 크기 기준" 배율로 동작
+                          setTimeout(() => { (e.target as HTMLInputElement).value = '100'; }, 0);
+                        }}
+                        className="w-full accent-emerald-500"
+                      />
+                      <div className="text-[9px] text-neutral-600 flex justify-between">
+                        <span>÷10</span>
+                        <span>현재</span>
+                        <span>×5</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 빠른 프리셋 — 현재 크기 곱연산 */}
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      { label: '½×', factor: 0.5 },
+                      { label: '0.8×', factor: 0.8 },
+                      { label: '1.5×', factor: 1.5 },
+                      { label: '2×', factor: 2 },
+                      { label: '3×', factor: 3 },
+                    ].map(p => (
+                      <button
+                        key={p.label}
+                        onClick={() => {
+                          const w = parseFloat(backgroundWidth) || 800;
+                          const h = parseFloat(backgroundHeight) || 600;
+                          setBackgroundWidth(Math.max(20, w * p.factor).toFixed(0));
+                          setBackgroundHeight(Math.max(20, h * p.factor).toFixed(0));
+                        }}
+                        className="px-2 py-1 text-[10.5px] font-mono rounded bg-white/5 hover:bg-white/15 border border-white/10 text-neutral-300"
+                      >{p.label}</button>
+                    ))}
+                    <button
+                      onClick={() => {
+                        // 원본 자연 크기로 리셋 (이미지 로드 후 자연 크기 추정 — img 객체로 확인)
+                        const img = new window.Image();
+                        img.onload = () => {
+                          setBackgroundWidth(String(img.naturalWidth));
+                          setBackgroundHeight(String(img.naturalHeight));
+                        };
+                        img.src = backgroundImageUrl;
+                      }}
+                      className="px-2 py-1 text-[10.5px] font-mono rounded bg-emerald-500/15 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-200"
+                      title="이미지 원본 픽셀 크기로 복원"
+                    >↻ 원본</button>
+                    <button
+                      onClick={() => {
+                        // 도면 가로폭 1/2 정도로 fit (대략 1500px)
+                        const targetW = 1500;
+                        const w = parseFloat(backgroundWidth) || 800;
+                        const h = parseFloat(backgroundHeight) || 600;
+                        const ratio = h / w;
+                        setBackgroundWidth(String(targetW));
+                        setBackgroundHeight((targetW * ratio).toFixed(0));
+                      }}
+                      className="px-2 py-1 text-[10.5px] font-mono rounded bg-sky-500/15 hover:bg-sky-500/30 border border-sky-500/30 text-sky-200"
+                      title="도면 폭에 맞춤 (1500px)"
+                    >📐 fit</button>
+                  </div>
+
+                  <div className="text-[10px] text-neutral-500">
+                    빈칸으로 두면 이미지 원본 크기로 표시됩니다. 도면에서도 모서리/변을 끌어 직접 조정할 수 있어요.
+                  </div>
+                </div>
+
                 <div className="text-[10px] text-neutral-500 bg-white/[0.02] border border-white/10 rounded p-2">
-                  💡 도면에서 배경 이미지를 <strong>드래그하여 위치 이동</strong>하거나 <strong>모서리를 끌어 크기 조정</strong>할 수 있습니다 (잠금 해제 상태). 저장 시 자동으로 줄어들었어도 도면에서 1~10배까지 자유롭게 확대할 수 있어요.
+                  💡 도면에서 직접 조작도 가능 — 이미지를 <strong>드래그하여 위치 이동</strong>, <strong>4개 모서리 / 4개 변</strong>의 핸들을 끌어 크기 조정. 종횡비는 이 모달의 옵션을 따릅니다.
                 </div>
               </div>
             )}

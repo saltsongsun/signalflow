@@ -153,7 +153,10 @@ export type Project = {
   background_opacity?: number;     // 0~100
   background_x?: number;
   background_y?: number;
-  background_scale?: number;       // 1.0 = 100%
+  background_scale?: number;       // 1.0 = 100% (legacy — width/height가 있으면 무시)
+  background_width?: number;       // 픽셀 단위 너비 (자유 비율)
+  background_height?: number;      // 픽셀 단위 높이 (자유 비율)
+  background_keep_aspect?: boolean; // 도면 핸들 드래그 시 종횡비 유지
   background_locked?: boolean;     // true면 이미지 이동/리사이즈 방지
   created_at?: string;
   updated_at?: string;

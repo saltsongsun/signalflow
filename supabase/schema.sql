@@ -101,6 +101,9 @@ alter table public.projects add column if not exists "background_opacity" intege
 alter table public.projects add column if not exists "background_x" double precision default 0;
 alter table public.projects add column if not exists "background_y" double precision default 0;
 alter table public.projects add column if not exists "background_scale" double precision default 1;
+alter table public.projects add column if not exists "background_width" double precision;
+alter table public.projects add column if not exists "background_height" double precision;
+alter table public.projects add column if not exists "background_keep_aspect" boolean default false;
 alter table public.projects add column if not exists "background_locked" boolean default false;
 alter table public.devices add column if not exists "groupId" text;
 alter table public.devices add column if not exists "groupName" text;

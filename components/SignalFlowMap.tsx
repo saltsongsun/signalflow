@@ -186,19 +186,26 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   const projectId = project?.id ?? 'default';
   // 프로젝트 메타는 편집 가능하므로 로컬 state로 관리
   const [currentProject, setCurrentProject] = useState<Project | null>(project ?? null);
+  const [showProjectSettings, setShowProjectSettings] = useState(false);
+  // 배경 이미지 transform — currentProject에서 초기화, 드래그/리사이즈 시 업데이트
+  const [bgImgX, setBgImgX] = useState<number>(0);
+  const [bgImgY, setBgImgY] = useState<number>(0);
+  const [bgImgWidth, setBgImgWidth] = useState<number>(0);
+  const [bgImgHeight, setBgImgHeight] = useState<number>(0);
+  const [bgImgNaturalSize, setBgImgNaturalSize] = useState<{ w: number; h: number } | null>(null);
+  const [bgKeepAspect, setBgKeepAspect] = useState<boolean>(false);
 
   // currentProject 변경 시 배경 이미지 transform 동기화
   useEffect(() => {
     setBgImgX(currentProject?.background_x ?? 0);
     setBgImgY(currentProject?.background_y ?? 0);
-    setBgImgScale(currentProject?.background_scale ?? 1);
-  }, [currentProject?.id, currentProject?.background_x, currentProject?.background_y, currentProject?.background_scale]);
-  const [showProjectSettings, setShowProjectSettings] = useState(false);
-  // 배경 이미지 transform — currentProject에서 초기화, 드래그/리사이즈 시 업데이트
-  const [bgImgX, setBgImgX] = useState<number>(0);
-  const [bgImgY, setBgImgY] = useState<number>(0);
-  const [bgImgScale, setBgImgScale] = useState<number>(1);
-  const [bgImgNaturalSize, setBgImgNaturalSize] = useState<{ w: number; h: number } | null>(null);
+    // width/height가 정의되어 있으면 그대로, 없으면 scale (legacy) 또는 자연크기 기반
+    const w = currentProject?.background_width;
+    const h = currentProject?.background_height;
+    if (typeof w === 'number' && w > 0) setBgImgWidth(w);
+    if (typeof h === 'number' && h > 0) setBgImgHeight(h);
+    setBgKeepAspect(currentProject?.background_keep_aspect ?? false);
+  }, [currentProject?.id, currentProject?.background_x, currentProject?.background_y, currentProject?.background_width, currentProject?.background_height, currentProject?.background_keep_aspect]);
   // 용어 오버라이드 — t('PGM') 식으로 사용. 정의 안 되어 있으면 원본 반환.
   const terminology = currentProject?.terminology ?? {};
   const t = (key: string): string => terminology[key] ?? key;
@@ -215,7 +222,12 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   const [loading, setLoading] = useState(true);
   const [online, setOnline] = useState(1);
 
-  const [editMode, setEditMode] = useState(false);
+  // 모드: view (보기) / connect (연결) / edit (편집)
+  // 호환성을 위해 editMode는 'connect' 또는 'edit'일 때 true 처럼 동작
+  type ViewMode = 'view' | 'connect' | 'edit';
+  const [viewMode, setViewMode] = useState<ViewMode>('view');
+  const editMode = viewMode !== 'view';   // 기존 코드 호환
+  const setEditMode = (b: boolean) => setViewMode(b ? 'edit' : 'view');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [traceId, setTraceId] = useState<string | null>(null);
   const [traceMode, setTraceMode] = useState<TraceMode>('both');
@@ -282,7 +294,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   }>({ active: false, startDist: 0, startScale: 1, startMidX: 0, startMidY: 0, startOffset: { x: 0, y: 0 } });
 
   // state mirror
-  const stateRef = useRef({ scale, offset, editMode, devices, selectedIds, visibleLayerIds: new Set<string>(), layers });
+  const stateRef = useRef({ scale, offset, editMode, viewMode, devices, selectedIds, visibleLayerIds: new Set<string>(), layers });
 
   // ===== Undo stack =====
   // 편집 모드에서 Cmd/Ctrl+Z로 마지막 동작을 되돌림.
@@ -312,6 +324,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   stateRef.current.scale = scale;
   stateRef.current.offset = offset;
   stateRef.current.editMode = editMode;
+  stateRef.current.viewMode = viewMode;
   stateRef.current.devices = devices;
   stateRef.current.selectedIds = selectedIds;
   stateRef.current.layers = layers;
@@ -1086,7 +1099,10 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                 });
               } else {
                 setSelectedIds(new Set(groupMates));
-                if (clickedDev.role === 'audio_mixer') {
+                // 연결 모드에서는 장비 클릭으로 편집 모달 안 열림 — 선택만
+                if (stateRef.current.viewMode === 'connect') {
+                  // 그냥 선택만, 편집 진입 X
+                } else if (clickedDev.role === 'audio_mixer') {
                   setEditingMixer(clickedDev);
                 } else if (clickedDev.role === 'panelboard') {
                   setEditingPanel(clickedDev);
@@ -1982,14 +1998,19 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
 
           <div className="flex items-center gap-0.5 bg-white/5 rounded-lg p-0.5 border border-white/10 shrink-0">
             <button
-              onClick={() => { setEditMode(false); setPendingFrom(null); setSelectedIds(new Set()); }}
-              className={`px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-md whitespace-nowrap ${!editMode ? 'bg-gradient-to-r from-neutral-700 to-neutral-600 text-white shadow-md' : 'text-neutral-400 hover:text-white'}`}
-              title="보기 모드"
+              onClick={() => { setViewMode('view'); setPendingFrom(null); setSelectedIds(new Set()); }}
+              className={`px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-md whitespace-nowrap ${viewMode === 'view' ? 'bg-gradient-to-r from-neutral-700 to-neutral-600 text-white shadow-md' : 'text-neutral-400 hover:text-white'}`}
+              title="보기 모드 — 신호 흐름만 추적"
             >👁<span className="hidden sm:inline ml-1">보기</span></button>
             <button
-              onClick={() => { setEditMode(true); setTraceId(null); }}
-              className={`px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-md whitespace-nowrap ${editMode ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md shadow-amber-500/30' : 'text-neutral-400 hover:text-white'}`}
-              title="편집 모드"
+              onClick={() => { setViewMode('connect'); setTraceId(null); setSelectedIds(new Set()); }}
+              className={`px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-md whitespace-nowrap ${viewMode === 'connect' ? 'bg-gradient-to-r from-cyan-500 to-sky-500 text-white shadow-md shadow-cyan-500/30' : 'text-neutral-400 hover:text-white'}`}
+              title="연결 모드 — 포트 클릭으로 케이블 연결만"
+            >🔌<span className="hidden sm:inline ml-1">연결</span></button>
+            <button
+              onClick={() => { setViewMode('edit'); setTraceId(null); }}
+              className={`px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-md whitespace-nowrap ${viewMode === 'edit' ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md shadow-amber-500/30' : 'text-neutral-400 hover:text-white'}`}
+              title="편집 모드 — 장비 더블클릭으로 편집"
             >✎<span className="hidden sm:inline ml-1">편집</span></button>
           </div>
 
@@ -2289,21 +2310,47 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
               opacity={currentProject.background_opacity ?? 50}
               x={bgImgX}
               y={bgImgY}
-              scale={bgImgScale}
+              width={bgImgWidth || (bgImgNaturalSize?.w ?? 600)}
+              height={bgImgHeight || (bgImgNaturalSize?.h ?? 400)}
               locked={currentProject.background_locked ?? false}
-              onMove={(nx, ny) => { setBgImgX(nx); setBgImgY(ny); }}
-              onScale={(s) => setBgImgScale(s)}
+              keepAspectRatio={bgKeepAspect}
+              onTransform={(next) => {
+                setBgImgX(next.x);
+                setBgImgY(next.y);
+                setBgImgWidth(next.width);
+                setBgImgHeight(next.height);
+              }}
               onCommit={async () => {
                 if (!currentProject) return;
                 await (supabase as any).from('projects').update({
                   background_x: bgImgX,
                   background_y: bgImgY,
-                  background_scale: bgImgScale,
+                  background_width: bgImgWidth,
+                  background_height: bgImgHeight,
                 }).eq('id', currentProject.id);
-                setCurrentProject({ ...currentProject, background_x: bgImgX, background_y: bgImgY, background_scale: bgImgScale });
+                setCurrentProject({
+                  ...currentProject,
+                  background_x: bgImgX,
+                  background_y: bgImgY,
+                  background_width: bgImgWidth,
+                  background_height: bgImgHeight,
+                });
               }}
-              onNaturalSize={setBgImgNaturalSize}
-              naturalSize={bgImgNaturalSize}
+              onNaturalSize={(size) => {
+                setBgImgNaturalSize(size);
+                // 처음 로드 시 width/height가 없으면 자연 크기로 초기화
+                if (size && (!bgImgWidth || !bgImgHeight)) {
+                  // legacy: scale이 있으면 적용
+                  const legacyScale = currentProject?.background_scale;
+                  if (typeof legacyScale === 'number' && legacyScale > 0 && legacyScale !== 1) {
+                    setBgImgWidth(size.w * legacyScale);
+                    setBgImgHeight(size.h * legacyScale);
+                  } else {
+                    setBgImgWidth(size.w);
+                    setBgImgHeight(size.h);
+                  }
+                }
+              }}
             />
           )}
 

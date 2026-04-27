@@ -309,16 +309,23 @@ export default function DeviceEditor({ device, layers, allDevices, enabledRoles,
 
   return (
     <>
-      {/* 모바일/태블릿 백드롭 — 탭해서 닫기 */}
+      {/* 모바일/태블릿 백드롭 — 탭해서 닫기. 모바일에선 도면 일부 보이게 약하게 */}
       <div
         data-ui
-        className="fixed inset-0 bg-black/50 z-40 lg:hidden"
+        className="fixed inset-0 bg-black/20 sm:bg-black/50 z-40 lg:hidden"
         onClick={onClose}
       />
       <div
         data-ui
-        className={`fixed inset-y-0 right-0 w-full sm:w-[90vw] lg:w-[720px] max-w-[720px] bg-gradient-to-b from-neutral-950 via-neutral-950 to-black border-l border-white/10 shadow-2xl z-50 overflow-y-auto custom-scroll`}
+        className={`fixed bg-gradient-to-b from-neutral-950 via-neutral-950 to-black shadow-2xl z-50 overflow-y-auto custom-scroll
+          inset-x-0 bottom-0 h-[70vh] rounded-t-2xl border-t border-white/15
+          sm:inset-y-0 sm:right-0 sm:left-auto sm:bottom-auto sm:h-auto sm:rounded-none sm:border-t-0 sm:border-l sm:border-white/10
+          sm:w-[90vw] lg:w-[720px] sm:max-w-[720px]`}
       >
+      {/* Mobile drag handle */}
+      <div className="sm:hidden flex justify-center pt-2 pb-1">
+        <div className="w-10 h-1 rounded-full bg-white/30"></div>
+      </div>
       {/* Header */}
       <div className={`sticky top-0 z-10 bg-gradient-to-r ${accent.grad} to-neutral-950 backdrop-blur-xl border-b border-white/10`}>
         <div className="px-5 py-4 flex items-center justify-between">
