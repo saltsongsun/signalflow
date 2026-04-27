@@ -347,6 +347,20 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
         const defaults = DEFAULT_LAYERS.map(l => ({ ...l, id: `${l.id}_${projectId}`, project_id: projectId }));
         await (supabase as any).from('layers').insert(defaults);
         loadedLayers = defaults as any;
+      } else {
+        // 기존 프로젝트에 Power/Network 레이어가 없으면 추가
+        const hasName = (n: string) => loadedLayers.some(l => (l.name ?? '').toLowerCase() === n.toLowerCase());
+        const toAdd: Layer[] = [];
+        if (!hasName('Power') && !hasName('전력')) {
+          toAdd.push({ id: `layer_power_${projectId}`, name: 'Power', color: '#FACC15', visible: true, sort_order: 90, project_id: projectId } as any);
+        }
+        if (!hasName('Network') && !hasName('네트워크')) {
+          toAdd.push({ id: `layer_network_${projectId}`, name: 'Network', color: '#FFFFFF', visible: true, sort_order: 91, project_id: projectId } as any);
+        }
+        if (toAdd.length > 0) {
+          await (supabase as any).from('layers').insert(toAdd);
+          loadedLayers = [...loadedLayers, ...toAdd];
+        }
       }
       setLayers(loadedLayers);
       setRacks((rackRes.data ?? []) as Rack[]);
@@ -846,7 +860,13 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
 
       const fromLayerId = from.outputsMeta?.[c.from_port]?.layerId;
       const layerColor = fromLayerId ? layerById.get(fromLayerId)?.color : undefined;
-      const baseColor = layerColor ?? (from.type === 'audio' ? TYPE_COLORS.audio.main : from.type === 'combined' ? TYPE_COLORS.combined.main : TYPE_COLORS.video.main);
+      // 연결 타입에 따른 색상 우선 (POWER → 노랑, NETWORK → 흰색, SIGNAL → 회색)
+      let typeColor: string | undefined;
+      const connType = c.conn_type;
+      if (connType === 'POWER') typeColor = '#FACC15';        // 노랑
+      else if (connType === 'NETWORK') typeColor = '#FFFFFF'; // 흰색
+      else if (connType === 'SIGNAL')  typeColor = '#94A3B8'; // 일반 회색
+      const baseColor = typeColor ?? layerColor ?? (from.type === 'audio' ? TYPE_COLORS.audio.main : from.type === 'combined' ? TYPE_COLORS.combined.main : TYPE_COLORS.video.main);
       const isPgm = from.role === 'switcher' && from.pgmPort === c.from_port;
       const isPatch = c.is_patch === true;
       const isTraced = traced.connections.has(c.id);
@@ -2491,7 +2511,12 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
               const style = ct ? CONN_TYPE_STYLES[ct] : undefined;
               const fromLayerId = from.outputsMeta?.[c.from_port]?.layerId;
               const layerColor = fromLayerId ? layerById.get(fromLayerId)?.color : undefined;
-              const color = layerColor ?? (from.type === 'audio' ? TYPE_COLORS.audio.main : from.type === 'combined' ? TYPE_COLORS.combined.main : TYPE_COLORS.video.main);
+              // 연결 타입 우선 (POWER 노랑, NETWORK 흰색, SIGNAL 회색)
+              let typeColor: string | undefined;
+              if (ct === 'POWER') typeColor = '#FACC15';
+              else if (ct === 'NETWORK') typeColor = '#FFFFFF';
+              else if (ct === 'SIGNAL')  typeColor = '#94A3B8';
+              const color = typeColor ?? layerColor ?? (from.type === 'audio' ? TYPE_COLORS.audio.main : from.type === 'combined' ? TYPE_COLORS.combined.main : TYPE_COLORS.video.main);
               const isPgm = from.role === 'switcher' && from.pgmPort === c.from_port;
               const isPatch = c.is_patch === true;
               // 이 케이블에 실제 신호(source)가 흐르는지

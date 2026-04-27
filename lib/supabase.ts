@@ -329,8 +329,10 @@ export type Layer = {
 
 // 기본 레이어 (초기 시드용)
 export const DEFAULT_LAYERS: Layer[] = [
-  { id: 'layer_video',  name: 'Video',    color: '#3B82F6', visible: true, sort_order: 1 },
-  { id: 'layer_audio',  name: 'Audio',    color: '#EF4444', visible: true, sort_order: 2 },
-  { id: 'layer_tie',    name: 'Tie-Line', color: '#A855F7', visible: true, sort_order: 3 },
-  { id: 'layer_control',name: 'Control',  color: '#10B981', visible: true, sort_order: 4 },
+  { id: 'layer_video',   name: 'Video',    color: '#3B82F6', visible: true, sort_order: 1 },
+  { id: 'layer_audio',   name: 'Audio',    color: '#EF4444', visible: true, sort_order: 2 },
+  { id: 'layer_tie',     name: 'Tie-Line', color: '#A855F7', visible: true, sort_order: 3 },
+  { id: 'layer_control', name: 'Control',  color: '#10B981', visible: true, sort_order: 4 },
+  { id: 'layer_power',   name: 'Power',    color: '#FACC15', visible: true, sort_order: 5 },  // 노랑
+  { id: 'layer_network', name: 'Network',  color: '#FFFFFF', visible: true, sort_order: 6 },  // 흰색
 ];
