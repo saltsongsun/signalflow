@@ -226,6 +226,8 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   // 호환성을 위해 editMode는 'connect' 또는 'edit'일 때 true 처럼 동작
   type ViewMode = 'view' | 'connect' | 'edit';
   const [viewMode, setViewMode] = useState<ViewMode>('view');
+  // 아이콘 모드 — 모든 카드를 작게 압축 표시 (도면 한눈에 보기)
+  const [iconMode, setIconMode] = useState(false);
   const editMode = viewMode !== 'view';   // 기존 코드 호환
   const setEditMode = (b: boolean) => setViewMode(b ? 'edit' : 'view');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -2020,6 +2022,41 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
             title="레이어 관리"
           >⧉<span className="hidden sm:inline ml-1">레이어</span> <span className="font-mono opacity-70">{layers.filter(l => l.visible).length}/{layers.length}</span></button>
 
+          {/* 배경 이미지 잠금 토글 — 배경 있을 때만 */}
+          {currentProject?.background_image_url && (
+            <button
+              onClick={async () => {
+                if (!currentProject) return;
+                const newLocked = !(currentProject.background_locked ?? false);
+                await (supabase as any).from('projects').update({
+                  background_locked: newLocked,
+                }).eq('id', currentProject.id);
+                setCurrentProject({ ...currentProject, background_locked: newLocked });
+              }}
+              className={`px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border whitespace-nowrap shrink-0 ${
+                currentProject.background_locked
+                  ? 'bg-amber-500/20 border-amber-500/40 text-amber-200 hover:bg-amber-500/30'
+                  : 'bg-emerald-500/20 border-emerald-500/40 text-emerald-200 hover:bg-emerald-500/30'
+              }`}
+              title={currentProject.background_locked ? '배경 잠금됨 (클릭하여 해제)' : '배경 편집 가능 (클릭하여 잠금)'}
+            >
+              {currentProject.background_locked ? '🔒' : '🔓'}<span className="hidden sm:inline ml-1">배경</span>
+            </button>
+          )}
+
+          {/* 아이콘 모드 토글 — 모든 카드를 작게 압축 */}
+          <button
+            onClick={() => setIconMode(m => !m)}
+            className={`px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border whitespace-nowrap shrink-0 ${
+              iconMode
+                ? 'bg-gradient-to-r from-pink-500 to-purple-500 text-white border-pink-400 shadow-md shadow-pink-500/30'
+                : 'bg-white/5 border-white/10 text-neutral-300 hover:text-white hover:bg-white/10'
+            }`}
+            title={iconMode ? '아이콘 모드 켜짐 — 카드 압축 표시. 클릭하여 해제' : '아이콘 모드 — 모든 카드를 작은 아이콘으로 표시 (도면 한눈에 보기)'}
+          >
+            {iconMode ? '🔍' : '🗺'}<span className="hidden sm:inline ml-1">{iconMode ? '상세' : '아이콘'}</span>
+          </button>
+
           <button
             onClick={() => setShowPatchbayMgr(true)}
             className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border bg-white/5 border-teal-500/30 text-teal-300 hover:text-white hover:bg-teal-500/20 whitespace-nowrap shrink-0"
@@ -2709,6 +2746,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
               <div key={d.id} style={{ display: 'contents' }}>
               <div
                 data-device-id={d.id}
+                data-icon-mode={iconMode ? '1' : '0'}
                 onMouseDown={e => onDeviceMouseDown(e, d)}
                 onTouchStart={e => {
                   if (e.touches.length !== 1) return;
@@ -2725,15 +2763,18 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                 onClick={e => onDeviceClickView(e, d)}
                 className={`absolute rounded-xl overflow-hidden ${isSelected ? 'device-selected' : ''}`}
                 style={(() => {
-                  const useBaseW = w;
-                  const useBaseH = h;
+                  // 아이콘 모드: 가로 96px, 세로 자동 (헤더만)
+                  const useBaseW = iconMode ? 96 : w;
+                  const useBaseH = iconMode ? 36 : h;
                   const finalTransform = '';
 
                   const isRouterRole = role === 'router';
 
                   return {
                     left: d.x, top: d.y,
-                    width: useBaseW, minHeight: useBaseH,
+                    width: useBaseW,
+                    minHeight: useBaseH,
+                    ...(iconMode ? { maxHeight: useBaseH, height: useBaseH } : {}),
                     background: isPatchbay ? 'rgba(10,14,14,0.95)'
                       : isWallbox ? 'rgba(14,12,8,0.95)'
                       : isRouterRole ? 'rgba(14,10,6,0.95)'

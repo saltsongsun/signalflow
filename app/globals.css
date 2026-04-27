@@ -143,3 +143,42 @@ body.is-dragging [class*="backdrop-blur"] {
 .overload-text-blink {
   animation: overload-text-blink 0.7s steps(1, end) infinite;
 }
+
+/* 아이콘 모드 — 카드를 작은 박스로 압축. 헤더만 남김 */
+[data-device-id][data-icon-mode="1"] {
+  overflow: hidden;
+}
+/* 헤더 첫 자식만 보임. 나머지 미니뷰는 모두 숨김 */
+[data-device-id][data-icon-mode="1"] > div > div:not(:first-child),
+[data-device-id][data-icon-mode="1"] > div > section,
+[data-device-id][data-icon-mode="1"] > div > .panel-mini,
+[data-device-id][data-icon-mode="1"] > div > svg {
+  display: none !important;
+}
+/* 헤더 자체도 짧게 */
+[data-device-id][data-icon-mode="1"] > div:first-child {
+  padding: 4px 8px !important;
+  min-height: 0 !important;
+  max-height: 36px !important;
+}
+[data-device-id][data-icon-mode="1"] > div:first-child > div {
+  font-size: 10px !important;
+  line-height: 1.1 !important;
+}
+[data-device-id][data-icon-mode="1"] > div:first-child .text-\[14px\],
+[data-device-id][data-icon-mode="1"] > div:first-child .text-\[13px\],
+[data-device-id][data-icon-mode="1"] > div:first-child .text-base,
+[data-device-id][data-icon-mode="1"] > div:first-child .text-sm {
+  font-size: 11px !important;
+}
+[data-device-id][data-icon-mode="1"] > div:first-child .text-\[10\.5px\],
+[data-device-id][data-icon-mode="1"] > div:first-child .text-\[10px\],
+[data-device-id][data-icon-mode="1"] > div:first-child .text-\[9px\],
+[data-device-id][data-icon-mode="1"] > div:first-child .text-\[9\.5px\],
+[data-device-id][data-icon-mode="1"] > div:first-child .text-xs {
+  display: none !important;
+}
+/* 외부 핸들/포트 라벨 등도 숨김 (절대 위치 자식들) */
+[data-icon-mode="1"][data-device-id] ~ * {
+  /* 형제 마커 등 — 영향 적음 */
+}
