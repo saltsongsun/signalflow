@@ -105,7 +105,7 @@ export default function ProjectSettingsModal({ project, onClose, onSaved }: Prop
   const handleSave = async () => {
     setSaving(true);
     try {
-      const updates: Partial<Project> = {
+      const fullUpdates: Record<string, any> = {
         name: name.trim() || project.name,
         description: description.trim() || undefined,
         category,
@@ -123,12 +123,36 @@ export default function ProjectSettingsModal({ project, onClose, onSaved }: Prop
         background_width: backgroundWidth ? parseFloat(backgroundWidth) : project.background_width,
         background_height: backgroundHeight ? parseFloat(backgroundHeight) : project.background_height,
         background_keep_aspect: keepAspectRatio,
-      };
-      await (supabase as any).from('projects').update({
-        ...updates,
         updated_at: new Date().toISOString(),
-      }).eq('id', project.id);
-      onSaved({ ...project, ...updates });
+      };
+
+      // 누락 컬럼 자동 제외 후 재시도 (최대 15회)
+      const trySave = async (payload: Record<string, any>, removed: string[] = []): Promise<{ ok: boolean; removed: string[]; err?: any }> => {
+        if (removed.length > 15) return { ok: false, removed, err: new Error('너무 많은 컬럼 누락') };
+        const { error } = await (supabase as any).from('projects').update(payload).eq('id', project.id);
+        if (!error) return { ok: true, removed };
+        const msg = String(error.message ?? '');
+        const m = msg.match(/Could not find the '(\w+)' column/);
+        if (m) {
+          const missing = m[1];
+          const next = { ...payload };
+          delete next[missing];
+          return trySave(next, [...removed, missing]);
+        }
+        return { ok: false, removed, err: error };
+      };
+
+      const result = await trySave(fullUpdates);
+      if (!result.ok) {
+        console.error('[Project] 저장 실패:', result.err);
+        alert('프로젝트 저장 실패: ' + (result.err?.message ?? '알 수 없는 오류'));
+        return;
+      }
+      if (result.removed.length > 0) {
+        console.warn('[Project] 다음 컬럼 누락 — supabase/schema.sql 실행 필요:', result.removed);
+      }
+      // onSaved에는 모든 필드 반영 (DB에 없어도 클라이언트 state는 일관성 유지)
+      onSaved({ ...project, ...fullUpdates } as any);
     } catch (err) {
       console.error(err);
       alert('저장 실패: ' + (err as any)?.message);

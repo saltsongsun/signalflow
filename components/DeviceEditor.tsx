@@ -327,7 +327,7 @@ export default function DeviceEditor({ device, layers, allDevices, enabledRoles,
         onTouchStart={e => e.stopPropagation()}
         onTouchMove={e => e.stopPropagation()}
         onTouchEnd={e => e.stopPropagation()}
-        className={`fixed bg-gradient-to-b from-neutral-950 via-neutral-950 to-black shadow-2xl z-50 flex flex-col
+        className={`fixed bg-gradient-to-b from-neutral-950 via-neutral-950 to-black shadow-2xl z-50 flex flex-col overflow-hidden
           inset-x-0 bottom-0 ${mobileExpanded ? 'h-[95vh]' : 'h-[70vh]'} rounded-t-2xl border-t border-white/15 transition-[height] duration-200
           sm:inset-y-0 sm:right-0 sm:left-auto sm:bottom-auto sm:h-auto sm:rounded-none sm:border-t-0 sm:border-l sm:border-white/10
           sm:w-[90vw] lg:w-[720px] sm:max-w-[720px]`}
@@ -356,11 +356,13 @@ export default function DeviceEditor({ device, layers, allDevices, enabledRoles,
 
       {/* 스크롤 영역 (flex-1로 남는 공간 차지, 자체 스크롤) */}
       <div
-        className="flex-1 overflow-y-auto custom-scroll"
+        className="flex-1 overflow-y-scroll custom-scroll"
         style={{
           WebkitOverflowScrolling: 'touch',
           touchAction: 'pan-y',
           overscrollBehavior: 'contain',
+          minHeight: 0,            // flex 자식 내부 overflow 작동 필수
+          maxHeight: '100%',
         }}
       >
       <div className="p-5 space-y-5">
