@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { supabase, Device, Connection, ConnectionType, Layer, DEFAULT_LAYERS, DEVICE_ROLE_LABELS, Rack, MULTIVIEW_LAYOUTS, MultiviewLayoutId, Project, CONNECTION_TYPE_COLORS } from '../lib/supabase';
 import { INITIAL_DEVICES, INITIAL_CONNECTIONS, TYPE_COLORS, CONN_TYPE_STYLES } from '../lib/initialData';
 import DeviceEditor from './DeviceEditor';
@@ -1112,29 +1113,33 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
           const ids = p.dragIds ?? [];
           let finalPositions: Record<string, {x:number;y:number}> = {};
           if (origs) {
-            // 현재 DOM에서 위치 읽어 commit
+            // dragOffsetRef의 정확한 worldDx/Dy를 사용 (DOM에서 읽지 않고)
+            const dragOff = dragOffsetRef.current;
+            const wDx = dragOff?.worldDx ?? 0;
+            const wDy = dragOff?.worldDy ?? 0;
             ids.forEach(id => {
-              const el = document.querySelector(`[data-device-id="${id}"]`) as HTMLElement | null;
-              if (el) {
+              const orig = origs[id];
+              if (orig) {
                 finalPositions[id] = {
-                  x: parseFloat(el.style.left) || origs[id]?.x || 0,
-                  y: parseFloat(el.style.top) || origs[id]?.y || 0,
+                  x: orig.x + wDx,
+                  y: orig.y + wDy,
                 };
               }
             });
-            // React state 업데이트 (최종 1회)
-            setDevices(prev => prev.map(dev =>
-              finalPositions[dev.id] ? { ...dev, ...finalPositions[dev.id] } : dev
-            ));
-          }
-          // setDevices가 실제로 commit된 다음 프레임에 dragOffset 해제
-          // (너무 일찍 해제하면 Canvas가 old devices + no dragOffset 상태에서 깜빡임)
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              dragOffsetRef.current = null;
-              connectionCanvasRef.current?.updateDragOffset(null);
+            // React state 업데이트 — flushSync로 commit 강제 (Canvas와 동기화)
+            // setDevices 후 React 렌더 commit이 끝나야 새 cables가 계산되어 ConnectionCanvas가 새 좌표로 그림
+            flushSync(() => {
+              setDevices(prev => prev.map(dev =>
+                finalPositions[dev.id] ? { ...dev, ...finalPositions[dev.id] } : dev
+              ));
             });
-          });
+            // 이제 React가 commit 끝났으니 dragOffset 즉시 해제 가능 — race 없음
+            dragOffsetRef.current = null;
+            connectionCanvasRef.current?.updateDragOffset(null);
+          } else {
+            dragOffsetRef.current = null;
+            connectionCanvasRef.current?.updateDragOffset(null);
+          }
           // DB 저장
           const saves = Object.entries(finalPositions).map(([id, pos]) =>
             (supabase as any).from('devices').update({ x: pos.x, y: pos.y }).eq('id', id)
