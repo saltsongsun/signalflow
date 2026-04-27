@@ -1192,13 +1192,18 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     const onTouchMove = (e: TouchEvent) => {
       if (pinchRef.current.active) return;
       if (e.touches.length !== 1) return;
+      // 모달/UI 영역 안이면 도면 핸들링 무시 — 모달 자체 스크롤이 동작하도록
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.('[data-ui]')) return;
       const t = e.touches[0];
       // 캔버스 또는 장비 위 팬/드래그 중이면 기본 스크롤 방지
       if (pointerRef.current.type !== 'none') e.preventDefault();
       onMove({ clientX: t.clientX, clientY: t.clientY } as unknown as MouseEvent);
     };
-    const onTouchEnd = (_e: TouchEvent) => {
+    const onTouchEnd = (e: TouchEvent) => {
       if (pinchRef.current.active) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.('[data-ui]')) return;
       onUp();
     };
     window.addEventListener('touchmove', onTouchMove, { passive: false });

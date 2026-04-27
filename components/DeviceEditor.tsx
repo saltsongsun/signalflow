@@ -324,26 +324,24 @@ export default function DeviceEditor({ device, layers, allDevices, enabledRoles,
       />
       <div
         data-ui
-        className={`fixed bg-gradient-to-b from-neutral-950 via-neutral-950 to-black shadow-2xl z-50 overflow-y-auto custom-scroll
+        onTouchStart={e => e.stopPropagation()}
+        onTouchMove={e => e.stopPropagation()}
+        onTouchEnd={e => e.stopPropagation()}
+        className={`fixed bg-gradient-to-b from-neutral-950 via-neutral-950 to-black shadow-2xl z-50 flex flex-col
           inset-x-0 bottom-0 ${mobileExpanded ? 'h-[95vh]' : 'h-[70vh]'} rounded-t-2xl border-t border-white/15 transition-[height] duration-200
           sm:inset-y-0 sm:right-0 sm:left-auto sm:bottom-auto sm:h-auto sm:rounded-none sm:border-t-0 sm:border-l sm:border-white/10
           sm:w-[90vw] lg:w-[720px] sm:max-w-[720px]`}
-        style={{
-          WebkitOverflowScrolling: 'touch',
-          touchAction: 'pan-y',
-          overscrollBehavior: 'contain',
-        }}
       >
-      {/* Mobile drag handle — 탭하면 확대/축소 토글 */}
+      {/* Mobile drag handle — 탭하면 확대/축소 토글 (고정) */}
       <button
         onClick={() => setMobileExpanded(s => !s)}
-        className="sm:hidden flex justify-center items-center pt-3 pb-2 w-full sticky top-0 z-20 bg-gradient-to-b from-neutral-950 to-transparent"
+        className="sm:hidden flex justify-center items-center pt-3 pb-2 w-full shrink-0 bg-gradient-to-b from-neutral-950 to-transparent"
         title={mobileExpanded ? '축소' : '확대'}
       >
         <div className={`w-12 h-1.5 rounded-full transition-colors ${mobileExpanded ? 'bg-amber-400' : 'bg-white/40'}`}></div>
       </button>
-      {/* Header */}
-      <div className={`sticky top-0 sm:top-0 z-10 bg-gradient-to-r ${accent.grad} to-neutral-950 backdrop-blur-xl border-b border-white/10`} style={{ marginTop: 0 }}>
+      {/* Header (고정) */}
+      <div className={`shrink-0 z-10 bg-gradient-to-r ${accent.grad} to-neutral-950 backdrop-blur-xl border-b border-white/10`}>
         <div className="px-5 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-1 h-8 rounded-full" style={{ background: `linear-gradient(180deg, ${accent.dot}, ${accent.dot}80)` }}></div>
@@ -356,6 +354,15 @@ export default function DeviceEditor({ device, layers, allDevices, enabledRoles,
         </div>
       </div>
 
+      {/* 스크롤 영역 (flex-1로 남는 공간 차지, 자체 스크롤) */}
+      <div
+        className="flex-1 overflow-y-auto custom-scroll"
+        style={{
+          WebkitOverflowScrolling: 'touch',
+          touchAction: 'pan-y',
+          overscrollBehavior: 'contain',
+        }}
+      >
       <div className="p-5 space-y-5">
         {/* Name */}
         {/* Name */}
@@ -1277,6 +1284,7 @@ export default function DeviceEditor({ device, layers, allDevices, enabledRoles,
           <button onClick={() => { if (confirm('정말 삭제?')) onDelete(); }}
             className="px-4 bg-rose-500/10 hover:bg-rose-500 text-rose-300 hover:text-white py-2.5 text-sm rounded-lg font-medium border border-rose-500/30 hover:border-rose-500 transition">삭제</button>
         </div>
+      </div>
       </div>
     </div>
     </>
