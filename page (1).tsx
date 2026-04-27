@@ -1,0 +1,145 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-sans: var(--font-inter), -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Pretendard', 'Apple SD Gothic Neo', Roboto, sans-serif;
+  --font-mono: var(--font-mono), 'SF Mono', Menlo, Monaco, Consolas, monospace;
+}
+
+html, body {
+  font-family: var(--font-sans);
+  font-feature-settings: "cv02","cv03","cv04","cv11","ss01";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.01em;
+}
+
+/* PWA/태블릿: 당겨 새로고침, overscroll 방지 */
+html, body {
+  overscroll-behavior: none;
+  overflow: hidden;
+  position: fixed;
+  width: 100%;
+  height: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Safe area 패딩용 */
+.safe-top    { padding-top: env(safe-area-inset-top); }
+.safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+
+/* 태블릿에서 버튼/아이콘 터치 타겟 */
+@media (pointer: coarse) {
+  button, [role="button"], select, input[type="checkbox"], input[type="radio"] {
+    min-height: 28px;
+  }
+}
+
+/* Horizontal scrollbar on toolbar */
+.scrollbar-thin::-webkit-scrollbar { height: 3px; width: 3px; }
+.scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+
+/* Monospace */
+.font-mono, code, kbd, pre {
+  font-family: var(--font-mono);
+  font-feature-settings: "zero", "ss01";
+}
+
+/* Scrollbars in the editor panel */
+.custom-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.custom-scroll::-webkit-scrollbar-track { background: transparent; }
+.custom-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 4px; }
+.custom-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.15); }
+
+/* Subtle animated grid */
+@keyframes drift {
+  0%   { background-position: 0 0; }
+  100% { background-position: 120px 120px; }
+}
+
+/* Device card shine */
+@keyframes shine {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
+}
+
+.device-selected::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent 0%, rgba(251,191,36,0.12) 50%, transparent 100%);
+  pointer-events: none;
+}
+
+/* 성능: 장비 카드 backdrop-filter 기본 OFF (드래그/비드래그 상관없이) */
+[class*="backdrop-blur"] {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* 성능: 호버 시 scale/translate 없음 — reflow 방지 */
+@media (hover: hover) {
+  button:hover {
+    /* hover:scale 클래스는 그대로 두되 transform 비활성 */
+  }
+}
+
+/* 장비 카드에 GPU 레이어 분리 힌트 */
+[data-device-id] {
+  will-change: transform;
+  contain: layout paint;
+}
+
+/* 드래그 중엔 성능을 위해 애니메이션 정지 */
+body.is-dragging .flow-line,
+body.is-dragging .device-selected::after,
+body.is-dragging .animate-pulse,
+body.is-dragging [class*="animate-pulse"] {
+  animation-play-state: paused !important;
+}
+body.is-dragging * {
+  transition: none !important;
+}
+/* 드래그 중 SVG 필터(glow) 제거 — 가장 비싼 연산 */
+body.is-dragging svg path {
+  filter: none !important;
+}
+body.is-dragging svg g[opacity] {
+  opacity: 1 !important;
+}
+/* 드래그 중 backdrop-filter blur 제거 (GPU 부담) */
+body.is-dragging [class*="backdrop-blur"] {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Signal flow animation — 점선이 출력 → 입력 방향으로 흐름 */
+@keyframes flow {
+  from { stroke-dashoffset: 0; }
+  to   { stroke-dashoffset: -36; }   /* -(6+12)*2 = -36 · dasharray 한 주기의 배수 */
+}
+
+.flow-line {
+  animation: flow 2.8s linear infinite;
+  animation-duration: inherit;
+  will-change: stroke-dashoffset;
+}
+
+/* 전력 과부하 깜박임 — 차단기/소비장비/카드 */
+@keyframes overload-blink {
+  0%, 49%   { background-color: rgba(244, 63, 94, 0.18); border-color: rgba(244, 63, 94, 0.5); box-shadow: 0 0 0 0 rgba(244, 63, 94, 0); }
+  50%, 100% { background-color: rgba(244, 63, 94, 0.55); border-color: rgba(244, 63, 94, 1);   box-shadow: 0 0 16px 4px rgba(244, 63, 94, 0.6); }
+}
+.overload-blink {
+  animation: overload-blink 0.7s steps(1, end) infinite;
+}
+@keyframes overload-text-blink {
+  0%, 49%   { color: rgba(248, 113, 113, 0.85); }
+  50%, 100% { color: rgba(255, 255, 255, 1); text-shadow: 0 0 8px rgba(244, 63, 94, 0.9); }
+}
+.overload-text-blink {
+  animation: overload-text-blink 0.7s steps(1, end) infinite;
+}
