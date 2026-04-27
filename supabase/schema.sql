@@ -89,6 +89,18 @@ alter table public.devices add column if not exists "ioBoxKind" text;
 alter table public.devices add column if not exists "ioBoxProtocol" text;
 alter table public.devices add column if not exists "ioBoxLinkedMixerId" text;
 alter table public.devices add column if not exists "ioBoxSlot" text;
+-- 전력 시스템
+alter table public.devices add column if not exists "breakers" jsonb;
+alter table public.devices add column if not exists "panelMainPhase" text;
+alter table public.devices add column if not exists "panelMainCapacity" integer;
+alter table public.devices add column if not exists "power" jsonb;
+-- 프로젝트 배경 이미지
+alter table public.projects add column if not exists "background_image_url" text;
+alter table public.projects add column if not exists "background_opacity" integer default 50;
+alter table public.projects add column if not exists "background_x" double precision default 0;
+alter table public.projects add column if not exists "background_y" double precision default 0;
+alter table public.projects add column if not exists "background_scale" double precision default 1;
+alter table public.projects add column if not exists "background_locked" boolean default false;
 alter table public.devices add column if not exists "groupId" text;
 alter table public.devices add column if not exists "groupName" text;
 alter table public.connections add column if not exists conn_type text;

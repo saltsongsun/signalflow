@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect } from 'react';
-import { Device, CONNECTION_TYPES, ConnectionType, PortInfo, Layer, DEVICE_ROLES, DEVICE_ROLE_LABELS, DeviceRole, MULTIVIEW_LAYOUTS, MultiviewLayoutId, IO_BOX_KIND_LABELS, IoBoxKind, IO_BOX_PROTOCOLS, IoBoxProtocol, supabase } from '../lib/supabase';
+import { Device, CONNECTION_TYPES, ConnectionType, PortInfo, Layer, DEVICE_ROLES, DEVICE_ROLE_LABELS, DeviceRole, MULTIVIEW_LAYOUTS, MultiviewLayoutId, IO_BOX_KIND_LABELS, IoBoxKind, IO_BOX_PROTOCOLS, IoBoxProtocol, PowerSpec, PhaseType, PHASE_LABELS, PHASE_VOLTAGE, supabase } from '../lib/supabase';
 
 type Props = {
   device: Device;
@@ -44,6 +44,11 @@ export default function DeviceEditor({ device, layers, allDevices, enabledRoles,
   const [ioBoxProtocol, setIoBoxProtocol] = useState<IoBoxProtocol>((device.ioBoxProtocol as IoBoxProtocol) ?? 'Dante');
   const [ioBoxLinkedMixerId, setIoBoxLinkedMixerId] = useState(device.ioBoxLinkedMixerId ?? '');
   const [ioBoxSlot, setIoBoxSlot] = useState(device.ioBoxSlot ?? '');
+  // 전력 (공급/소비)
+  const [powerWatts, setPowerWatts] = useState<string>(device.power?.watts !== undefined ? String(device.power.watts) : '');
+  const [powerAmps, setPowerAmps] = useState<string>(device.power?.amps !== undefined ? String(device.power.amps) : '');
+  const [powerPhase, setPowerPhase] = useState<PhaseType>(device.power?.phase ?? 'single');
+  const [powerVoltage, setPowerVoltage] = useState<string>(device.power?.voltage !== undefined ? String(device.power.voltage) : '');
   const [uploadingImage, setUploadingImage] = useState(false);
   const [uploadingAudio, setUploadingAudio] = useState(false);
   const [type, setType] = useState<Device['type']>(device.type);
@@ -79,6 +84,10 @@ export default function DeviceEditor({ device, layers, allDevices, enabledRoles,
     setIoBoxProtocol((device.ioBoxProtocol as IoBoxProtocol) ?? 'Dante');
     setIoBoxLinkedMixerId(device.ioBoxLinkedMixerId ?? '');
     setIoBoxSlot(device.ioBoxSlot ?? '');
+    setPowerWatts(device.power?.watts !== undefined ? String(device.power.watts) : '');
+    setPowerAmps(device.power?.amps !== undefined ? String(device.power.amps) : '');
+    setPowerPhase(device.power?.phase ?? 'single');
+    setPowerVoltage(device.power?.voltage !== undefined ? String(device.power.voltage) : '');
     setType(device.type);
     setRole(device.role ?? 'standard');
     setPgmPort(device.pgmPort ?? '');
@@ -184,6 +193,13 @@ export default function DeviceEditor({ device, layers, allDevices, enabledRoles,
       ioBoxProtocol: role === 'io_box' ? ioBoxProtocol : null,
       ioBoxLinkedMixerId: role === 'io_box' ? (ioBoxLinkedMixerId || null) : null,
       ioBoxSlot: role === 'io_box' ? (ioBoxSlot || null) : null,
+      power: (role === 'power_supply' || role === 'power_consumer') ? {
+        isSupply: role === 'power_supply',
+        phase: powerPhase,
+        voltage: powerVoltage ? parseFloat(powerVoltage) : PHASE_VOLTAGE[powerPhase],
+        watts: powerWatts ? parseFloat(powerWatts) : undefined,
+        amps: powerAmps ? parseFloat(powerAmps) : undefined,
+      } : null,
       type, role,
       pgmPort: role === 'switcher' ? (pgmPort || undefined) : undefined,
       normals: role === 'patchbay' ? normals : undefined,
@@ -884,6 +900,123 @@ export default function DeviceEditor({ device, layers, allDevices, enabledRoles,
             <div className="text-[10px] text-cyan-200/70 bg-cyan-500/5 border border-cyan-500/15 rounded p-2">
               💡 IN/OUT 단자는 위 <strong>입출력 포트</strong> 섹션에서 추가하세요. 패치/믹스 매트릭스는 연동된 콘솔의 에디터에서 설정합니다.
             </div>
+          </div>
+        )}
+
+        {/* 전력 (공급/소비) 전용 설정 */}
+        {(role === 'power_supply' || role === 'power_consumer') && (
+          <div className={`rounded-lg p-3 space-y-3 ${
+            role === 'power_supply'
+              ? 'bg-gradient-to-br from-yellow-500/10 to-transparent border border-yellow-500/25'
+              : 'bg-gradient-to-br from-orange-500/10 to-transparent border border-orange-500/25'
+          }`}>
+            <div className="flex items-center gap-2">
+              <span className="text-[15px]">{role === 'power_supply' ? '🔌' : '💡'}</span>
+              <div>
+                <div className={`text-[11px] font-bold ${role === 'power_supply' ? 'text-yellow-300' : 'text-orange-300'}`}>
+                  {role === 'power_supply' ? '전력 공급 장비' : '전력 소비 장비'}
+                </div>
+                <div className="text-[10px] text-neutral-500">
+                  {role === 'power_supply'
+                    ? 'UPS, 발전기, 한전 인입 등. 다른 장비에 전력을 공급함.'
+                    : '조명, 영상장비, 음향장비 등. 와트/암페어로 부하 계산.'}
+                </div>
+              </div>
+            </div>
+
+            {/* 상 / 전압 */}
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-neutral-500 font-semibold block mb-1">상</label>
+                <select
+                  value={powerPhase}
+                  onChange={e => {
+                    const p = e.target.value as PhaseType;
+                    setPowerPhase(p);
+                    // 상 변경 시 기본 전압도 자동 변경 (사용자가 따로 안 정했을 때)
+                    if (!powerVoltage || powerVoltage === String(PHASE_VOLTAGE.single) || powerVoltage === String(PHASE_VOLTAGE.three)) {
+                      setPowerVoltage(String(PHASE_VOLTAGE[p]));
+                    }
+                  }}
+                  className="w-full bg-neutral-900 border border-white/15 rounded px-2 py-1.5 text-[12px]"
+                >
+                  <option value="single">단상 220V</option>
+                  <option value="three">3상 380V</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-neutral-500 font-semibold block mb-1">전압 (V)</label>
+                <input
+                  type="number"
+                  value={powerVoltage}
+                  onChange={e => setPowerVoltage(e.target.value)}
+                  placeholder={String(PHASE_VOLTAGE[powerPhase])}
+                  className="w-full bg-neutral-900 border border-white/15 rounded px-2 py-1.5 text-[12px] font-mono"
+                />
+              </div>
+            </div>
+
+            {/* 와트/암페어 (소비 장비만 의미 있음) */}
+            {role === 'power_consumer' && (
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] uppercase tracking-wider text-neutral-500 font-semibold block mb-1">소비 전력 (W)</label>
+                  <input
+                    type="number"
+                    value={powerWatts}
+                    onChange={e => {
+                      setPowerWatts(e.target.value);
+                      // W 변경 → A 자동 계산
+                      if (e.target.value) {
+                        const v = parseFloat(powerVoltage) || PHASE_VOLTAGE[powerPhase];
+                        if (v > 0) setPowerAmps(((parseFloat(e.target.value) || 0) / v).toFixed(2));
+                      }
+                    }}
+                    placeholder="예: 100"
+                    className="w-full bg-neutral-900 border border-orange-500/30 rounded px-2 py-1.5 text-[12px] font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] uppercase tracking-wider text-neutral-500 font-semibold block mb-1">전류 (A)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={powerAmps}
+                    onChange={e => {
+                      setPowerAmps(e.target.value);
+                      // A 변경 → W 자동 계산
+                      if (e.target.value) {
+                        const v = parseFloat(powerVoltage) || PHASE_VOLTAGE[powerPhase];
+                        setPowerWatts(((parseFloat(e.target.value) || 0) * v).toFixed(0));
+                      }
+                    }}
+                    placeholder="자동 계산됨"
+                    className="w-full bg-neutral-900 border border-orange-500/30 rounded px-2 py-1.5 text-[12px] font-mono"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* 계산 결과 표시 */}
+            <div className={`text-[10.5px] font-mono rounded p-2 border ${
+              role === 'power_supply' ? 'bg-yellow-500/5 border-yellow-500/15 text-yellow-200' : 'bg-orange-500/5 border-orange-500/15 text-orange-200'
+            }`}>
+              💡 W = V × A
+              {powerWatts && (
+                <div className="mt-1">
+                  현재 설정: <span className="font-bold text-white">
+                    {parseFloat(powerWatts).toLocaleString()}W
+                  </span>
+                  <span className="opacity-70"> ({powerVoltage || PHASE_VOLTAGE[powerPhase]}V × {powerAmps || ((parseFloat(powerWatts) / (parseFloat(powerVoltage) || PHASE_VOLTAGE[powerPhase])).toFixed(2))}A)</span>
+                </div>
+              )}
+            </div>
+
+            {role === 'power_consumer' && (
+              <div className="text-[10px] text-orange-200/70 bg-orange-500/5 border border-orange-500/15 rounded p-2">
+                💡 이 장비의 IN 포트를 <strong>배전반의 OUT 포트</strong>(차단기 회로)에 연결하면 자동으로 부하 계산에 포함됩니다. 차단기 용량 초과시 도면에서 빨갛게 깜박입니다.
+              </div>
+            )}
           </div>
         )}
 

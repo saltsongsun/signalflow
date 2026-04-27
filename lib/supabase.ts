@@ -27,23 +27,28 @@ export type PortInfo = {
 // 장비 역할
 export const DEVICE_ROLES = [
   'standard', 'switcher', 'router', 'splitter', 'patchbay', 'wallbox',
-  'source', 'display', 'multiview', 'audio_mixer', 'io_box', 'connector',
+  'source', 'display', 'multiview', 'audio_mixer', 'io_box',
+  'panelboard', 'power_supply', 'power_consumer',
+  'connector',
 ] as const;
 export type DeviceRole = typeof DEVICE_ROLES[number];
 
 export const DEVICE_ROLE_LABELS: Record<DeviceRole, string> = {
-  standard:    '일반',
-  switcher:    '스위처',
-  router:      '라우터',
-  splitter:    '스플리터',
-  patchbay:    '패치베이',
-  wallbox:     '월박스',
-  source:      '소스',
-  display:     '디스플레이',
-  multiview:   '멀티뷰',
-  audio_mixer: '오디오 콘솔',
-  io_box:      'I/O 박스',
-  connector:   '연결',
+  standard:       '일반',
+  switcher:       '스위처',
+  router:         '라우터',
+  splitter:       '스플리터',
+  patchbay:       '패치베이',
+  wallbox:        '월박스',
+  source:         '소스',
+  display:        '디스플레이',
+  multiview:      '멀티뷰',
+  audio_mixer:    '오디오 콘솔',
+  io_box:         'I/O 박스',
+  panelboard:     '배전반',
+  power_supply:   '전력 공급',
+  power_consumer: '전력 소비',
+  connector:      '연결',
 };
 
 // I/O 박스 종류
@@ -58,6 +63,56 @@ export const IO_BOX_PROTOCOLS = [
   'Dante', 'MADI', 'AES50', 'REAC', 'SoundGrid', 'AVB', 'AES67', 'Cat6/Custom',
 ] as const;
 export type IoBoxProtocol = typeof IO_BOX_PROTOCOLS[number];
+
+// ============================================================
+// 전력 시스템 (배전반 / 차단기 / 공급·소비 장비)
+// ============================================================
+
+// 차단기 종류
+export type BreakerKind = 'MCCB' | 'ELCB';
+export const BREAKER_KIND_LABELS: Record<BreakerKind, string> = {
+  MCCB: '배선차단기 (MCCB)',
+  ELCB: '누전차단기 (ELCB)',
+};
+
+// 상 (위상)
+export type PhaseType = 'single' | 'three';
+export const PHASE_LABELS: Record<PhaseType, string> = {
+  single: '단상 220V',
+  three:  '3상 380V',
+};
+export const PHASE_VOLTAGE: Record<PhaseType, number> = {
+  single: 220,
+  three:  380,
+};
+
+// 차단기 용량 (A)
+export const BREAKER_CAPACITIES = [20, 30, 50, 75, 100] as const;
+export type BreakerCapacity = typeof BREAKER_CAPACITIES[number];
+
+// 차단기 1개 = 배전반 안의 회로 1개
+export type Breaker = {
+  id: string;          // 'br1', 'br2'... (배전반 내 unique)
+  name: string;        // 'Ch1', '조명-1F' 등
+  kind: BreakerKind;
+  phase: PhaseType;
+  capacityA: BreakerCapacity;
+  // 이 차단기에서 공급받는 IN 포트 이름 (배전반의 inputs[]에 매핑)
+  // 예: 'OUT-1' (배전반의 OUT 포트와 연결된 소비 장비들의 합산 부하)
+  outputPort?: string;  // 이 차단기가 출력으로 사용하는 배전반 OUT 포트
+  color?: string;
+};
+
+// 전력 사양 (공급/소비 장비)
+export type PowerSpec = {
+  // 공급 장비: 단순 정보. 소비 장비: 실제 부하 계산에 사용.
+  watts?: number;       // 와트 (W) — 직접 입력
+  amps?: number;        // 전류 (A) — W = V × A 역산 가능
+  phase?: PhaseType;    // 단상/3상
+  voltage?: number;     // 직접 지정 (없으면 phase에서 계산)
+  isSupply?: boolean;   // true = 공급(전력회사/UPS 등), false = 소비
+};
+
 
 // ===== 프로젝트 =====
 export type ProjectCategory = 'broadcast' | 'audio' | 'general' | 'custom';
@@ -87,6 +142,13 @@ export type Project = {
   icon?: string;
   terminology?: Record<string, string>;  // 라벨 오버라이드
   enabled_roles?: DeviceRole[];           // 비어있으면 전체 활성
+  // 배경 이미지 (도면 위에 깔리는 참조 이미지)
+  background_image_url?: string;
+  background_opacity?: number;     // 0~100
+  background_x?: number;
+  background_y?: number;
+  background_scale?: number;       // 1.0 = 100%
+  background_locked?: boolean;     // true면 이미지 이동/리사이즈 방지
   created_at?: string;
   updated_at?: string;
 };
@@ -211,6 +273,13 @@ export type Device = {
   ioBoxProtocol?: IoBoxProtocol;  // 'Dante', 'MADI' 등
   ioBoxLinkedMixerId?: string;    // 연동된 콘솔 ID (콘솔의 input pool로 편입)
   ioBoxSlot?: string;             // 옵션카드: 콘솔의 슬롯 번호 (예: 'Slot A')
+
+  // 배전반 전용
+  breakers?: Breaker[];           // 차단기 목록
+  panelMainPhase?: PhaseType;     // 메인 인입 상 (단상/3상)
+  panelMainCapacity?: BreakerCapacity;  // 메인 차단기 용량
+  // 전력 공급/소비 장비 전용
+  power?: PowerSpec;
   // 그룹화
   groupId?: string;    // 같은 그룹끼리는 동일 id
   groupName?: string;  // 그룹 표시명 (같은 groupId면 동일)

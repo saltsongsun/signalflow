@@ -127,3 +127,19 @@ body.is-dragging [class*="backdrop-blur"] {
   animation-duration: inherit;
   will-change: stroke-dashoffset;
 }
+
+/* 전력 과부하 깜박임 — 차단기/소비장비/카드 */
+@keyframes overload-blink {
+  0%, 49%   { background-color: rgba(244, 63, 94, 0.18); border-color: rgba(244, 63, 94, 0.5); box-shadow: 0 0 0 0 rgba(244, 63, 94, 0); }
+  50%, 100% { background-color: rgba(244, 63, 94, 0.55); border-color: rgba(244, 63, 94, 1);   box-shadow: 0 0 16px 4px rgba(244, 63, 94, 0.6); }
+}
+.overload-blink {
+  animation: overload-blink 0.7s steps(1, end) infinite;
+}
+@keyframes overload-text-blink {
+  0%, 49%   { color: rgba(248, 113, 113, 0.85); }
+  50%, 100% { color: rgba(255, 255, 255, 1); text-shadow: 0 0 8px rgba(244, 63, 94, 0.9); }
+}
+.overload-text-blink {
+  animation: overload-text-blink 0.7s steps(1, end) infinite;
+}

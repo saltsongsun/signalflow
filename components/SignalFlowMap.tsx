@@ -11,6 +11,9 @@ import BulkEditor from './BulkEditor';
 import ConnectionCanvas from './ConnectionCanvas';
 import AudioMixerEditor from './AudioMixerEditor';
 import ProjectSettingsModal from './ProjectSettingsModal';
+import PanelboardEditor from './PanelboardEditor';
+import BackgroundImageLayer from './BackgroundImageLayer';
+import { computeBreakerLoad, deviceWatts, deviceAmps, breakerCapacityWatts, formatWatts, formatAmps } from '../lib/powerCalc';
 
 type TraceMode = 'both' | 'upstream' | 'downstream';
 
@@ -183,7 +186,19 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   const projectId = project?.id ?? 'default';
   // 프로젝트 메타는 편집 가능하므로 로컬 state로 관리
   const [currentProject, setCurrentProject] = useState<Project | null>(project ?? null);
+
+  // currentProject 변경 시 배경 이미지 transform 동기화
+  useEffect(() => {
+    setBgImgX(currentProject?.background_x ?? 0);
+    setBgImgY(currentProject?.background_y ?? 0);
+    setBgImgScale(currentProject?.background_scale ?? 1);
+  }, [currentProject?.id, currentProject?.background_x, currentProject?.background_y, currentProject?.background_scale]);
   const [showProjectSettings, setShowProjectSettings] = useState(false);
+  // 배경 이미지 transform — currentProject에서 초기화, 드래그/리사이즈 시 업데이트
+  const [bgImgX, setBgImgX] = useState<number>(0);
+  const [bgImgY, setBgImgY] = useState<number>(0);
+  const [bgImgScale, setBgImgScale] = useState<number>(1);
+  const [bgImgNaturalSize, setBgImgNaturalSize] = useState<{ w: number; h: number } | null>(null);
   // 용어 오버라이드 — t('PGM') 식으로 사용. 정의 안 되어 있으면 원본 반환.
   const terminology = currentProject?.terminology ?? {};
   const t = (key: string): string => terminology[key] ?? key;
@@ -210,6 +225,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   const [hidePatchbay, setHidePatchbay] = useState<boolean>(true);
   const [editingDevice, setEditingDevice] = useState<Device | null>(null);
   const [editingMixer, setEditingMixer] = useState<Device | null>(null);
+  const [editingPanel, setEditingPanel] = useState<Device | null>(null);
   const [editingCable, setEditingCable] = useState<Connection | null>(null);
   const [showLayerPanel, setShowLayerPanel] = useState(false);
   const [showPatchbayMgr, setShowPatchbayMgr] = useState(false);
@@ -373,6 +389,34 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   }, [projectId]);
 
   const devById = useMemo(() => new Map(devices.map(d => [d.id, d])), [devices]);
+
+  // ===== 전력 과부하 추적 =====
+  // breakerLoads: panelboardId → breakerId → BreakerLoad
+  // overloadConsumerIds: 과부하 차단기에 연결된 모든 소비 장비 ID
+  const { breakerLoads, overloadPanelIds, overloadConsumerIds } = useMemo(() => {
+    const loadMap = new Map<string, Map<string, ReturnType<typeof computeBreakerLoad>>>();
+    const overloadPanels = new Set<string>();
+    const overloadConsumers = new Set<string>();
+    devices.forEach(panel => {
+      if (panel.role !== 'panelboard') return;
+      if (!panel.breakers || panel.breakers.length === 0) return;
+      const inner = new Map<string, ReturnType<typeof computeBreakerLoad>>();
+      panel.breakers.forEach(br => {
+        const load = computeBreakerLoad(panel, br, devices, connections as any);
+        inner.set(br.id, load);
+        if (load.overload) {
+          overloadPanels.add(panel.id);
+          load.consumers.forEach(c => overloadConsumers.add(c.id));
+        }
+      });
+      loadMap.set(panel.id, inner);
+    });
+    return {
+      breakerLoads: loadMap,
+      overloadPanelIds: overloadPanels,
+      overloadConsumerIds: overloadConsumers,
+    };
+  }, [devices, connections]);
 
   // 허브(패치베이/라우터/스위처) IN → OUT 매핑 (traced 추적에 사용)
   // 스위처: selectedInput이 모든 OUT으로 (다른 IN은 매핑 없음 = 신호 흐르지 않음)
@@ -1044,6 +1088,8 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                 setSelectedIds(new Set(groupMates));
                 if (clickedDev.role === 'audio_mixer') {
                   setEditingMixer(clickedDev);
+                } else if (clickedDev.role === 'panelboard') {
+                  setEditingPanel(clickedDev);
                 } else {
                   setEditingDevice(clickedDev);
                 }
@@ -1489,6 +1535,75 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     await (supabase as any).from('devices').insert(d);
     pushUndo(`${kind === 'stagebox' ? '스테이지박스' : '옵션카드'} 추가 되돌리기`, async () => {
       await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
+      await (supabase as any).from('devices').delete().eq('id', id);
+    });
+    setEditingDevice(d);
+  };
+
+  // 배전반 추가
+  const handleAddPanelboard = async () => {
+    const id = `pnl_${Date.now().toString(36)}`;
+    const powerLayer = layers.find(l => (l.name ?? '').toLowerCase().includes('power') || (l.name ?? '').includes('전력'))?.id ?? layers[0]?.id ?? 'layer_video';
+    const d: Device = {
+      id, name: '배전반', type: 'audio', role: 'panelboard',
+      x: (-offset.x + 400) / scale, y: (-offset.y + 200) / scale,
+      width: 260,
+      inputs: ['MAIN-IN'], outputs: [],
+      inputsMeta: { 'MAIN-IN': { name: 'MAIN-IN', layerId: powerLayer, connType: 'POWER' as any, label: '메인 인입' } },
+      outputsMeta: {},
+      panelMainPhase: 'three',
+      panelMainCapacity: 100,
+      breakers: [],
+      physPorts: {}, routing: {},
+      project_id: projectId,
+    };
+    await (supabase as any).from('devices').insert(d);
+    pushUndo('배전반 추가 되돌리기', async () => {
+      await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
+      await (supabase as any).from('devices').delete().eq('id', id);
+    });
+    setEditingPanel(d);
+  };
+
+  // 전력 공급 장비
+  const handleAddPowerSupply = async () => {
+    const id = `psu_${Date.now().toString(36)}`;
+    const powerLayer = layers.find(l => (l.name ?? '').toLowerCase().includes('power') || (l.name ?? '').includes('전력'))?.id ?? layers[0]?.id ?? 'layer_video';
+    const d: Device = {
+      id, name: '전력 공급', type: 'audio', role: 'power_supply',
+      x: (-offset.x + 400) / scale, y: (-offset.y + 200) / scale,
+      width: 200,
+      inputs: [], outputs: ['OUT-1'],
+      inputsMeta: {},
+      outputsMeta: { 'OUT-1': { name: 'OUT-1', layerId: powerLayer, connType: 'POWER' as any } },
+      power: { isSupply: true, phase: 'three', voltage: 380 },
+      physPorts: {}, routing: {},
+      project_id: projectId,
+    };
+    await (supabase as any).from('devices').insert(d);
+    pushUndo('전력 공급 추가 되돌리기', async () => {
+      await (supabase as any).from('devices').delete().eq('id', id);
+    });
+    setEditingDevice(d);
+  };
+
+  // 전력 소비 장비
+  const handleAddPowerConsumer = async () => {
+    const id = `pcs_${Date.now().toString(36)}`;
+    const powerLayer = layers.find(l => (l.name ?? '').toLowerCase().includes('power') || (l.name ?? '').includes('전력'))?.id ?? layers[0]?.id ?? 'layer_video';
+    const d: Device = {
+      id, name: '전력 소비', type: 'audio', role: 'power_consumer',
+      x: (-offset.x + 400) / scale, y: (-offset.y + 200) / scale,
+      width: 180,
+      inputs: ['IN-1'], outputs: [],
+      inputsMeta: { 'IN-1': { name: 'IN-1', layerId: powerLayer, connType: 'POWER' as any } },
+      outputsMeta: {},
+      power: { isSupply: false, phase: 'single', voltage: 220, watts: 100 },
+      physPorts: {}, routing: {},
+      project_id: projectId,
+    };
+    await (supabase as any).from('devices').insert(d);
+    pushUndo('전력 소비 추가 되돌리기', async () => {
       await (supabase as any).from('devices').delete().eq('id', id);
     });
     setEditingDevice(d);
@@ -1985,6 +2100,18 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                     className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-teal-500 to-teal-600 hover:from-teal-400 hover:to-teal-500 text-white shadow-md shadow-teal-500/30 whitespace-nowrap shrink-0" title="옵션카드 추가 (콘솔 슬롯에 내장)">🃏<span className="hidden sm:inline ml-1">{t('옵션카드')}</span></button>
                 </>
               )}
+              {isRoleEnabled('panelboard') && (
+                <button onClick={handleAddPanelboard}
+                  className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-white shadow-md shadow-amber-500/30 whitespace-nowrap shrink-0" title="배전반 추가">⚡<span className="hidden sm:inline ml-1">{t('배전반')}</span></button>
+              )}
+              {isRoleEnabled('power_supply') && (
+                <button onClick={handleAddPowerSupply}
+                  className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-yellow-500 to-amber-500 hover:from-yellow-400 hover:to-amber-400 text-white shadow-md shadow-yellow-500/30 whitespace-nowrap shrink-0" title="전력 공급 장비 추가">🔌<span className="hidden sm:inline ml-1">{t('공급')}</span></button>
+              )}
+              {isRoleEnabled('power_consumer') && (
+                <button onClick={handleAddPowerConsumer}
+                  className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-400 hover:to-red-400 text-white shadow-md shadow-orange-500/30 whitespace-nowrap shrink-0" title="전력 소비 장비 추가">💡<span className="hidden sm:inline ml-1">{t('소비')}</span></button>
+              )}
               {selectedIds.size > 0 && (
                 <>
                   <div className="px-2.5 py-1 text-[11px] rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 font-medium">
@@ -2140,6 +2267,31 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
         </div>
 
         <div style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`, transformOrigin: '0 0', width: '4000px', height: '3000px', position: 'relative' }}>
+          {/* 배경 이미지 — 도면 위에 깔리는 참조 이미지 */}
+          {currentProject?.background_image_url && (
+            <BackgroundImageLayer
+              src={currentProject.background_image_url}
+              opacity={currentProject.background_opacity ?? 50}
+              x={bgImgX}
+              y={bgImgY}
+              scale={bgImgScale}
+              locked={currentProject.background_locked ?? false}
+              onMove={(nx, ny) => { setBgImgX(nx); setBgImgY(ny); }}
+              onScale={(s) => setBgImgScale(s)}
+              onCommit={async () => {
+                if (!currentProject) return;
+                await (supabase as any).from('projects').update({
+                  background_x: bgImgX,
+                  background_y: bgImgY,
+                  background_scale: bgImgScale,
+                }).eq('id', currentProject.id);
+                setCurrentProject({ ...currentProject, background_x: bgImgX, background_y: bgImgY, background_scale: bgImgScale });
+              }}
+              onNaturalSize={setBgImgNaturalSize}
+              naturalSize={bgImgNaturalSize}
+            />
+          )}
+
           {/* Connections */}
           <svg width="4000" height="3000" className="absolute inset-0" style={{ overflow: 'visible', pointerEvents: 'none' }}>
             <defs>
@@ -2462,6 +2614,9 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
               : role === 'multiview' ? '▦'
               : role === 'audio_mixer' ? '🎛'
               : role === 'io_box' ? '📦'
+              : role === 'panelboard' ? '⚡'
+              : role === 'power_supply' ? '🔌'
+              : role === 'power_consumer' ? '💡'
               : role === 'connector' ? '━'
               : null;
             const isPatchbay = role === 'patchbay';
@@ -2471,6 +2626,9 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
             const isMultiview = role === 'multiview';
             const isAudioMixer = role === 'audio_mixer';
             const isIoBox = role === 'io_box';
+            const isPanelboard = role === 'panelboard';
+            const isPowerSupply = role === 'power_supply';
+            const isPowerConsumer = role === 'power_consumer';
             const currentDisplaySource = isDisplay ? displaySources.get(d.id) : undefined;
 
             // 이 장비의 IN 포트에 연결된 hub (precomputed)
@@ -2562,6 +2720,9 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                               : isMultiview ? 'rgba(139,92,246,0.18)'
                               : isAudioMixer ? 'rgba(244,63,94,0.18)'
                               : isIoBox ? 'rgba(34,211,238,0.18)'
+                              : isPanelboard ? 'rgba(245,158,11,0.2)'
+                              : isPowerSupply ? 'rgba(234,179,8,0.2)'
+                              : isPowerConsumer ? 'rgba(249,115,22,0.2)'
                               : isSource ? 'rgba(132,204,22,0.2)'
                               : isDisplay ? 'rgba(14,165,233,0.18)'
                               : role === 'connector' ? 'rgba(148,163,184,0.15)'
@@ -2573,6 +2734,9 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                               : isMultiview ? '#A78BFA'
                               : isAudioMixer ? '#FB7185'
                               : isIoBox ? '#22D3EE'
+                              : isPanelboard ? '#FBBF24'
+                              : isPowerSupply ? '#FACC15'
+                              : isPowerConsumer ? '#FB923C'
                               : isSource ? '#A3E635'
                               : isDisplay ? '#38BDF8'
                               : role === 'connector' ? '#CBD5E1'
@@ -2584,6 +2748,9 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                               : isMultiview ? 'rgba(167,139,250,0.45)'
                               : isAudioMixer ? 'rgba(251,113,133,0.45)'
                               : isIoBox ? 'rgba(34,211,238,0.45)'
+                              : isPanelboard ? 'rgba(251,191,36,0.5)'
+                              : isPowerSupply ? 'rgba(250,204,21,0.5)'
+                              : isPowerConsumer ? 'rgba(251,146,60,0.5)'
                               : isSource ? 'rgba(163,230,53,0.4)'
                               : isDisplay ? 'rgba(56,189,248,0.4)'
                               : role === 'connector' ? 'rgba(203,213,225,0.3)'
@@ -3101,6 +3268,131 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                   );
                 })()}
 
+                {/* 배전반 preview — 차단기 목록 + 부하 % + 과부하 깜박 */}
+                {isPanelboard && (() => {
+                  const panelBreakers = d.breakers ?? [];
+                  const mainPhase = d.panelMainPhase ?? 'three';
+                  const mainCap = d.panelMainCapacity ?? 100;
+                  const mainV = mainPhase === 'three' ? 380 : 220;
+                  const totalCapW = mainV * mainCap;
+                  const innerLoads = breakerLoads.get(d.id);
+                  const sumLoadW = panelBreakers.reduce((s, b) => s + (innerLoads?.get(b.id)?.totalWatts ?? 0), 0);
+                  const mainLoadPct = totalCapW > 0 ? (sumLoadW / totalCapW) * 100 : 0;
+                  const mainOverload = mainLoadPct > 100;
+                  return (
+                    <div className="mx-2.5 mb-2.5 space-y-1.5">
+                      {/* 메인 인입 헤더 */}
+                      <div className={`rounded p-1.5 ${mainOverload ? 'overload-blink' : 'bg-amber-500/10 border border-amber-500/25'}`}>
+                        <div className="flex items-center justify-between gap-1.5">
+                          <span className={`text-[10px] font-bold ${mainOverload ? 'overload-text-blink' : 'text-amber-200'}`}>
+                            ⚡ 메인 {mainPhase === 'three' ? '3상' : '단상'} {mainCap}A
+                          </span>
+                          <span className={`text-[9.5px] font-mono font-bold ${mainOverload ? 'overload-text-blink' : 'text-amber-300'}`}>
+                            {Math.round(mainLoadPct)}%
+                          </span>
+                        </div>
+                        <div className="text-[8.5px] font-mono text-amber-200/70 mt-0.5">
+                          {formatWatts(sumLoadW)} / {formatWatts(totalCapW)}
+                        </div>
+                      </div>
+                      {/* 차단기 목록 */}
+                      {panelBreakers.length === 0 ? (
+                        <div className="text-[10px] text-neutral-500 italic text-center py-2">
+                          더블클릭 → 차단기 추가
+                        </div>
+                      ) : (
+                        <div className="space-y-0.5">
+                          {panelBreakers.map(br => {
+                            const ld = innerLoads?.get(br.id);
+                            const overload = ld?.overload ?? false;
+                            const warning = ld?.warning ?? false;
+                            const pct = ld?.loadPercent ?? 0;
+                            return (
+                              <div
+                                key={br.id}
+                                className={`rounded px-1.5 py-1 flex items-center gap-1.5 ${
+                                  overload ? 'overload-blink' : warning ? 'bg-amber-500/15 border border-amber-500/30' : 'bg-white/[0.03] border border-white/5'
+                                }`}
+                              >
+                                <div className="w-1 h-3 rounded shrink-0" style={{ background: br.color ?? '#FBBF24' }}></div>
+                                <span className={`text-[8.5px] font-mono px-1 rounded font-bold ${
+                                  br.kind === 'MCCB' ? 'bg-cyan-500/20 text-cyan-200' : 'bg-rose-500/20 text-rose-200'
+                                }`}>{br.kind}</span>
+                                <span className="text-[9.5px] font-mono text-neutral-300 truncate flex-1">{br.name}</span>
+                                <span className="text-[8.5px] font-mono text-neutral-400">
+                                  {br.phase === 'three' ? '3상' : '단상'} {br.capacityA}A
+                                </span>
+                                <span className={`text-[9.5px] font-mono font-bold ${
+                                  overload ? 'overload-text-blink' : warning ? 'text-amber-300' : 'text-emerald-300'
+                                }`}>
+                                  {Math.round(pct)}%
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {/* 전력 공급 preview */}
+                {isPowerSupply && (() => {
+                  const phase = d.power?.phase ?? 'three';
+                  const v = d.power?.voltage ?? (phase === 'three' ? 380 : 220);
+                  return (
+                    <div className="mx-2.5 mb-2.5">
+                      <div className="rounded p-2 bg-yellow-500/10 border border-yellow-500/25 space-y-0.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold text-yellow-200">🔌 공급 {phase === 'three' ? '3상' : '단상'}</span>
+                          <span className="text-[10px] font-mono font-bold text-yellow-300">{v}V</span>
+                        </div>
+                        {(d.power?.watts || d.power?.amps) && (
+                          <div className="text-[9px] font-mono text-yellow-200/70">
+                            {d.power?.watts ? formatWatts(d.power.watts) : ''}
+                            {d.power?.watts && d.power?.amps ? ' · ' : ''}
+                            {d.power?.amps ? formatAmps(d.power.amps) : ''}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* 전력 소비 preview — 과부하 차단기에 연결되면 깜박 */}
+                {isPowerConsumer && (() => {
+                  const phase = d.power?.phase ?? 'single';
+                  const v = d.power?.voltage ?? (phase === 'three' ? 380 : 220);
+                  const w = deviceWatts(d);
+                  const a = deviceAmps(d);
+                  const isOverloaded = overloadConsumerIds.has(d.id);
+                  return (
+                    <div className="mx-2.5 mb-2.5">
+                      <div className={`rounded p-2 ${
+                        isOverloaded ? 'overload-blink' : 'bg-orange-500/10 border border-orange-500/25'
+                      } space-y-0.5`}>
+                        <div className="flex items-center justify-between">
+                          <span className={`text-[10px] font-bold ${isOverloaded ? 'overload-text-blink' : 'text-orange-200'}`}>
+                            💡 소비 {phase === 'three' ? '3상' : '단상'} {v}V
+                          </span>
+                          {isOverloaded && (
+                            <span className="overload-text-blink text-[9px] font-bold">⚠ 과부하</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 text-[9.5px] font-mono">
+                          <span className={isOverloaded ? 'overload-text-blink' : 'text-orange-300'}>
+                            {formatWatts(w)}
+                          </span>
+                          <span className="text-neutral-600">·</span>
+                          <span className={isOverloaded ? 'overload-text-blink' : 'text-orange-300/80'}>
+                            {formatAmps(a)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
               </div>
 
               {/* 왼쪽: IN 쪽 Hub 연결 배지 (각 IN 포트와 y좌표 정렬) */}
@@ -3502,6 +3794,33 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
           onSaved={(updated) => {
             setCurrentProject(updated);
             setShowProjectSettings(false);
+          }}
+        />
+      )}
+
+      {editingPanel && (
+        <PanelboardEditor
+          device={editingPanel}
+          onClose={() => setEditingPanel(null)}
+          onSave={async (updates) => {
+            // 낙관적 업데이트
+            setDevices(prev => prev.map(d => d.id === editingPanel.id ? { ...d, ...updates } : d));
+            try {
+              await (supabase as any).from('devices').update(updates).eq('id', editingPanel.id);
+            } catch (err: any) {
+              const msg = String(err?.message ?? err);
+              const m = msg.match(/Could not find the '(\w+)' column/);
+              if (m) {
+                const missing = m[1];
+                const clean: any = { ...updates };
+                delete clean[missing];
+                await (supabase as any).from('devices').update(clean).eq('id', editingPanel.id);
+                console.warn(`[Panelboard] '${missing}' 컬럼 없음 — 해당 필드 제외 저장. supabase/schema.sql 실행 필요.`);
+              } else {
+                console.error('[Panelboard] 저장 실패', err);
+              }
+            }
+            setEditingPanel(null);
           }}
         />
       )}

@@ -24,6 +24,11 @@ export default function ProjectSettingsModal({ project, onClose, onSaved }: Prop
   const [newTermKey, setNewTermKey] = useState('');
   const [newTermValue, setNewTermValue] = useState('');
   const [saving, setSaving] = useState(false);
+  // 배경 이미지
+  const [backgroundImageUrl, setBackgroundImageUrl] = useState(project.background_image_url ?? '');
+  const [backgroundOpacity, setBackgroundOpacity] = useState(project.background_opacity ?? 50);
+  const [backgroundLocked, setBackgroundLocked] = useState(project.background_locked ?? false);
+  const [uploading, setUploading] = useState(false);
 
   const toggleRole = (r: DeviceRole) => {
     setEnabledRoles(prev => prev.includes(r) ? prev.filter(x => x !== r) : [...prev, r]);
@@ -54,6 +59,12 @@ export default function ProjectSettingsModal({ project, onClose, onSaved }: Prop
         passcode: passcode.trim() || undefined,
         enabled_roles: enabledRoles.length === DEVICE_ROLES.length ? [] : enabledRoles,
         terminology,
+        background_image_url: backgroundImageUrl || undefined,
+        background_opacity: backgroundOpacity,
+        background_locked: backgroundLocked,
+        background_x: project.background_x ?? 0,
+        background_y: project.background_y ?? 0,
+        background_scale: project.background_scale ?? 1,
       };
       await (supabase as any).from('projects').update({
         ...updates,
@@ -179,6 +190,114 @@ export default function ProjectSettingsModal({ project, onClose, onSaved }: Prop
               <button onClick={() => setEnabledRoles([])} className="px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 text-neutral-400">모두 해제</button>
               <span className="text-neutral-500">{enabledRoles.length} / {DEVICE_ROLES.length} 선택됨</span>
             </div>
+          </section>
+
+          {/* 배경 이미지 (도면 위에 깔리는 참조 이미지) */}
+          <section className="space-y-2">
+            <div className="text-[10.5px] uppercase tracking-wider text-neutral-500 font-semibold">배경 이미지</div>
+            <div className="text-[10.5px] text-neutral-500 mb-2">
+              건물 평면도, 전기 단선도 같은 참조 이미지를 깔고 그 위에 신호 흐름도를 올릴 수 있습니다. 반투명도 조절 가능.
+            </div>
+
+            {/* 업로드 / URL 입력 */}
+            <div className="space-y-2">
+              <label className="cursor-pointer block">
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    if (file.size > 5 * 1024 * 1024) {
+                      alert('이미지 크기가 너무 큽니다 (5MB 초과). 압축 후 다시 시도하세요.');
+                      return;
+                    }
+                    setUploading(true);
+                    try {
+                      // 간단히 base64 data URL로 저장 (Supabase Storage 없이)
+                      const reader = new FileReader();
+                      reader.onload = () => {
+                        setBackgroundImageUrl(String(reader.result ?? ''));
+                        setUploading(false);
+                      };
+                      reader.onerror = () => {
+                        alert('이미지 읽기 실패');
+                        setUploading(false);
+                      };
+                      reader.readAsDataURL(file);
+                    } catch (err) {
+                      console.error(err);
+                      setUploading(false);
+                    }
+                  }}
+                />
+                <div className="px-3 py-2 text-[12px] text-center rounded border border-dashed border-white/20 hover:border-white/40 hover:bg-white/[0.02] transition">
+                  {uploading ? '업로드 중...' : '📁 이미지 파일 선택 (PNG/JPG, 최대 5MB)'}
+                </div>
+              </label>
+              <div className="text-center text-[10px] text-neutral-600">또는</div>
+              <input
+                type="text"
+                value={backgroundImageUrl.startsWith('data:') ? '(업로드된 이미지 — base64)' : backgroundImageUrl}
+                disabled={backgroundImageUrl.startsWith('data:')}
+                onChange={e => setBackgroundImageUrl(e.target.value)}
+                placeholder="이미지 URL (https://...)"
+                className="w-full bg-neutral-950 border border-white/15 rounded px-3 py-1.5 text-[11px] font-mono disabled:opacity-50"
+              />
+            </div>
+
+            {/* 미리보기 */}
+            {backgroundImageUrl && (
+              <div className="space-y-2 pt-2">
+                <div className="relative h-32 bg-neutral-950 border border-white/10 rounded overflow-hidden flex items-center justify-center">
+                  <img
+                    src={backgroundImageUrl}
+                    alt="배경"
+                    className="max-h-full max-w-full object-contain"
+                    style={{ opacity: backgroundOpacity / 100 }}
+                  />
+                  <button
+                    onClick={() => setBackgroundImageUrl('')}
+                    className="absolute top-1 right-1 px-2 py-1 text-[10px] rounded bg-rose-500/80 hover:bg-rose-500 text-white"
+                  >✕ 제거</button>
+                </div>
+
+                {/* 반투명도 슬라이더 */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[10.5px] text-neutral-400">반투명도</label>
+                    <span className="text-[10.5px] font-mono text-emerald-300">{backgroundOpacity}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={5}
+                    value={backgroundOpacity}
+                    onChange={e => setBackgroundOpacity(parseInt(e.target.value))}
+                    className="w-full accent-emerald-500"
+                  />
+                </div>
+
+                {/* 잠금 */}
+                <label className="flex items-center gap-2 text-[11px] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={backgroundLocked}
+                    onChange={e => setBackgroundLocked(e.target.checked)}
+                    className="accent-amber-500"
+                  />
+                  <span className={backgroundLocked ? 'text-amber-300' : 'text-neutral-400'}>
+                    🔒 배경 이미지 위치/크기 잠금
+                  </span>
+                </label>
+
+                <div className="text-[10px] text-neutral-500 bg-white/[0.02] border border-white/10 rounded p-2">
+                  💡 도면에서 배경 이미지를 <strong>드래그하여 위치 이동</strong>하거나 <strong>모서리를 끌어 크기 조정</strong>할 수 있습니다 (잠금 해제 상태).
+                </div>
+              </div>
+            )}
           </section>
 
           {/* 용어 오버라이드 */}
