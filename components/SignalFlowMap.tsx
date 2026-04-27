@@ -2079,9 +2079,11 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   return (
     <div className="h-screen w-screen bg-gradient-to-br from-neutral-950 via-black to-neutral-950 text-white overflow-hidden relative select-none">
       {/* Top bar */}
-      <div data-ui className="absolute top-0 left-0 right-0 z-30 h-12 md:h-14 bg-black/80 border-b border-white/10 shadow-xl shadow-black/40">
-        <div className="h-full flex items-center gap-1.5 md:gap-2 px-2 md:px-3 overflow-x-auto overflow-y-hidden scrollbar-thin flex-nowrap toolbar" style={{ scrollbarWidth: 'thin' }}>
-          <div className="flex items-center gap-1.5 md:gap-2 shrink-0">
+      <div data-ui className="absolute top-0 left-0 right-0 z-30 bg-black/85 border-b border-white/10 shadow-xl shadow-black/40 backdrop-blur-md">
+        {/* 컨테이너: 모바일 1줄 가로 스크롤 / md+ 2줄 자동 줄바꿈 */}
+        <div className="px-2 md:px-3 py-1.5 md:py-2">
+          <div className="flex items-center gap-1.5 md:gap-2 overflow-x-auto md:overflow-visible md:flex-wrap scrollbar-thin md:scrollbar-none" style={{ scrollbarWidth: 'thin' }}>
+          <div className="flex items-center gap-1.5 md:gap-2 shrink-0 md:contents">
           <a
             href="/"
             className="px-1.5 md:px-2 py-1 md:py-1.5 text-[11px] rounded-md hover:bg-white/10 text-neutral-400 hover:text-white whitespace-nowrap shrink-0"
@@ -2097,7 +2099,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
           </button>
           <button
             onClick={() => setShowProjectSettings(true)}
-            className="hidden lg:block min-w-0 max-w-[200px] text-left hover:bg-white/5 px-1 rounded transition"
+            className="hidden md:block min-w-0 max-w-[200px] text-left hover:bg-white/5 px-1 rounded transition"
             title="프로젝트 설정"
           >
             <div className="text-[12px] font-bold tracking-tight leading-tight truncate">{currentProject?.name ?? 'Signal Flow Map'}</div>
@@ -2142,7 +2144,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
           >⧉<span className="hidden sm:inline ml-1">레이어</span> <span className="font-mono opacity-70">{layers.filter(l => l.visible).length}/{layers.length}</span></button>
 
           {/* 더보기 메뉴 — lg 미만에서만 표시 (작은 화면 정리용) */}
-          <div className="lg:hidden relative shrink-0">
+          <div className="md:hidden relative shrink-0">
             <button
               onClick={() => setShowMoreMenu(s => !s)}
               className={`px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border whitespace-nowrap ${showMoreMenu ? 'bg-white/15 border-white/30 text-white' : 'bg-white/5 border-white/10 text-neutral-300 hover:text-white hover:bg-white/10'}`}
@@ -2227,10 +2229,13 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
             {iconMode ? '🔍' : '🗺'}<span className="hidden sm:inline ml-1">{iconMode ? '상세' : '아이콘'}</span>
           </button>
 
+          {/* md+에서 줄바꿈 spacer — 두 줄로 자연스럽게 흐름 */}
+          <div className="hidden md:block w-full md:basis-full md:h-0"></div>
+
           {/* 신호 유형 범례 토글 */}
           <button
             onClick={() => setShowLegend(s => !s)}
-            className={`hidden lg:flex px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border whitespace-nowrap shrink-0 items-center ${
+            className={`hidden md:flex px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border whitespace-nowrap shrink-0 items-center ${
               showLegend
                 ? 'bg-white/15 border-white/30 text-white'
                 : 'bg-white/5 border-white/10 text-neutral-300 hover:text-white hover:bg-white/10'
@@ -2242,14 +2247,14 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
 
           <button
             onClick={() => setShowPatchbayMgr(true)}
-            className="hidden lg:flex px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border bg-white/5 border-teal-500/30 text-teal-300 hover:text-white hover:bg-teal-500/20 whitespace-nowrap shrink-0 items-center"
+            className="hidden md:flex px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border bg-white/5 border-teal-500/30 text-teal-300 hover:text-white hover:bg-teal-500/20 whitespace-nowrap shrink-0 items-center"
             title="패치베이 관리"
           >⊟<span className="ml-1">패치베이</span> <span className="font-mono opacity-70 ml-1">{devices.filter(d => d.role === 'patchbay').length}</span></button>
 
           {devices.some(d => d.role === 'patchbay' || d.role === 'router') && (
             <button
               onClick={() => setHidePatchbay(v => !v)}
-              className={`hidden lg:flex px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border items-center gap-1 whitespace-nowrap shrink-0 ${
+              className={`hidden md:flex px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border items-center gap-1 whitespace-nowrap shrink-0 ${
                 hidePatchbay
                   ? 'bg-teal-500 border-teal-400 text-white shadow-md shadow-teal-500/30'
                   : 'bg-white/5 border-white/15 text-neutral-400 hover:bg-teal-500/20 hover:text-teal-200 hover:border-teal-500/40'
@@ -2263,7 +2268,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
 
           <button
             onClick={() => setShowWallboxMgr(true)}
-            className="hidden lg:flex px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border bg-white/5 border-amber-500/30 text-amber-300 hover:text-white hover:bg-amber-500/20 whitespace-nowrap shrink-0 items-center"
+            className="hidden md:flex px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border bg-white/5 border-amber-500/30 text-amber-300 hover:text-white hover:bg-amber-500/20 whitespace-nowrap shrink-0 items-center"
             title="월박스 관리"
           >▦<span className="ml-1">월박스</span> <span className="font-mono opacity-70 ml-1">{devices.filter(d => d.role === 'wallbox').length}</span></button>
 
@@ -2280,7 +2285,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                   if (allOn) setInspectHubs(new Set());
                   else setInspectHubs(new Set(allHubs.map(h => h.id)));
                 }}
-                className={`hidden lg:flex px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border items-center gap-1 whitespace-nowrap shrink-0 ${
+                className={`hidden md:flex px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border items-center gap-1 whitespace-nowrap shrink-0 ${
                   allOn
                     ? 'bg-fuchsia-500 border-fuchsia-400 text-white shadow-md shadow-fuchsia-500/40'
                     : someOn
@@ -2459,6 +2464,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
               <span className="text-emerald-400 font-semibold font-mono">{online}</span>
             </div>
           </div>
+          </div>
         </div>
       </div>
 
@@ -2499,7 +2505,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       )}
 
       {pendingFrom && (
-        <div data-ui className="absolute top-[68px] left-1/2 -translate-x-1/2 z-30 px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500/20 to-orange-500/20 backdrop-blur-xl border border-amber-500/40 shadow-2xl shadow-amber-500/20">
+        <div data-ui className="absolute top-12 md:top-[92px] left-1/2 -translate-x-1/2 z-30 px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500/20 to-orange-500/20 backdrop-blur-xl border border-amber-500/40 shadow-2xl shadow-amber-500/20">
           <div className="flex items-center gap-3 text-xs">
             <div className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></div>
             <div>
@@ -2531,7 +2537,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
 
       {/* Canvas */}
       <div
-        className={`absolute inset-0 pt-12 md:pt-14 ${cursorClass}`}
+        className={`absolute inset-0 pt-12 md:pt-[88px] ${cursorClass}`}
         onMouseDown={onCanvasMouseDown}
         onWheel={onWheel}
         onTouchStart={onCanvasTouchStart}
@@ -2548,11 +2554,11 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
         }}
       >
         {/* Connection Canvas — screen space에 그려 DOM scale 영향 없음 */}
-        <div className="absolute inset-x-0 bottom-0 top-12 md:top-14 overflow-hidden pointer-events-none">
+        <div className="absolute inset-x-0 bottom-0 top-12 md:top-[88px] overflow-hidden pointer-events-none">
           <ConnectionCanvas
             ref={connectionCanvasRef}
             width={viewport.w}
-            height={viewport.h - (viewport.w >= 768 ? 56 : 48)}
+            height={viewport.h - (viewport.w >= 768 ? 88 : 48)}
             scale={scale}
             offsetX={offset.x}
             offsetY={offset.y}
