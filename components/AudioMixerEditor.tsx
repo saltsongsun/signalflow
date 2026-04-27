@@ -6,6 +6,7 @@ type Tab = 'patch' | 'channels' | 'matrix' | 'output';
 
 type Props = {
   device: Device;
+  allDevices?: Device[];  // 연동 IO 박스 조회용
   onSave: (updates: Partial<Device>) => void;
   onClose: () => void;
 };
@@ -19,7 +20,7 @@ const percentToDb = (p: number) => MIN_DB + (p / 100) * (MAX_DB - MIN_DB);
 // 색상 팔레트 (채널/버스에 자동 할당)
 const COLORS = ['#06B6D4', '#10B981', '#F59E0B', '#EC4899', '#8B5CF6', '#EF4444', '#3B82F6', '#84CC16', '#F97316', '#A855F7'];
 
-export default function AudioMixerEditor({ device, onSave, onClose }: Props) {
+export default function AudioMixerEditor({ device, allDevices = [], onSave, onClose }: Props) {
   const [tab, setTab] = useState<Tab>('matrix');
   const [channels, setChannels] = useState<AudioChannel[]>(device.audioChannels ?? []);
   const [buses, setBuses] = useState<AudioBus[]>(device.audioBuses ?? [
@@ -29,8 +30,47 @@ export default function AudioMixerEditor({ device, onSave, onClose }: Props) {
   const [outPatch, setOutPatch] = useState<Record<string, AudioOutPatchEntry>>(device.audioOutPatch ?? {});
   const [matrix, setMatrix] = useState<Record<string, Record<string, MixMatrixCell>>>(device.mixMatrix ?? {});
 
-  const inputs = device.inputs ?? [];
-  const outputs = device.outputs ?? [];
+  // ===== 입력 풀: 콘솔 본체 IN + 연동된 IO 박스의 IN =====
+  // 출력 풀: 콘솔 본체 OUT + 연동된 IO 박스의 OUT
+  const linkedIoBoxes = useMemo(
+    () => allDevices.filter(x => x.role === 'io_box' && x.ioBoxLinkedMixerId === device.id),
+    [allDevices, device.id]
+  );
+
+  // [{ portId, label, source }]
+  // portId 형식: "self:IN-1" or "ioboxId:IN-3"
+  const inputPool = useMemo(() => {
+    const list: Array<{ portId: string; label: string; sourceLabel: string; sourceColor: string }> = [];
+    (device.inputs ?? []).forEach(p => {
+      list.push({ portId: `self:${p}`, label: p, sourceLabel: '본체', sourceColor: '#888' });
+    });
+    linkedIoBoxes.forEach(box => {
+      const kindLabel = box.ioBoxKind === 'stagebox' ? '📦 ' + box.name : '🃏 ' + box.name;
+      const color = box.ioBoxKind === 'stagebox' ? '#22D3EE' : '#14B8A6';
+      (box.inputs ?? []).forEach(p => {
+        list.push({ portId: `${box.id}:${p}`, label: p, sourceLabel: kindLabel, sourceColor: color });
+      });
+    });
+    return list;
+  }, [device.inputs, linkedIoBoxes]);
+
+  const outputPool = useMemo(() => {
+    const list: Array<{ portId: string; label: string; sourceLabel: string; sourceColor: string }> = [];
+    (device.outputs ?? []).forEach(p => {
+      list.push({ portId: `self:${p}`, label: p, sourceLabel: '본체', sourceColor: '#888' });
+    });
+    linkedIoBoxes.forEach(box => {
+      const kindLabel = box.ioBoxKind === 'stagebox' ? '📦 ' + box.name : '🃏 ' + box.name;
+      const color = box.ioBoxKind === 'stagebox' ? '#22D3EE' : '#14B8A6';
+      (box.outputs ?? []).forEach(p => {
+        list.push({ portId: `${box.id}:${p}`, label: p, sourceLabel: kindLabel, sourceColor: color });
+      });
+    });
+    return list;
+  }, [device.outputs, linkedIoBoxes]);
+
+  const inputs = device.inputs ?? [];   // (legacy 호환 — 본체 IN만)
+  const outputs = device.outputs ?? []; // (legacy 호환 — 본체 OUT만)
 
   const handleSave = () => {
     onSave({
@@ -122,10 +162,15 @@ export default function AudioMixerEditor({ device, onSave, onClose }: Props) {
         <div className="flex-1 min-w-0">
           <div className="text-base font-bold truncate">{device.name} <span className="text-neutral-500 font-normal text-sm">— 오디오 콘솔 설정</span></div>
           <div className="text-[11px] text-neutral-500 font-mono">
-            물리 IN <span className="text-cyan-300">{inputs.length}</span> ·
+            물리 IN <span className="text-cyan-300">{inputPool.length}</span> ·
             채널 <span className="text-violet-300">{channels.length}</span> ·
             버스 <span className="text-amber-300">{buses.length}</span> ·
-            물리 OUT <span className="text-emerald-300">{outputs.length}</span>
+            물리 OUT <span className="text-emerald-300">{outputPool.length}</span>
+            {linkedIoBoxes.length > 0 && (
+              <span className="ml-2 text-cyan-200">
+                · I/O 박스 <span className="text-white font-bold">{linkedIoBoxes.length}</span>대 연동
+              </span>
+            )}
           </div>
         </div>
         <button onClick={handleSave} className="px-4 py-2 text-[12px] font-bold rounded-lg bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-white shadow-lg shadow-emerald-500/30">
@@ -162,7 +207,7 @@ export default function AudioMixerEditor({ device, onSave, onClose }: Props) {
       {/* 컨텐츠 */}
       <div className="flex-1 overflow-auto p-4">
         {tab === 'patch' && (
-          <PatchTab inputs={inputs} channels={channels} patch={patch} setPatch={setPatch} />
+          <PatchTab inputPool={inputPool} channels={channels} patch={patch} setPatch={setPatch} />
         )}
         {tab === 'channels' && (
           <ChannelsTab channels={channels} updateChannel={updateChannel} deleteChannel={deleteChannel} addChannel={addChannel} />
@@ -171,7 +216,7 @@ export default function AudioMixerEditor({ device, onSave, onClose }: Props) {
           <MatrixTab channels={channels} buses={buses} matrix={matrix} updateCell={updateCell} addBus={addBus} updateBus={updateBus} deleteBus={deleteBus} />
         )}
         {tab === 'output' && (
-          <OutputTab outputs={outputs} buses={buses} outPatch={outPatch} setOutPatch={setOutPatch} />
+          <OutputTab outputPool={outputPool} buses={buses} outPatch={outPatch} setOutPatch={setOutPatch} />
         )}
       </div>
     </div>
@@ -181,8 +226,8 @@ export default function AudioMixerEditor({ device, onSave, onClose }: Props) {
 // =================================================================
 // 입력 패치 탭
 // =================================================================
-function PatchTab({ inputs, channels, patch, setPatch }: {
-  inputs: string[];
+function PatchTab({ inputPool, channels, patch, setPatch }: {
+  inputPool: Array<{ portId: string; label: string; sourceLabel: string; sourceColor: string }>;
   channels: AudioChannel[];
   patch: Record<string, AudioPatchEntry>;
   setPatch: (p: Record<string, AudioPatchEntry>) => void;
@@ -190,34 +235,39 @@ function PatchTab({ inputs, channels, patch, setPatch }: {
   return (
     <div className="max-w-3xl">
       <div className="mb-3 text-[11px] text-neutral-400 bg-cyan-500/5 border border-cyan-500/15 rounded p-2.5">
-        💡 <strong>물리 IN 단자</strong>가 콘솔 내부의 <strong>어떤 채널</strong>로 들어갈지 매핑합니다. 스테레오 채널은 L/R 두 단자를 각각 지정.
+        💡 <strong>물리 IN 단자</strong>가 콘솔 내부의 <strong>어떤 채널</strong>로 들어갈지 매핑합니다. 본체 IN과 연동된 스테이지박스/옵션카드 IN이 모두 표시됩니다.
       </div>
       <div className="space-y-1">
-        <div className="grid grid-cols-[140px_1fr_120px] gap-2 px-3 py-2 text-[10px] uppercase tracking-wider text-neutral-500 font-semibold border-b border-white/10">
+        <div className="grid grid-cols-[170px_120px_1fr_120px] gap-2 px-3 py-2 text-[10px] uppercase tracking-wider text-neutral-500 font-semibold border-b border-white/10">
+          <div>출처</div>
           <div>물리 IN</div>
           <div>→ 채널</div>
           <div>L/R</div>
         </div>
-        {inputs.length === 0 && (
+        {inputPool.length === 0 && (
           <div className="text-[12px] text-neutral-500 italic p-4 text-center">
-            장비 설정에서 물리 IN 포트를 먼저 추가하세요.
+            장비 설정에서 물리 IN 포트를 먼저 추가하거나, I/O 박스를 연동하세요.
           </div>
         )}
-        {inputs.map(input => {
-          const entry = patch[input];
+        {inputPool.map(p => {
+          const entry = patch[p.portId];
           const ch = entry ? channels.find(c => c.id === entry.channelId) : null;
           return (
-            <div key={input} className="grid grid-cols-[140px_1fr_120px] gap-2 items-center px-3 py-2 hover:bg-white/[0.02] rounded">
-              <div className="text-[12px] font-mono text-cyan-300 font-bold">{input}</div>
+            <div key={p.portId} className="grid grid-cols-[170px_120px_1fr_120px] gap-2 items-center px-3 py-2 hover:bg-white/[0.02] rounded">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <div className="w-1 h-4 rounded shrink-0" style={{ background: p.sourceColor }}></div>
+                <span className="text-[10.5px] truncate" style={{ color: p.sourceColor }}>{p.sourceLabel}</span>
+              </div>
+              <div className="text-[12px] font-mono text-cyan-300 font-bold">{p.label}</div>
               <select
                 value={entry?.channelId ?? ''}
                 onChange={e => {
                   if (!e.target.value) {
                     const np = { ...patch };
-                    delete np[input];
+                    delete np[p.portId];
                     setPatch(np);
                   } else {
-                    setPatch({ ...patch, [input]: { channelId: e.target.value, side: entry?.side ?? 'mono' } });
+                    setPatch({ ...patch, [p.portId]: { channelId: e.target.value, side: entry?.side ?? 'mono' } });
                   }
                 }}
                 className="bg-neutral-900 border border-white/15 rounded px-2 py-1.5 text-[11.5px] focus:border-cyan-400 focus:outline-none"
@@ -234,7 +284,7 @@ function PatchTab({ inputs, channels, patch, setPatch }: {
                 disabled={!entry || !ch?.stereo}
                 onChange={e => {
                   if (!entry) return;
-                  setPatch({ ...patch, [input]: { ...entry, side: e.target.value as any } });
+                  setPatch({ ...patch, [p.portId]: { ...entry, side: e.target.value as any } });
                 }}
                 className="bg-neutral-900 border border-white/15 rounded px-2 py-1.5 text-[11px] disabled:opacity-30"
               >
@@ -488,8 +538,8 @@ function MatrixTab({ channels, buses, matrix, updateCell, addBus, updateBus, del
 // =================================================================
 // 출력 패치 탭
 // =================================================================
-function OutputTab({ outputs, buses, outPatch, setOutPatch }: {
-  outputs: string[];
+function OutputTab({ outputPool, buses, outPatch, setOutPatch }: {
+  outputPool: Array<{ portId: string; label: string; sourceLabel: string; sourceColor: string }>;
   buses: AudioBus[];
   outPatch: Record<string, AudioOutPatchEntry>;
   setOutPatch: (p: Record<string, AudioOutPatchEntry>) => void;
@@ -497,34 +547,39 @@ function OutputTab({ outputs, buses, outPatch, setOutPatch }: {
   return (
     <div className="max-w-3xl">
       <div className="mb-3 text-[11px] text-neutral-400 bg-emerald-500/5 border border-emerald-500/15 rounded p-2.5">
-        💡 <strong>버스</strong>가 어떤 <strong>물리 OUT 단자</strong>로 나갈지 매핑합니다. 스테레오 버스는 L/R 두 단자에 각각 패치.
+        💡 <strong>버스</strong>가 어떤 <strong>물리 OUT 단자</strong>로 나갈지 매핑합니다. 본체와 연동된 I/O 박스 OUT이 모두 표시됩니다.
       </div>
       <div className="space-y-1">
-        <div className="grid grid-cols-[140px_1fr_120px] gap-2 px-3 py-2 text-[10px] uppercase tracking-wider text-neutral-500 font-semibold border-b border-white/10">
+        <div className="grid grid-cols-[170px_120px_1fr_120px] gap-2 px-3 py-2 text-[10px] uppercase tracking-wider text-neutral-500 font-semibold border-b border-white/10">
+          <div>출처</div>
           <div>물리 OUT</div>
           <div>← 버스</div>
           <div>L/R</div>
         </div>
-        {outputs.length === 0 && (
+        {outputPool.length === 0 && (
           <div className="text-[12px] text-neutral-500 italic p-4 text-center">
-            장비 설정에서 물리 OUT 포트를 먼저 추가하세요.
+            장비 설정에서 물리 OUT 포트를 먼저 추가하거나, I/O 박스를 연동하세요.
           </div>
         )}
-        {outputs.map(output => {
-          const entry = outPatch[output];
+        {outputPool.map(p => {
+          const entry = outPatch[p.portId];
           const bus = entry ? buses.find(b => b.id === entry.busId) : null;
           return (
-            <div key={output} className="grid grid-cols-[140px_1fr_120px] gap-2 items-center px-3 py-2 hover:bg-white/[0.02] rounded">
-              <div className="text-[12px] font-mono text-emerald-300 font-bold">{output}</div>
+            <div key={p.portId} className="grid grid-cols-[170px_120px_1fr_120px] gap-2 items-center px-3 py-2 hover:bg-white/[0.02] rounded">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <div className="w-1 h-4 rounded shrink-0" style={{ background: p.sourceColor }}></div>
+                <span className="text-[10.5px] truncate" style={{ color: p.sourceColor }}>{p.sourceLabel}</span>
+              </div>
+              <div className="text-[12px] font-mono text-emerald-300 font-bold">{p.label}</div>
               <select
                 value={entry?.busId ?? ''}
                 onChange={e => {
                   if (!e.target.value) {
                     const np = { ...outPatch };
-                    delete np[output];
+                    delete np[p.portId];
                     setOutPatch(np);
                   } else {
-                    setOutPatch({ ...outPatch, [output]: { busId: e.target.value, side: entry?.side ?? 'mono' } });
+                    setOutPatch({ ...outPatch, [p.portId]: { busId: e.target.value, side: entry?.side ?? 'mono' } });
                   }
                 }}
                 className="bg-neutral-900 border border-white/15 rounded px-2 py-1.5 text-[11.5px] focus:border-emerald-400 focus:outline-none"
@@ -541,7 +596,7 @@ function OutputTab({ outputs, buses, outPatch, setOutPatch }: {
                 disabled={!entry || !bus?.stereo}
                 onChange={e => {
                   if (!entry) return;
-                  setOutPatch({ ...outPatch, [output]: { ...entry, side: e.target.value as any } });
+                  setOutPatch({ ...outPatch, [p.portId]: { ...entry, side: e.target.value as any } });
                 }}
                 className="bg-neutral-900 border border-white/15 rounded px-2 py-1.5 text-[11px] disabled:opacity-30"
               >

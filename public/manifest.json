@@ -1,7 +1,7 @@
 {
-  "name": "Signal Flow Map · 경남이스포츠",
+  "name": "Signal Flow Map",
   "short_name": "Signal Flow",
-  "description": "경남이스포츠 UHD 방송 시스템 신호 흐름도",
+  "description": "신호 흐름 도면 도구 — 다양한 시스템의 신호 라우팅을 시각화",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

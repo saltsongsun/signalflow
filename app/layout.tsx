@@ -16,8 +16,8 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Signal Flow Map — 경남이스포츠 UHD',
-  description: '경남이스포츠 상설경기장 UHD 방송시스템 신호 흐름도',
+  title: 'Signal Flow Map',
+  description: '신호 흐름 도면 도구',
   manifest: '/manifest.json',
   applicationName: 'Signal Flow Map',
   appleWebApp: {

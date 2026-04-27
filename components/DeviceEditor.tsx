@@ -1,11 +1,12 @@
 'use client';
 import { useState, useEffect } from 'react';
-import { Device, CONNECTION_TYPES, ConnectionType, PortInfo, Layer, DEVICE_ROLES, DEVICE_ROLE_LABELS, DeviceRole, MULTIVIEW_LAYOUTS, MultiviewLayoutId, supabase } from '../lib/supabase';
+import { Device, CONNECTION_TYPES, ConnectionType, PortInfo, Layer, DEVICE_ROLES, DEVICE_ROLE_LABELS, DeviceRole, MULTIVIEW_LAYOUTS, MultiviewLayoutId, IO_BOX_KIND_LABELS, IoBoxKind, IO_BOX_PROTOCOLS, IoBoxProtocol, supabase } from '../lib/supabase';
 
 type Props = {
   device: Device;
   layers: Layer[];
   allDevices?: Device[];  // 연동 스위처 선택 등에 사용
+  enabledRoles?: string[];  // 비어있으면 전체 활성
   selectionCount?: number;
   onSave: (updates: Partial<Device>) => void;
   onSaveToSelection?: (updates: Partial<Device>) => void;
@@ -22,7 +23,7 @@ const TYPE_ACCENT = {
   combined: { grad: 'from-purple-500/20 to-purple-600/5', ring: 'ring-purple-500/40', dot: '#A855F7' },
 };
 
-export default function DeviceEditor({ device, layers, allDevices, selectionCount, onSave, onSaveToSelection, onDelete, onDuplicate, onClose }: Props) {
+export default function DeviceEditor({ device, layers, allDevices, enabledRoles, selectionCount, onSave, onSaveToSelection, onDelete, onDuplicate, onClose }: Props) {
   const [name, setName] = useState(device.name);
   const [model, setModel] = useState(device.model ?? '');
   const [location, setLocation] = useState(device.location ?? '');
@@ -38,6 +39,11 @@ export default function DeviceEditor({ device, layers, allDevices, selectionCoun
   const [multiviewPvwInput, setMultiviewPvwInput] = useState(device.multiviewPvwInput ?? '');
   const [multiviewLinkedSwitcherId, setMultiviewLinkedSwitcherId] = useState(device.multiviewLinkedSwitcherId ?? '');
   const [pvwPort, setPvwPort] = useState(device.pvwPort ?? '');
+  // I/O 박스
+  const [ioBoxKind, setIoBoxKind] = useState<IoBoxKind>((device.ioBoxKind as IoBoxKind) ?? 'stagebox');
+  const [ioBoxProtocol, setIoBoxProtocol] = useState<IoBoxProtocol>((device.ioBoxProtocol as IoBoxProtocol) ?? 'Dante');
+  const [ioBoxLinkedMixerId, setIoBoxLinkedMixerId] = useState(device.ioBoxLinkedMixerId ?? '');
+  const [ioBoxSlot, setIoBoxSlot] = useState(device.ioBoxSlot ?? '');
   const [uploadingImage, setUploadingImage] = useState(false);
   const [uploadingAudio, setUploadingAudio] = useState(false);
   const [type, setType] = useState<Device['type']>(device.type);
@@ -69,6 +75,10 @@ export default function DeviceEditor({ device, layers, allDevices, selectionCoun
     setMultiviewPvwInput(device.multiviewPvwInput ?? '');
     setMultiviewLinkedSwitcherId(device.multiviewLinkedSwitcherId ?? '');
     setPvwPort(device.pvwPort ?? '');
+    setIoBoxKind((device.ioBoxKind as IoBoxKind) ?? 'stagebox');
+    setIoBoxProtocol((device.ioBoxProtocol as IoBoxProtocol) ?? 'Dante');
+    setIoBoxLinkedMixerId(device.ioBoxLinkedMixerId ?? '');
+    setIoBoxSlot(device.ioBoxSlot ?? '');
     setType(device.type);
     setRole(device.role ?? 'standard');
     setPgmPort(device.pgmPort ?? '');
@@ -170,6 +180,10 @@ export default function DeviceEditor({ device, layers, allDevices, selectionCoun
       multiviewPvwInput: role === 'multiview' ? (multiviewPvwInput || null) : null,
       multiviewLinkedSwitcherId: role === 'multiview' ? (multiviewLinkedSwitcherId || null) : null,
       pvwPort: role === 'switcher' ? (pvwPort || null) : null,
+      ioBoxKind: role === 'io_box' ? ioBoxKind : null,
+      ioBoxProtocol: role === 'io_box' ? ioBoxProtocol : null,
+      ioBoxLinkedMixerId: role === 'io_box' ? (ioBoxLinkedMixerId || null) : null,
+      ioBoxSlot: role === 'io_box' ? (ioBoxSlot || null) : null,
       type, role,
       pgmPort: role === 'switcher' ? (pgmPort || undefined) : undefined,
       normals: role === 'patchbay' ? normals : undefined,
@@ -365,7 +379,11 @@ export default function DeviceEditor({ device, layers, allDevices, selectionCoun
             역할 <span className="text-neutral-600 normal-case tracking-normal ml-1">Device Role</span>
           </label>
           <div className="grid grid-cols-3 gap-1 p-1 bg-white/5 rounded-lg border border-white/10">
-            {DEVICE_ROLES.map(r => {
+            {DEVICE_ROLES.filter(r => {
+              // enabledRoles가 비어있으면 전체 표시. 정의되어 있으면 해당 역할만 + 현재 역할은 항상 표시.
+              if (!enabledRoles || enabledRoles.length === 0) return true;
+              return enabledRoles.includes(r) || role === r;
+            }).map(r => {
               const active = role === r;
               const icon =
                 r === 'switcher' ? '⇆'
@@ -399,6 +417,7 @@ export default function DeviceEditor({ device, layers, allDevices, selectionCoun
             {role === 'display' && '🖵 신호 디스플레이 (모니터, 벽). 연결된 소스의 이미지를 표시.'}
             {role === 'multiview' && '▦ 멀티뷰 모니터. 여러 입력 신호를 한 화면에 PGM/PVW/소스로 배치해 동시 표시.'}
             {role === 'audio_mixer' && '🎛 오디오 콘솔. 채널 ↔ 버스 믹스 매트릭스로 멀티 출력 (메인/AUX/그룹). 더블클릭으로 콘솔 전용 에디터 진입.'}
+            {role === 'io_box' && '📦 I/O 박스. 콘솔의 IN/OUT을 확장하는 장치 (스테이지박스 / 옵션카드). 콘솔과 1줄로 연결됨.'}
             {role === 'connector' && '━ 통과 장비 (케이블, 변환기). 신호를 그대로 흘려보냄.'}
             {role === 'standard' && '◻ 일반 장비. 1:1 포트 매핑.'}
           </div>
@@ -765,6 +784,106 @@ export default function DeviceEditor({ device, layers, allDevices, selectionCoun
                 </div>
               </>
             )}
+          </div>
+        )}
+
+        {/* I/O 박스 (스테이지박스 / 옵션카드) 설정 */}
+        {role === 'io_box' && (
+          <div className="bg-gradient-to-br from-cyan-500/10 to-transparent border border-cyan-500/20 rounded-lg p-3 space-y-3">
+            <div className="flex items-center gap-2">
+              <span className="text-[15px]">{ioBoxKind === 'stagebox' ? '📦' : '🃏'}</span>
+              <div>
+                <div className="text-[11px] font-bold text-cyan-300">I/O 박스 설정</div>
+                <div className="text-[10px] text-neutral-500">
+                  콘솔의 IN/OUT을 확장하는 장치. 채널 수에 영향 없이 물리 단자만 추가.
+                </div>
+              </div>
+            </div>
+
+            {/* 종류 선택 — 토글 */}
+            <div>
+              <label className="text-[10px] font-semibold text-cyan-300 uppercase tracking-wider block mb-1.5">종류</label>
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  onClick={() => setIoBoxKind('stagebox')}
+                  className={`px-3 py-2 text-[11px] font-medium rounded-lg border transition ${
+                    ioBoxKind === 'stagebox'
+                      ? 'bg-cyan-500/30 border-cyan-400 text-cyan-100 shadow-md shadow-cyan-500/20'
+                      : 'bg-white/5 border-white/15 text-neutral-400 hover:bg-white/10'
+                  }`}
+                >
+                  <div className="text-[14px] mb-0.5">📦 스테이지박스</div>
+                  <div className="text-[9.5px] opacity-70 normal-case font-normal">랜선/광케이블 1줄로 연결되는 별도 박스</div>
+                </button>
+                <button
+                  onClick={() => setIoBoxKind('option_card')}
+                  className={`px-3 py-2 text-[11px] font-medium rounded-lg border transition ${
+                    ioBoxKind === 'option_card'
+                      ? 'bg-teal-500/30 border-teal-400 text-teal-100 shadow-md shadow-teal-500/20'
+                      : 'bg-white/5 border-white/15 text-neutral-400 hover:bg-white/10'
+                  }`}
+                >
+                  <div className="text-[14px] mb-0.5">🃏 옵션카드</div>
+                  <div className="text-[9.5px] opacity-70 normal-case font-normal">콘솔 슬롯에 내장되는 확장 카드</div>
+                </button>
+              </div>
+            </div>
+
+            {/* 프로토콜 */}
+            <div>
+              <label className="text-[10px] font-semibold text-cyan-300 uppercase tracking-wider block mb-1">프로토콜</label>
+              <select
+                value={ioBoxProtocol}
+                onChange={e => setIoBoxProtocol(e.target.value as IoBoxProtocol)}
+                className="w-full bg-neutral-900 border border-cyan-500/30 rounded px-2 py-1.5 text-[12px] text-cyan-100 focus:border-cyan-400 focus:outline-none"
+              >
+                {IO_BOX_PROTOCOLS.map(p => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* 연동 콘솔 */}
+            {allDevices && (
+              <div>
+                <label className="text-[10px] font-semibold text-cyan-300 uppercase tracking-wider block mb-1">
+                  🔗 연동 콘솔 <span className="text-neutral-500 normal-case">(이 박스가 확장하는 콘솔)</span>
+                </label>
+                <select
+                  value={ioBoxLinkedMixerId}
+                  onChange={e => setIoBoxLinkedMixerId(e.target.value)}
+                  className="w-full bg-neutral-900 border border-cyan-500/30 rounded px-2 py-1.5 text-[12px] text-cyan-100 focus:border-cyan-400 focus:outline-none"
+                >
+                  <option value="">(연동 안 함)</option>
+                  {allDevices.filter(x => x.role === 'audio_mixer').map(mx => (
+                    <option key={mx.id} value={mx.id}>
+                      🎛 {mx.name}{mx.model ? ` (${mx.model})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* 옵션카드 — 슬롯 번호 */}
+            {ioBoxKind === 'option_card' && (
+              <div>
+                <label className="text-[10px] font-semibold text-teal-300 uppercase tracking-wider block mb-1">슬롯 번호</label>
+                <input
+                  type="text"
+                  value={ioBoxSlot}
+                  onChange={e => setIoBoxSlot(e.target.value)}
+                  placeholder="예: Slot A, Slot 1"
+                  className="w-full bg-neutral-900 border border-teal-500/30 rounded px-2 py-1.5 text-[12px] text-teal-100 focus:border-teal-400 focus:outline-none"
+                />
+                <div className="text-[9.5px] text-neutral-500 mt-1">
+                  콘솔 본체에서 이 카드가 꽂힌 슬롯 위치 (참고용)
+                </div>
+              </div>
+            )}
+
+            <div className="text-[10px] text-cyan-200/70 bg-cyan-500/5 border border-cyan-500/15 rounded p-2">
+              💡 IN/OUT 단자는 위 <strong>입출력 포트</strong> 섹션에서 추가하세요. 패치/믹스 매트릭스는 연동된 콘솔의 에디터에서 설정합니다.
+            </div>
           </div>
         )}
 

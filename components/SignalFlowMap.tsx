@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { supabase, Device, Connection, ConnectionType, Layer, DEFAULT_LAYERS, DEVICE_ROLE_LABELS, Rack, MULTIVIEW_LAYOUTS, MultiviewLayoutId } from '../lib/supabase';
+import { supabase, Device, Connection, ConnectionType, Layer, DEFAULT_LAYERS, DEVICE_ROLE_LABELS, Rack, MULTIVIEW_LAYOUTS, MultiviewLayoutId, Project } from '../lib/supabase';
 import { INITIAL_DEVICES, INITIAL_CONNECTIONS, TYPE_COLORS, CONN_TYPE_STYLES } from '../lib/initialData';
 import DeviceEditor from './DeviceEditor';
 import LayerPanel from './LayerPanel';
@@ -10,6 +10,7 @@ import WallboxManager from './WallboxManager';
 import BulkEditor from './BulkEditor';
 import ConnectionCanvas from './ConnectionCanvas';
 import AudioMixerEditor from './AudioMixerEditor';
+import ProjectSettingsModal from './ProjectSettingsModal';
 
 type TraceMode = 'both' | 'upstream' | 'downstream';
 
@@ -178,7 +179,20 @@ function patchbayPortXY(d: Device, dir: 'in' | 'out', portIdx: number) {
   return { x: d.x + fx, y: d.y + fy };
 }
 
-export default function SignalFlowMap() {
+export default function SignalFlowMap({ project }: { project?: Project } = {}) {
+  const projectId = project?.id ?? 'default';
+  // 프로젝트 메타는 편집 가능하므로 로컬 state로 관리
+  const [currentProject, setCurrentProject] = useState<Project | null>(project ?? null);
+  const [showProjectSettings, setShowProjectSettings] = useState(false);
+  // 용어 오버라이드 — t('PGM') 식으로 사용. 정의 안 되어 있으면 원본 반환.
+  const terminology = currentProject?.terminology ?? {};
+  const t = (key: string): string => terminology[key] ?? key;
+  // 활성화된 장비 역할 — 비어있거나 undefined면 모두 활성
+  const enabledRoles = currentProject?.enabled_roles ?? [];
+  const isRoleEnabled = (role: string): boolean => {
+    if (!enabledRoles || enabledRoles.length === 0) return true;
+    return enabledRoles.includes(role as any);
+  };
   const [devices, setDevices] = useState<Device[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [layers, setLayers] = useState<Layer[]>([]);
@@ -289,44 +303,56 @@ export default function SignalFlowMap() {
   // ===== Load data =====
   useEffect(() => {
     (async () => {
+      setLoading(true);
       const [devRes, connRes, layerRes, rackRes] = await Promise.all([
-        supabase.from('devices').select('*'),
-        supabase.from('connections').select('*'),
-        supabase.from('layers').select('*'),
-        supabase.from('racks').select('*'),
+        supabase.from('devices').select('*').eq('project_id', projectId),
+        supabase.from('connections').select('*').eq('project_id', projectId),
+        supabase.from('layers').select('*').eq('project_id', projectId),
+        supabase.from('racks').select('*').eq('project_id', projectId),
       ]);
       let loadedLayers = (layerRes.data ?? []) as Layer[];
       if (loadedLayers.length === 0) {
-        await (supabase as any).from('layers').insert(DEFAULT_LAYERS);
-        loadedLayers = DEFAULT_LAYERS;
+        // 기본 레이어 생성 (project_id 포함)
+        const defaults = DEFAULT_LAYERS.map(l => ({ ...l, id: `${l.id}_${projectId}`, project_id: projectId }));
+        await (supabase as any).from('layers').insert(defaults);
+        loadedLayers = defaults as any;
       }
       setLayers(loadedLayers);
       setRacks((rackRes.data ?? []) as Rack[]);
       if (devRes.data && devRes.data.length > 0) {
         setDevices(devRes.data as any);
         setConnections((connRes.data ?? []) as any);
-      } else {
-        await (supabase as any).from('devices').insert(INITIAL_DEVICES);
-        const connsToSeed = INITIAL_CONNECTIONS.map(c => ({ ...c, id: crypto.randomUUID() }));
+      } else if (projectId === 'default') {
+        // 'default' 프로젝트만 INITIAL_DEVICES 시드 사용
+        await (supabase as any).from('devices').insert(INITIAL_DEVICES.map(d => ({ ...d, project_id: 'default' })));
+        const connsToSeed = INITIAL_CONNECTIONS.map(c => ({ ...c, id: crypto.randomUUID(), project_id: 'default' }));
         await (supabase as any).from('connections').insert(connsToSeed);
-        setDevices(INITIAL_DEVICES);
+        setDevices(INITIAL_DEVICES.map(d => ({ ...d, project_id: 'default' })) as any);
         setConnections(connsToSeed as any);
       }
+      // 'default' 외 신규 프로젝트는 빈 상태로 시작
       setLoading(false);
     })();
 
-    const ch = (supabase as any).channel('sfm')
+    const ch = (supabase as any).channel(`sfm_${projectId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'devices' }, (p: any) => {
+        // 다른 프로젝트의 변경은 무시
+        if (p.new?.project_id && p.new.project_id !== projectId) return;
+        if (p.old?.project_id && p.old.project_id !== projectId) return;
         if (p.eventType === 'INSERT') setDevices(prev => [...prev.filter(d => d.id !== p.new.id), p.new]);
         else if (p.eventType === 'UPDATE') setDevices(prev => prev.map(d => d.id === p.new.id ? p.new : d));
         else if (p.eventType === 'DELETE') setDevices(prev => prev.filter(d => d.id !== p.old.id));
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'connections' }, (p: any) => {
+        if (p.new?.project_id && p.new.project_id !== projectId) return;
+        if (p.old?.project_id && p.old.project_id !== projectId) return;
         if (p.eventType === 'INSERT') setConnections(prev => [...prev.filter(c => c.id !== p.new.id), p.new]);
         else if (p.eventType === 'UPDATE') setConnections(prev => prev.map(c => c.id === p.new.id ? p.new : c));
         else if (p.eventType === 'DELETE') setConnections(prev => prev.filter(c => c.id !== p.old.id));
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'layers' }, (p: any) => {
+        if (p.new?.project_id && p.new.project_id !== projectId) return;
+        if (p.old?.project_id && p.old.project_id !== projectId) return;
         if (p.eventType === 'INSERT') setLayers(prev => [...prev.filter(l => l.id !== p.new.id), p.new]);
         else if (p.eventType === 'UPDATE') setLayers(prev => prev.map(l => l.id === p.new.id ? p.new : l));
         else if (p.eventType === 'DELETE') setLayers(prev => prev.filter(l => l.id !== p.old.id));
@@ -343,7 +369,8 @@ export default function SignalFlowMap() {
       if (status === 'SUBSCRIBED') await ch.track({ user_id: crypto.randomUUID() });
     });
     return () => { (supabase as any).removeChannel(ch); };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
 
   const devById = useMemo(() => new Map(devices.map(d => [d.id, d])), [devices]);
 
@@ -1333,6 +1360,7 @@ export default function SignalFlowMap() {
         from_port: pendingFrom.port,
         to_device: deviceId, to_port: port,
         conn_type: pendingFrom.connType ?? d.inputsMeta?.[port]?.connType ?? null,
+        project_id: projectId,
       };
       // 덮어쓸 기존 연결 스냅샷
       const overwritten = connections.find(c => c.to_device === deviceId && c.to_port === port);
@@ -1363,6 +1391,7 @@ export default function SignalFlowMap() {
       inputsMeta: { 'IN-1': { name: 'IN-1', layerId: defaultLayer } },
       outputsMeta: { 'OUT-1': { name: 'OUT-1', layerId: defaultLayer } },
       physPorts: {}, routing: {},
+      project_id: projectId,
     };
     await (supabase as any).from('devices').insert(d);
     pushUndo('장비 추가 되돌리기', async () => {
@@ -1389,6 +1418,7 @@ export default function SignalFlowMap() {
       multiviewPgmInput: 'PGM',
       multiviewPvwInput: 'PVW',
       physPorts: {}, routing: {},
+      project_id: projectId,
     };
     await (supabase as any).from('devices').insert(d);
     pushUndo('멀티뷰 추가 되돌리기', async () => {
@@ -1420,6 +1450,7 @@ export default function SignalFlowMap() {
       audioOutPatch: {},
       mixMatrix: {},
       physPorts: {}, routing: {},
+      project_id: projectId,
     };
     await (supabase as any).from('devices').insert(d);
     pushUndo('오디오 콘솔 추가 되돌리기', async () => {
@@ -1427,6 +1458,40 @@ export default function SignalFlowMap() {
       await (supabase as any).from('devices').delete().eq('id', id);
     });
     setEditingMixer(d);
+  };
+
+  // I/O 박스 추가 — 종류 선택받아 생성
+  const handleAddIoBox = async (kind: 'stagebox' | 'option_card') => {
+    const id = `${kind === 'stagebox' ? 'sb' : 'oc'}_${Date.now().toString(36)}`;
+    const audioLayer = layers.find(l => l.id === 'layer_audio')?.id ?? layers[0]?.id ?? 'layer_audio';
+    // 기본: 16 IN / 8 OUT (XLR 단자)
+    const inputs = Array.from({ length: 16 }, (_, i) => `IN-${i + 1}`);
+    const outputs = Array.from({ length: 8 }, (_, i) => `OUT-${i + 1}`);
+    const inputsMeta: Record<string, any> = {};
+    const outputsMeta: Record<string, any> = {};
+    inputs.forEach(p => { inputsMeta[p] = { name: p, layerId: audioLayer, connType: 'XLR' }; });
+    outputs.forEach(p => { outputsMeta[p] = { name: p, layerId: audioLayer, connType: 'XLR' }; });
+    const d: Device = {
+      id,
+      name: kind === 'stagebox' ? '스테이지박스' : '옵션카드',
+      type: 'audio',
+      role: 'io_box',
+      ioBoxKind: kind,
+      ioBoxProtocol: 'Dante',
+      x: (-offset.x + 400) / scale,
+      y: (-offset.y + 200) / scale,
+      width: 240,
+      inputs, outputs,
+      inputsMeta, outputsMeta,
+      physPorts: {}, routing: {},
+      project_id: projectId,
+    };
+    await (supabase as any).from('devices').insert(d);
+    pushUndo(`${kind === 'stagebox' ? '스테이지박스' : '옵션카드'} 추가 되돌리기`, async () => {
+      await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
+      await (supabase as any).from('devices').delete().eq('id', id);
+    });
+    setEditingDevice(d);
   };
 
   const handleDuplicateDevice = async () => {
@@ -1450,6 +1515,7 @@ export default function SignalFlowMap() {
       physPorts: { ...src.physPorts },
       routing: { ...src.routing },
       normals: src.normals ? { ...src.normals } : undefined,
+      project_id: projectId,
     };
     await (supabase as any).from('devices').insert(clone);
     pushUndo('복제 되돌리기', async () => {
@@ -1706,18 +1772,27 @@ export default function SignalFlowMap() {
     });
   };
   const handleResetAll = async () => {
-    if (!confirm('모든 데이터 삭제 후 초기 데이터로 재시드?')) return;
-    await (supabase as any).from('connections').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-    await (supabase as any).from('devices').delete().neq('id', '__nope__');
-    await (supabase as any).from('layers').delete().neq('id', '__nope__');
-    await (supabase as any).from('layers').insert(DEFAULT_LAYERS);
-    await (supabase as any).from('devices').insert(INITIAL_DEVICES);
-    const conns = INITIAL_CONNECTIONS.map(c => ({ ...c, id: crypto.randomUUID() }));
-    await (supabase as any).from('connections').insert(conns);
-    setLayers(DEFAULT_LAYERS);
-    setDevices(INITIAL_DEVICES);
-    setConnections(conns as any);
-    // undo 스택 비우기
+    if (!confirm(`프로젝트 "${currentProject?.name ?? projectId}" 의 모든 데이터를 삭제하고 초기 상태로 되돌립니다. 계속하시겠어요?`)) return;
+    // 현재 프로젝트 한정 삭제
+    await (supabase as any).from('connections').delete().eq('project_id', projectId);
+    await (supabase as any).from('devices').delete().eq('project_id', projectId);
+    await (supabase as any).from('layers').delete().eq('project_id', projectId);
+    // 기본 레이어 다시 생성
+    const defaults = DEFAULT_LAYERS.map(l => ({ ...l, id: `${l.id}_${projectId}`, project_id: projectId }));
+    await (supabase as any).from('layers').insert(defaults);
+    setLayers(defaults as any);
+    // default 프로젝트만 INITIAL_DEVICES 재시드
+    if (projectId === 'default') {
+      const seedDevs = INITIAL_DEVICES.map(d => ({ ...d, project_id: 'default' }));
+      await (supabase as any).from('devices').insert(seedDevs);
+      const conns = INITIAL_CONNECTIONS.map(c => ({ ...c, id: crypto.randomUUID(), project_id: 'default' }));
+      await (supabase as any).from('connections').insert(conns);
+      setDevices(seedDevs as any);
+      setConnections(conns as any);
+    } else {
+      setDevices([]);
+      setConnections([]);
+    }
     undoStackRef.current = [];
     setUndoLabel(null);
   };
@@ -1754,22 +1829,26 @@ export default function SignalFlowMap() {
       <div data-ui className="absolute top-0 left-0 right-0 z-30 h-12 md:h-14 bg-black/80 border-b border-white/10 shadow-xl shadow-black/40">
         <div className="h-full flex items-center gap-1.5 md:gap-2 px-2 md:px-3 overflow-x-auto overflow-y-hidden scrollbar-thin flex-nowrap toolbar" style={{ scrollbarWidth: 'thin' }}>
           <div className="flex items-center gap-1.5 md:gap-2 shrink-0">
-            <div className="relative w-6 h-6 md:w-7 md:h-7 rounded-lg bg-gradient-to-br from-sky-400 to-purple-600 flex items-center justify-center shadow-lg shadow-sky-500/30">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                <circle cx="3" cy="3" r="1.5" fill="white"/>
-                <circle cx="13" cy="3" r="1.5" fill="white"/>
-                <circle cx="3" cy="13" r="1.5" fill="white"/>
-                <circle cx="13" cy="13" r="1.5" fill="white"/>
-                <path d="M3 3 L13 13 M13 3 L3 13" stroke="white" strokeWidth="0.8" opacity="0.6"/>
-              </svg>
-            </div>
-            <div className="hidden lg:block">
-              <div className="text-[12px] font-bold tracking-tight leading-tight">Signal Flow Map</div>
-              <div className="text-[10px] text-neutral-500 leading-tight font-mono">경남이스포츠 · UHD</div>
-            </div>
+          <a
+            href="/"
+            className="px-1.5 md:px-2 py-1 md:py-1.5 text-[11px] rounded-md hover:bg-white/10 text-neutral-400 hover:text-white whitespace-nowrap shrink-0"
+            title="프로젝트 목록"
+          >←</a>
+          <div className="relative w-6 h-6 md:w-7 md:h-7 rounded-lg flex items-center justify-center shadow-lg shrink-0"
+               style={{ background: currentProject?.thumbnail_color ? `linear-gradient(135deg, ${currentProject.thumbnail_color}, ${currentProject.thumbnail_color}cc)` : 'linear-gradient(135deg, #38bdf8, #a855f7)' }}>
+            <span className="text-base">{currentProject?.icon ?? '📡'}</span>
           </div>
+          <button
+            onClick={() => setShowProjectSettings(true)}
+            className="hidden lg:block min-w-0 max-w-[200px] text-left hover:bg-white/5 px-1 rounded transition"
+            title="프로젝트 설정"
+          >
+            <div className="text-[12px] font-bold tracking-tight leading-tight truncate">{currentProject?.name ?? 'Signal Flow Map'}</div>
+            <div className="text-[10px] text-neutral-500 leading-tight font-mono truncate">{currentProject?.description ?? '신호 흐름 도면'}</div>
+          </button>
+        </div>
 
-          <div className="w-px h-6 bg-white/10 shrink-0"></div>
+        <div className="w-px h-6 bg-white/10 shrink-0"></div>
 
           <div className="flex items-center gap-0.5 bg-white/5 rounded-lg p-0.5 border border-white/10 shrink-0">
             <button
@@ -1890,10 +1969,22 @@ export default function SignalFlowMap() {
             <>
               <button onClick={handleAddDevice}
                 className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-sky-500 to-sky-600 hover:from-sky-400 hover:to-sky-500 text-white shadow-md shadow-sky-500/30 whitespace-nowrap shrink-0" title="장비 추가">＋<span className="hidden sm:inline ml-1">장비</span></button>
-              <button onClick={handleAddMultiview}
-                className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-white shadow-md shadow-violet-500/30 whitespace-nowrap shrink-0" title="멀티뷰 추가">▦<span className="hidden sm:inline ml-1">멀티뷰</span></button>
-              <button onClick={handleAddAudioMixer}
-                className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-rose-500 to-rose-600 hover:from-rose-400 hover:to-rose-500 text-white shadow-md shadow-rose-500/30 whitespace-nowrap shrink-0" title="오디오 콘솔 추가">🎛<span className="hidden sm:inline ml-1">콘솔</span></button>
+              {isRoleEnabled('multiview') && (
+                <button onClick={handleAddMultiview}
+                  className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-white shadow-md shadow-violet-500/30 whitespace-nowrap shrink-0" title={`${t('멀티뷰')} 추가`}>▦<span className="hidden sm:inline ml-1">{t('멀티뷰')}</span></button>
+              )}
+              {isRoleEnabled('audio_mixer') && (
+                <button onClick={handleAddAudioMixer}
+                  className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-rose-500 to-rose-600 hover:from-rose-400 hover:to-rose-500 text-white shadow-md shadow-rose-500/30 whitespace-nowrap shrink-0" title={`${t('오디오 콘솔')} 추가`}>🎛<span className="hidden sm:inline ml-1">{t('콘솔')}</span></button>
+              )}
+              {isRoleEnabled('io_box') && (
+                <>
+                  <button onClick={() => handleAddIoBox('stagebox')}
+                    className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-cyan-500 to-cyan-600 hover:from-cyan-400 hover:to-cyan-500 text-white shadow-md shadow-cyan-500/30 whitespace-nowrap shrink-0" title="스테이지박스 추가 (랜선으로 콘솔 확장)">📦<span className="hidden sm:inline ml-1">{t('스테이지박스')}</span></button>
+                  <button onClick={() => handleAddIoBox('option_card')}
+                    className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-teal-500 to-teal-600 hover:from-teal-400 hover:to-teal-500 text-white shadow-md shadow-teal-500/30 whitespace-nowrap shrink-0" title="옵션카드 추가 (콘솔 슬롯에 내장)">🃏<span className="hidden sm:inline ml-1">{t('옵션카드')}</span></button>
+                </>
+              )}
               {selectedIds.size > 0 && (
                 <>
                   <div className="px-2.5 py-1 text-[11px] rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 font-medium">
@@ -2370,6 +2461,7 @@ export default function SignalFlowMap() {
               : role === 'display' ? '🖵'
               : role === 'multiview' ? '▦'
               : role === 'audio_mixer' ? '🎛'
+              : role === 'io_box' ? '📦'
               : role === 'connector' ? '━'
               : null;
             const isPatchbay = role === 'patchbay';
@@ -2378,6 +2470,7 @@ export default function SignalFlowMap() {
             const isDisplay = role === 'display';
             const isMultiview = role === 'multiview';
             const isAudioMixer = role === 'audio_mixer';
+            const isIoBox = role === 'io_box';
             const currentDisplaySource = isDisplay ? displaySources.get(d.id) : undefined;
 
             // 이 장비의 IN 포트에 연결된 hub (precomputed)
@@ -2468,6 +2561,7 @@ export default function SignalFlowMap() {
                               : role === 'router' ? 'rgba(249,115,22,0.18)'
                               : isMultiview ? 'rgba(139,92,246,0.18)'
                               : isAudioMixer ? 'rgba(244,63,94,0.18)'
+                              : isIoBox ? 'rgba(34,211,238,0.18)'
                               : isSource ? 'rgba(132,204,22,0.2)'
                               : isDisplay ? 'rgba(14,165,233,0.18)'
                               : role === 'connector' ? 'rgba(148,163,184,0.15)'
@@ -2478,6 +2572,7 @@ export default function SignalFlowMap() {
                               : role === 'router' ? '#FB923C'
                               : isMultiview ? '#A78BFA'
                               : isAudioMixer ? '#FB7185'
+                              : isIoBox ? '#22D3EE'
                               : isSource ? '#A3E635'
                               : isDisplay ? '#38BDF8'
                               : role === 'connector' ? '#CBD5E1'
@@ -2488,6 +2583,7 @@ export default function SignalFlowMap() {
                               : role === 'router' ? 'rgba(251,146,60,0.45)'
                               : isMultiview ? 'rgba(167,139,250,0.45)'
                               : isAudioMixer ? 'rgba(251,113,133,0.45)'
+                              : isIoBox ? 'rgba(34,211,238,0.45)'
                               : isSource ? 'rgba(163,230,53,0.4)'
                               : isDisplay ? 'rgba(56,189,248,0.4)'
                               : role === 'connector' ? 'rgba(203,213,225,0.3)'
@@ -2661,7 +2757,7 @@ export default function SignalFlowMap() {
                             {isPgm && (
                               <span className="text-[9.5px] px-2 py-[2px] rounded font-mono font-bold shrink-0"
                                 style={{ background: 'linear-gradient(90deg, #10b981, #059669)', color: 'white', boxShadow: '0 0 8px rgba(16,185,129,0.6)' }}>
-                                PGM
+                                {t('PGM')}
                               </span>
                             )}
                             {/* 라우터 OUT에 현재 매핑된 IN 표시 */}
@@ -2869,8 +2965,8 @@ export default function SignalFlowMap() {
                       {/* PGM + PVW 나란히 */}
                       {hasPgmOrPvw && (
                         <div className="grid grid-cols-2 gap-1">
-                          <MultiviewCell label="PGM" inputPort={pgmSrc?.name ?? ''} srcDev={pgmSrc} color="emerald" big />
-                          <MultiviewCell label="PVW" inputPort={pvwSrc?.name ?? ''} srcDev={pvwSrc} color="amber" big />
+                          <MultiviewCell label={t('PGM')} inputPort={pgmSrc?.name ?? ''} srcDev={pgmSrc} color="emerald" big />
+                          <MultiviewCell label={t('PVW')} inputPort={pvwSrc?.name ?? ''} srcDev={pvwSrc} color="amber" big />
                         </div>
                       )}
                       {/* 소스 모니터 셀 그리드 */}
@@ -2957,6 +3053,50 @@ export default function SignalFlowMap() {
                           더블클릭 → 채널/버스 설정
                         </div>
                       )}
+                    </div>
+                  );
+                })()}
+
+                {/* I/O 박스 preview — 종류/프로토콜/연동 콘솔 표시 */}
+                {isIoBox && (() => {
+                  const kind = (d.ioBoxKind as 'stagebox' | 'option_card' | undefined) ?? 'stagebox';
+                  const protocol = d.ioBoxProtocol ?? 'Dante';
+                  const linkedMixer = d.ioBoxLinkedMixerId ? devById.get(d.ioBoxLinkedMixerId) : null;
+                  const slot = d.ioBoxSlot;
+                  return (
+                    <div className="mx-2.5 mb-2.5 space-y-1.5">
+                      <div className="bg-cyan-950/30 border border-cyan-500/20 rounded p-2 space-y-1.5">
+                        {/* 종류 + 프로토콜 */}
+                        <div className="flex items-center justify-between gap-1.5">
+                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                            kind === 'stagebox' ? 'bg-cyan-500/25 text-cyan-200' : 'bg-teal-500/25 text-teal-200'
+                          }`}>
+                            {kind === 'stagebox' ? '📦 스테이지박스' : '🃏 옵션카드'}
+                          </span>
+                          <span className="text-[9.5px] font-mono text-cyan-300/80 px-1.5 py-0.5 rounded bg-black/30 border border-cyan-500/20">
+                            {protocol}
+                          </span>
+                        </div>
+                        {/* 연동 콘솔 */}
+                        {linkedMixer ? (
+                          <div className="text-[9.5px] text-cyan-100/80 truncate flex items-center gap-1">
+                            <span className="text-[10px]">🔗</span>
+                            <span className="font-mono truncate">{linkedMixer.name}</span>
+                          </div>
+                        ) : (
+                          <div className="text-[9.5px] text-neutral-500 italic">콘솔 미연동</div>
+                        )}
+                        {/* 옵션카드 슬롯 */}
+                        {kind === 'option_card' && slot && (
+                          <div className="text-[9px] text-teal-300/80 font-mono">📍 {slot}</div>
+                        )}
+                        {/* IN/OUT 카운트 */}
+                        <div className="flex items-center gap-2 text-[9.5px] font-mono pt-1 border-t border-white/5">
+                          <span className="text-cyan-300">IN <span className="text-white font-bold">{d.inputs.length}</span></span>
+                          <span className="text-neutral-600">·</span>
+                          <span className="text-emerald-300">OUT <span className="text-white font-bold">{d.outputs.length}</span></span>
+                        </div>
+                      </div>
                     </div>
                   );
                 })()}
@@ -3282,6 +3422,7 @@ export default function SignalFlowMap() {
           device={editingDevice}
           layers={layers}
           allDevices={devices}
+          enabledRoles={currentProject?.enabled_roles}
           selectionCount={selectedIds.size}
           onSave={handleSaveDevice}
           onSaveToSelection={async (updates) => {
@@ -3328,6 +3469,7 @@ export default function SignalFlowMap() {
       {editingMixer && (
         <AudioMixerEditor
           device={editingMixer}
+          allDevices={devices}
           onClose={() => setEditingMixer(null)}
           onSave={async (updates) => {
             // 낙관적 업데이트
@@ -3349,6 +3491,17 @@ export default function SignalFlowMap() {
               }
             }
             setEditingMixer(null);
+          }}
+        />
+      )}
+
+      {showProjectSettings && currentProject && (
+        <ProjectSettingsModal
+          project={currentProject}
+          onClose={() => setShowProjectSettings(false)}
+          onSaved={(updated) => {
+            setCurrentProject(updated);
+            setShowProjectSettings(false);
           }}
         />
       )}

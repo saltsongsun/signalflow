@@ -27,7 +27,7 @@ export type PortInfo = {
 // 장비 역할
 export const DEVICE_ROLES = [
   'standard', 'switcher', 'router', 'splitter', 'patchbay', 'wallbox',
-  'source', 'display', 'multiview', 'audio_mixer', 'connector',
+  'source', 'display', 'multiview', 'audio_mixer', 'io_box', 'connector',
 ] as const;
 export type DeviceRole = typeof DEVICE_ROLES[number];
 
@@ -42,7 +42,53 @@ export const DEVICE_ROLE_LABELS: Record<DeviceRole, string> = {
   display:     '디스플레이',
   multiview:   '멀티뷰',
   audio_mixer: '오디오 콘솔',
+  io_box:      'I/O 박스',
   connector:   '연결',
+};
+
+// I/O 박스 종류
+export type IoBoxKind = 'stagebox' | 'option_card';
+export const IO_BOX_KIND_LABELS: Record<IoBoxKind, string> = {
+  stagebox:    '스테이지박스',
+  option_card: '옵션카드',
+};
+
+// 네트워크 프로토콜 (콘솔↔IO박스 연결 방식)
+export const IO_BOX_PROTOCOLS = [
+  'Dante', 'MADI', 'AES50', 'REAC', 'SoundGrid', 'AVB', 'AES67', 'Cat6/Custom',
+] as const;
+export type IoBoxProtocol = typeof IO_BOX_PROTOCOLS[number];
+
+// ===== 프로젝트 =====
+export type ProjectCategory = 'broadcast' | 'audio' | 'general' | 'custom';
+
+export const PROJECT_CATEGORY_LABELS: Record<ProjectCategory, string> = {
+  broadcast: '방송 시스템',
+  audio:     '음향 시스템',
+  general:   '일반 신호도면',
+  custom:    '기타',
+};
+
+export const PROJECT_CATEGORY_COLORS: Record<ProjectCategory, string> = {
+  broadcast: '#3B82F6',
+  audio:     '#EC4899',
+  general:   '#10B981',
+  custom:    '#A855F7',
+};
+
+export type Project = {
+  id: string;
+  name: string;
+  description?: string;
+  category: ProjectCategory;
+  template_id?: string;
+  passcode?: string;
+  thumbnail_color?: string;
+  icon?: string;
+  terminology?: Record<string, string>;  // 라벨 오버라이드
+  enabled_roles?: DeviceRole[];           // 비어있으면 전체 활성
+  created_at?: string;
+  updated_at?: string;
 };
 
 // ===== 오디오 콘솔 =====
@@ -117,6 +163,7 @@ export type Rack = {
   totalUnits: number;     // 전체 유닛 수 (예: 42U)
   sort_order: number;
   created_at?: string;
+  project_id?: string;
 };
 
 export type Device = {
@@ -158,6 +205,12 @@ export type Device = {
   audioPatch?: Record<string, AudioPatchEntry>;                  // 물리 IN → 채널
   audioOutPatch?: Record<string, AudioOutPatchEntry>;            // 버스 → 물리 OUT
   mixMatrix?: Record<string, Record<string, MixMatrixCell>>;     // mixMatrix[chId][busId]
+
+  // I/O 박스 (스테이지박스 / 옵션카드) 전용
+  ioBoxKind?: IoBoxKind;          // 'stagebox' or 'option_card'
+  ioBoxProtocol?: IoBoxProtocol;  // 'Dante', 'MADI' 등
+  ioBoxLinkedMixerId?: string;    // 연동된 콘솔 ID (콘솔의 input pool로 편입)
+  ioBoxSlot?: string;             // 옵션카드: 콘솔의 슬롯 번호 (예: 'Slot A')
   // 그룹화
   groupId?: string;    // 같은 그룹끼리는 동일 id
   groupName?: string;  // 그룹 표시명 (같은 groupId면 동일)
@@ -171,6 +224,7 @@ export type Device = {
   outputsMeta?: Record<string, PortInfo>;
   physPorts: Record<string, string>;
   routing: Record<string, string>;
+  project_id?: string;  // 멀티 프로젝트 지원
 };
 
 export type Connection = {
@@ -182,6 +236,7 @@ export type Connection = {
   conn_type?: ConnectionType;
   tie_line?: string;      // Tie-Line 번호 (예: "TIE-V001")
   is_patch?: boolean;     // true면 수동 패치, false면 normal (기본배선)
+  project_id?: string;
 };
 
 export type Layer = {
@@ -190,6 +245,7 @@ export type Layer = {
   color: string;
   visible: boolean;
   sort_order: number;
+  project_id?: string;
 };
 
 // 기본 레이어 (초기 시드용)
