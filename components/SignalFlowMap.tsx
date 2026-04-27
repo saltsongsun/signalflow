@@ -528,6 +528,10 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       if (d.role === 'source' && (d.imageUrl || d.audioUrl)) {
         d.outputs.forEach(p => out.set(`${d.id}:${p}`, d.id));
       }
+      // 전력 공급 장비는 항상 전력 신호 발신
+      if (d.role === 'power_supply') {
+        d.outputs.forEach(p => out.set(`${d.id}:${p}`, d.id));
+      }
     });
 
     const iterations = Math.max(8, devices.length + 2);
@@ -621,6 +625,22 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
               srcSig = inSignal.get(`${d.id}:${d.inputs[0]}`);
             }
             if (!srcSig) return;
+            const k = `${d.id}:${p}`;
+            if (out.get(k) !== srcSig) { out.set(k, srcSig); changed = true; }
+          });
+          return;
+        }
+
+        // 배전반 / 멀티탭 — IN으로 들어온 전력을 모든 OUT으로 분배
+        if (d.role === 'panelboard' || d.role === 'power_strip') {
+          // IN 포트 어느 하나라도 신호 있으면 모든 OUT으로
+          let srcSig: string | undefined;
+          for (const inp of d.inputs) {
+            const sig = inSignal.get(`${d.id}:${inp}`);
+            if (sig) { srcSig = sig; break; }
+          }
+          if (!srcSig) return;
+          d.outputs.forEach(p => {
             const k = `${d.id}:${p}`;
             if (out.get(k) !== srcSig) { out.set(k, srcSig); changed = true; }
           });
@@ -728,9 +748,16 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
         const srcId = signalByOutput.inSignal.get(`${traceId}:${p}`);
         if (srcId) collectPathBetween(srcId, traceId);
       });
-    } else if (startDev.role === 'source') {
-      // 이 소스가 도달하는 모든 장비 추적
+    } else if (startDev.role === 'source' || startDev.role === 'power_supply') {
+      // 이 소스/공급장비가 도달하는 모든 장비 추적
       collectPathBetween(traceId);
+    } else if (startDev.role === 'power_consumer') {
+      // 소비 장비 클릭 — 어떤 공급에서 오는지 추적
+      startDev.inputs.forEach(p => {
+        pSet.add(`${traceId}:${p}`);
+        const srcId = signalByOutput.inSignal.get(`${traceId}:${p}`);
+        if (srcId) collectPathBetween(srcId, traceId);
+      });
     } else {
       // 중간 장비: 이 장비로 들어오는 모든 source 경로 + 이 장비에서 나가는 하류 경로
       startDev.inputs.forEach(p => {
@@ -2702,29 +2729,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
 
               return (
                 <g key={c.id} opacity={isDim ? 0.1 : 1} style={{ pointerEvents: 'none' }}>
-                  {/* Trace 중에만 glow 레이어 — 평상시엔 생략해 성능 확보 */}
-                  {/* Trace 중에만 glow 레이어 */}
-                  {isTraced && (
-                    <path d={path} stroke={cableColor} strokeWidth={6} fill="none"
-                          opacity={0.3} />
-                  )}
-                  {/* 베이스 라인 */}
-                  <path d={path} stroke={cableColor} strokeWidth={isTraced ? 3 : isPgm ? 2.2 : isPatch ? 2 : 1.4}
-                        strokeDasharray={cableDash} fill="none"
-                        opacity={isTraced ? 1 : isPgm || isPatch ? 0.85 : 0.55} />
-                  {/* 흐름 애니메이션 오버레이 — trace 중에만 */}
-                  {isTraced && (
-                    <path
-                      d={path}
-                      stroke={cableColor}
-                      strokeWidth={2.5}
-                      fill="none"
-                      strokeLinecap="round"
-                      strokeDasharray="6 12"
-                      className="flow-line"
-                      style={{ animationDuration: '1.2s' }}
-                    />
-                  )}
+                  {/* 베이스 라인은 ConnectionCanvas가 담당 — SVG는 인터랙티브/라벨만 */}
                   {/* 편집모드에선 클릭 가능한 넓은 투명 path (선 hit area) */}
                   {editMode && (
                     <path
