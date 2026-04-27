@@ -175,7 +175,15 @@ export default function ProjectSettingsModal({ project, onClose, onSaved }: Prop
         </div>
 
         {/* 본문 */}
-        <div className="flex-1 overflow-y-auto p-5 space-y-5">
+        <div
+          className="flex-1 overflow-y-auto custom-scroll p-5 space-y-5"
+          style={{
+            WebkitOverflowScrolling: 'touch',
+            touchAction: 'pan-y',
+            overscrollBehavior: 'contain',
+            minHeight: 0,
+          }}
+        >
           {/* 기본 정보 */}
           <section className="space-y-3">
             <div className="text-[10.5px] uppercase tracking-wider text-neutral-500 font-semibold">기본 정보</div>

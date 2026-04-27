@@ -329,8 +329,8 @@ export default function DeviceEditor({ device, layers, allDevices, enabledRoles,
         onTouchEnd={e => e.stopPropagation()}
         className={`fixed bg-gradient-to-b from-neutral-950 via-neutral-950 to-black shadow-2xl z-50 flex flex-col overflow-hidden
           inset-x-0 bottom-0 ${mobileExpanded ? 'h-[95vh]' : 'h-[70vh]'} rounded-t-2xl border-t border-white/15 transition-[height] duration-200
-          sm:inset-y-0 sm:right-0 sm:left-auto sm:bottom-auto sm:h-auto sm:rounded-none sm:border-t-0 sm:border-l sm:border-white/10
-          sm:w-[90vw] lg:w-[720px] sm:max-w-[720px]`}
+          sm:inset-y-0 sm:right-0 sm:left-auto sm:bottom-auto sm:rounded-none sm:border-t-0 sm:border-l sm:border-white/10
+          sm:!h-screen sm:w-[90vw] lg:w-[720px] sm:max-w-[720px]`}
       >
       {/* Mobile drag handle — 탭하면 확대/축소 토글 (고정) */}
       <button

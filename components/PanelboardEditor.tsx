@@ -99,7 +99,15 @@ export default function PanelboardEditor({ device, onSave, onClose }: Props) {
         <button onClick={onClose} className="px-3 py-2 text-[12px] rounded-lg bg-white/5 hover:bg-white/10 border border-white/10">✕ 닫기</button>
       </div>
 
-      <div className="flex-1 overflow-auto p-4 space-y-4">
+      <div
+        className="flex-1 overflow-y-auto custom-scroll p-4 space-y-4"
+        style={{
+          WebkitOverflowScrolling: 'touch',
+          touchAction: 'pan-y',
+          overscrollBehavior: 'contain',
+          minHeight: 0,
+        }}
+      >
         {/* 메인 차단기 (인입부) */}
         <section className="bg-gradient-to-br from-amber-500/10 to-transparent border border-amber-500/30 rounded-lg p-3">
           <div className="flex items-center gap-2 mb-3">

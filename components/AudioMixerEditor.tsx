@@ -205,7 +205,15 @@ export default function AudioMixerEditor({ device, allDevices = [], onSave, onCl
       </div>
 
       {/* 컨텐츠 */}
-      <div className="flex-1 overflow-auto p-4">
+      <div
+        className="flex-1 overflow-y-auto custom-scroll p-4"
+        style={{
+          WebkitOverflowScrolling: 'touch',
+          touchAction: 'pan-y',
+          overscrollBehavior: 'contain',
+          minHeight: 0,
+        }}
+      >
         {tab === 'patch' && (
           <PatchTab inputPool={inputPool} channels={channels} patch={patch} setPatch={setPatch} />
         )}
