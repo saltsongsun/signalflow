@@ -1,5 +1,5 @@
 'use client';
-import { useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
+import { useRef, useEffect, useLayoutEffect, forwardRef, useImperativeHandle } from 'react';
 import type { Device, Connection, Layer } from '../lib/supabase';
 
 type CableInfo = {
@@ -51,8 +51,8 @@ const ConnectionCanvas = forwardRef<ConnectionCanvasHandle, Props>(function Conn
     width, height,
   });
 
-  // props 변경 시 ref 업데이트 + 즉시 redraw
-  useEffect(() => {
+  // props 변경 시 ref 업데이트 + 즉시 redraw — useLayoutEffect로 commit 직후 동기 실행
+  useLayoutEffect(() => {
     stateRef.current.cables = cables;
     stateRef.current.virtualCables = virtualCables;
     stateRef.current.scale = initScale;
@@ -110,24 +110,24 @@ const ConnectionCanvas = forwardRef<ConnectionCanvasHandle, Props>(function Conn
     for (let i = 0; i < cs.length; i++) {
       const c = cs[i];
       if (c.isTraced) continue;
-      drawCable(ctx, applyOffset(c), flowOffsetRef.current, false);
+      drawCable(ctx, applyOffset(c), flowOffsetRef.current, false, scale);
     }
     for (let i = 0; i < vcs.length; i++) {
       const c = vcs[i];
       if (c.isTraced) continue;
-      drawCable(ctx, applyOffset(c), flowOffsetRef.current, false);
+      drawCable(ctx, applyOffset(c), flowOffsetRef.current, false, scale);
     }
 
     // Trace 케이블
     for (let i = 0; i < cs.length; i++) {
       const c = cs[i];
       if (!c.isTraced) continue;
-      drawCable(ctx, applyOffset(c), flowOffsetRef.current, true);
+      drawCable(ctx, applyOffset(c), flowOffsetRef.current, true, scale);
     }
     for (let i = 0; i < vcs.length; i++) {
       const c = vcs[i];
       if (!c.isTraced) continue;
-      drawCable(ctx, applyOffset(c), flowOffsetRef.current, true);
+      drawCable(ctx, applyOffset(c), flowOffsetRef.current, true, scale);
     }
 
     const hasTraced = cs.some(c => c.isTraced) || vcs.some(c => c.isTraced);
@@ -188,13 +188,17 @@ const ConnectionCanvas = forwardRef<ConnectionCanvasHandle, Props>(function Conn
 
 export default ConnectionCanvas;
 
-function drawCable(ctx: CanvasRenderingContext2D, c: CableInfo, flowOffset: number, isTraced: boolean) {
+function drawCable(ctx: CanvasRenderingContext2D, c: CableInfo, flowOffset: number, isTraced: boolean, scale: number = 1) {
   const { x1, y1, x2, y2, color } = c;
 
   // 베지어 곡선 경로
   const dxAbs = Math.abs(x2 - x1);
   const dyAbs = Math.abs(y2 - y1);
-  const ctrl = Math.max(80, dxAbs / 1.8, dyAbs / 2.5);
+  // ctrl을 도면 좌표 기준으로 계산하되, viewport에서 너무 크게 휘지 않도록 상한
+  // — viewport 픽셀 기준 max 200px → 도면 좌표로 200/scale
+  const maxCtrl = 200 / Math.max(0.1, scale);
+  let ctrl = Math.max(80, dxAbs / 1.8, dyAbs / 2.5);
+  ctrl = Math.min(ctrl, maxCtrl);
 
   const drawPath = () => {
     ctx.beginPath();
