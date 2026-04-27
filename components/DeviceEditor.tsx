@@ -54,6 +54,7 @@ export default function DeviceEditor({ device, layers, allDevices, enabledRoles,
   const [uploadingImage, setUploadingImage] = useState(false);
   const [uploadingAudio, setUploadingAudio] = useState(false);
   const [type, setType] = useState<Device['type']>(device.type);
+  const [mobileExpanded, setMobileExpanded] = useState(false);   // 모바일에서 시트 확대 토글
   const [role, setRole] = useState<DeviceRole>(device.role ?? 'standard');
   const [pgmPort, setPgmPort] = useState<string>(device.pgmPort ?? '');
   const [normals, setNormals] = useState<Record<string, string>>(device.normals ?? {});
@@ -324,16 +325,25 @@ export default function DeviceEditor({ device, layers, allDevices, enabledRoles,
       <div
         data-ui
         className={`fixed bg-gradient-to-b from-neutral-950 via-neutral-950 to-black shadow-2xl z-50 overflow-y-auto custom-scroll
-          inset-x-0 bottom-0 h-[70vh] rounded-t-2xl border-t border-white/15
+          inset-x-0 bottom-0 ${mobileExpanded ? 'h-[95vh]' : 'h-[70vh]'} rounded-t-2xl border-t border-white/15 transition-[height] duration-200
           sm:inset-y-0 sm:right-0 sm:left-auto sm:bottom-auto sm:h-auto sm:rounded-none sm:border-t-0 sm:border-l sm:border-white/10
           sm:w-[90vw] lg:w-[720px] sm:max-w-[720px]`}
+        style={{
+          WebkitOverflowScrolling: 'touch',
+          touchAction: 'pan-y',
+          overscrollBehavior: 'contain',
+        }}
       >
-      {/* Mobile drag handle */}
-      <div className="sm:hidden flex justify-center pt-2 pb-1">
-        <div className="w-10 h-1 rounded-full bg-white/30"></div>
-      </div>
+      {/* Mobile drag handle — 탭하면 확대/축소 토글 */}
+      <button
+        onClick={() => setMobileExpanded(s => !s)}
+        className="sm:hidden flex justify-center items-center pt-3 pb-2 w-full sticky top-0 z-20 bg-gradient-to-b from-neutral-950 to-transparent"
+        title={mobileExpanded ? '축소' : '확대'}
+      >
+        <div className={`w-12 h-1.5 rounded-full transition-colors ${mobileExpanded ? 'bg-amber-400' : 'bg-white/40'}`}></div>
+      </button>
       {/* Header */}
-      <div className={`sticky top-0 z-10 bg-gradient-to-r ${accent.grad} to-neutral-950 backdrop-blur-xl border-b border-white/10`}>
+      <div className={`sticky top-0 sm:top-0 z-10 bg-gradient-to-r ${accent.grad} to-neutral-950 backdrop-blur-xl border-b border-white/10`} style={{ marginTop: 0 }}>
         <div className="px-5 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-1 h-8 rounded-full" style={{ background: `linear-gradient(180deg, ${accent.dot}, ${accent.dot}80)` }}></div>
