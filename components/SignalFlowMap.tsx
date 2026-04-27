@@ -228,6 +228,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   const [viewMode, setViewMode] = useState<ViewMode>('view');
   // 아이콘 모드 — 모든 카드를 작게 압축 표시 (도면 한눈에 보기)
   const [iconMode, setIconMode] = useState(false);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
   const editMode = viewMode !== 'view';   // 기존 코드 호환
   const setEditMode = (b: boolean) => setViewMode(b ? 'edit' : 'view');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -1649,12 +1650,15 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     setEditingDevice(d);
   };
 
-  // 멀티탭 — 16A 인입, 8구 출력
+  // 멀티탭 — 16A 인입, 사용자가 구 수 지정 (기본 8구)
   const handleAddPowerStrip = async () => {
+    const input = prompt('멀티탭 구 수를 입력하세요 (1~32, 기본 8):', '8');
+    if (input === null) return;  // 취소
+    const portCount = Math.max(1, Math.min(32, parseInt(input) || 8));
     const id = `pst_${Date.now().toString(36)}`;
     const powerLayer = layers.find(l => (l.name ?? '').toLowerCase().includes('power') || (l.name ?? '').includes('전력'))?.id ?? layers[0]?.id ?? 'layer_video';
     const inputs = ['IN-1'];
-    const outputs = Array.from({ length: 8 }, (_, i) => `OUT-${i + 1}`);
+    const outputs = Array.from({ length: portCount }, (_, i) => `OUT-${i + 1}`);
     const inputsMeta: Record<string, any> = {
       'IN-1': { name: 'IN-1', layerId: powerLayer, connType: 'POWER', label: '16A 인입' },
     };
@@ -1663,22 +1667,23 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       outputsMeta[p] = { name: p, layerId: powerLayer, connType: 'POWER', label: `${i + 1}구` };
     });
     const d: Device = {
-      id, name: '멀티탭', type: 'power', role: 'power_strip',
+      id,
+      name: `멀티탭 ${portCount}구`,
+      type: 'power',
+      role: 'power_strip',
       x: (-offset.x + 400) / scale, y: (-offset.y + 200) / scale,
       width: 240,
       inputs, outputs,
       inputsMeta, outputsMeta,
-      // 멀티탭은 입력에서 받은 전력을 8구로 분배. 입력 차단기 16A.
-      // 메인 차단기를 16A MCCB 단상으로 흉내냄.
       panelMainPhase: 'single',
-      panelMainCapacity: 16 as any,    // 멀티탭 전용 16A
+      panelMainCapacity: 16 as any,
       panelMainKind: 'MCCB',
       breakers: outputs.map((p, i) => ({
         id: `pst_br_${i}`,
         name: `${i + 1}구`,
         kind: 'MCCB' as const,
         phase: 'single' as const,
-        capacityA: 16 as any,           // 각 구도 16A까지 (실제로는 합쳐서 16A)
+        capacityA: 16 as any,
         outputPort: p,
         color: '#FACC15',
       })),
@@ -2084,6 +2089,57 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
             title="레이어 관리"
           >⧉<span className="hidden sm:inline ml-1">레이어</span> <span className="font-mono opacity-70">{layers.filter(l => l.visible).length}/{layers.length}</span></button>
 
+          {/* 더보기 메뉴 — lg 미만에서만 표시 (작은 화면 정리용) */}
+          <div className="lg:hidden relative shrink-0">
+            <button
+              onClick={() => setShowMoreMenu(s => !s)}
+              className={`px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border whitespace-nowrap ${showMoreMenu ? 'bg-white/15 border-white/30 text-white' : 'bg-white/5 border-white/10 text-neutral-300 hover:text-white hover:bg-white/10'}`}
+              title="더보기 — 패치베이/월박스/허브 등"
+            >⋯<span className="hidden sm:inline ml-1">더보기</span></button>
+            {showMoreMenu && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowMoreMenu(false)} />
+                <div className="absolute top-full right-0 mt-1 z-50 bg-neutral-950 border border-white/15 rounded-lg shadow-2xl py-1 min-w-[180px]" data-ui>
+                  <button
+                    onClick={() => { setShowMoreMenu(false); setShowPatchbayMgr(true); }}
+                    className="w-full text-left px-3 py-2 text-[12px] hover:bg-teal-500/15 text-teal-300 flex items-center gap-2"
+                  >⊟ 패치베이 관리 <span className="ml-auto font-mono text-[10px] opacity-60">{devices.filter(d => d.role === 'patchbay').length}</span></button>
+                  <button
+                    onClick={() => { setShowMoreMenu(false); setShowWallboxMgr(true); }}
+                    className="w-full text-left px-3 py-2 text-[12px] hover:bg-amber-500/15 text-amber-300 flex items-center gap-2"
+                  >▦ 월박스 관리 <span className="ml-auto font-mono text-[10px] opacity-60">{devices.filter(d => d.role === 'wallbox').length}</span></button>
+                  {devices.some(d => d.role === 'patchbay' || d.role === 'router') && (
+                    <button
+                      onClick={() => { setShowMoreMenu(false); setHidePatchbay(v => !v); }}
+                      className="w-full text-left px-3 py-2 text-[12px] hover:bg-teal-500/15 text-neutral-200 flex items-center gap-2"
+                    >{hidePatchbay ? '⊘ 허브 표시' : '⊟ 허브 숨김'}</button>
+                  )}
+                  {(() => {
+                    const allHubs = devices.filter(d => d.role === 'router' || d.role === 'patchbay');
+                    if (allHubs.length === 0) return null;
+                    const activeCount = allHubs.filter(h => inspectHubs.has(h.id)).length;
+                    const allOn = activeCount === allHubs.length;
+                    return (
+                      <button
+                        onClick={() => {
+                          setShowMoreMenu(false);
+                          if (allOn) setInspectHubs(new Set());
+                          else setInspectHubs(new Set(allHubs.map(h => h.id)));
+                        }}
+                        className="w-full text-left px-3 py-2 text-[12px] hover:bg-fuchsia-500/15 text-fuchsia-300 flex items-center gap-2"
+                      >👁 허브 연결선 {allOn ? 'OFF' : 'ON'}</button>
+                    );
+                  })()}
+                  <div className="border-t border-white/10 my-1"></div>
+                  <button
+                    onClick={() => { setShowMoreMenu(false); setShowLegend(s => !s); }}
+                    className="w-full text-left px-3 py-2 text-[12px] hover:bg-white/10 text-neutral-200 flex items-center gap-2"
+                  >🎨 신호 유형 범례</button>
+                </div>
+              </>
+            )}
+          </div>
+
           {/* 배경 이미지 잠금 토글 — 배경 있을 때만 */}
           {currentProject?.background_image_url && (
             <button
@@ -2122,26 +2178,26 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
           {/* 신호 유형 범례 토글 */}
           <button
             onClick={() => setShowLegend(s => !s)}
-            className={`px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border whitespace-nowrap shrink-0 ${
+            className={`hidden lg:flex px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border whitespace-nowrap shrink-0 items-center ${
               showLegend
                 ? 'bg-white/15 border-white/30 text-white'
                 : 'bg-white/5 border-white/10 text-neutral-300 hover:text-white hover:bg-white/10'
             }`}
             title="신호 유형 범례 (Legend) — 색상별 의미"
           >
-            🎨<span className="hidden sm:inline ml-1">범례</span>
+            🎨<span className="ml-1">범례</span>
           </button>
 
           <button
             onClick={() => setShowPatchbayMgr(true)}
-            className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border bg-white/5 border-teal-500/30 text-teal-300 hover:text-white hover:bg-teal-500/20 whitespace-nowrap shrink-0"
+            className="hidden lg:flex px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border bg-white/5 border-teal-500/30 text-teal-300 hover:text-white hover:bg-teal-500/20 whitespace-nowrap shrink-0 items-center"
             title="패치베이 관리"
-          >⊟<span className="hidden sm:inline ml-1">패치베이</span> <span className="font-mono opacity-70">{devices.filter(d => d.role === 'patchbay').length}</span></button>
+          >⊟<span className="ml-1">패치베이</span> <span className="font-mono opacity-70 ml-1">{devices.filter(d => d.role === 'patchbay').length}</span></button>
 
           {devices.some(d => d.role === 'patchbay' || d.role === 'router') && (
             <button
               onClick={() => setHidePatchbay(v => !v)}
-              className={`px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border flex items-center gap-1 whitespace-nowrap shrink-0 ${
+              className={`hidden lg:flex px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border items-center gap-1 whitespace-nowrap shrink-0 ${
                 hidePatchbay
                   ? 'bg-teal-500 border-teal-400 text-white shadow-md shadow-teal-500/30'
                   : 'bg-white/5 border-white/15 text-neutral-400 hover:bg-teal-500/20 hover:text-teal-200 hover:border-teal-500/40'
@@ -2149,15 +2205,15 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
               title={hidePatchbay ? '허브가 숨겨짐 — 클릭하면 표시' : '허브 표시중 — 클릭하면 숨김'}
             >
               <span className="font-mono">{hidePatchbay ? '⊘' : '⊟'}</span>
-              <span className="hidden sm:inline">허브{hidePatchbay ? ' 숨김' : ''}</span>
+              <span>허브{hidePatchbay ? ' 숨김' : ''}</span>
             </button>
           )}
 
           <button
             onClick={() => setShowWallboxMgr(true)}
-            className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border bg-white/5 border-amber-500/30 text-amber-300 hover:text-white hover:bg-amber-500/20 whitespace-nowrap shrink-0"
+            className="hidden lg:flex px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border bg-white/5 border-amber-500/30 text-amber-300 hover:text-white hover:bg-amber-500/20 whitespace-nowrap shrink-0 items-center"
             title="월박스 관리"
-          >▦<span className="hidden sm:inline ml-1">월박스</span> <span className="font-mono opacity-70">{devices.filter(d => d.role === 'wallbox').length}</span></button>
+          >▦<span className="ml-1">월박스</span> <span className="font-mono opacity-70 ml-1">{devices.filter(d => d.role === 'wallbox').length}</span></button>
 
           {/* 라우터/패치베이 선 전체 보기 토글 */}
           {(() => {
@@ -2172,7 +2228,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                   if (allOn) setInspectHubs(new Set());
                   else setInspectHubs(new Set(allHubs.map(h => h.id)));
                 }}
-                className={`px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border flex items-center gap-1 whitespace-nowrap shrink-0 ${
+                className={`hidden lg:flex px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border items-center gap-1 whitespace-nowrap shrink-0 ${
                   allOn
                     ? 'bg-fuchsia-500 border-fuchsia-400 text-white shadow-md shadow-fuchsia-500/40'
                     : someOn
@@ -3078,10 +3134,19 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                             data-port
                             onMouseDown={onPortMouseDown}
                             onClick={e => onPortClick(e, d.id, p.name, false)}
-                            className={`w-3 h-3 rounded-full -ml-[6px] hover:scale-[1.6] transition-transform ring-2 shrink-0 ${isSel && canSelect ? 'ring-cyan-300/70' : 'ring-black/40'}`}
-                            style={{ background: isSel && canSelect ? '#22d3ee' : portColor, boxShadow: `0 0 ${isSel && canSelect ? '12px' : '8px'} ${isSel && canSelect ? '#22d3ee' : portColor}, inset 0 1px 1px rgba(255,255,255,0.3)` }}
+                            className={`relative -ml-[12px] hover:scale-110 active:scale-95 transition-transform shrink-0 flex items-center justify-center`}
+                            style={{ width: 24, height: 24, padding: 0, background: 'transparent', border: 'none', cursor: 'pointer' }}
                             title={meta?.label ?? p.name}
-                          ></button>
+                          >
+                            <span
+                              className={`block rounded-full ring-2 ${isSel && canSelect ? 'ring-cyan-300/70' : 'ring-black/40'}`}
+                              style={{
+                                width: 12, height: 12,
+                                background: isSel && canSelect ? '#22d3ee' : portColor,
+                                boxShadow: `0 0 ${isSel && canSelect ? '12px' : '8px'} ${isSel && canSelect ? '#22d3ee' : portColor}, inset 0 1px 1px rgba(255,255,255,0.3)`,
+                              }}
+                            ></span>
+                          </button>
                           <div className="ml-2 flex-1 flex items-center gap-1.5 min-w-0">
                             {isSel && canSelect && (
                               <span className="text-[9.5px] px-1.5 py-[2px] rounded font-mono font-bold shrink-0"
@@ -3169,13 +3234,19 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                             data-port
                             onMouseDown={onPortMouseDown}
                             onClick={e => onPortClick(e, d.id, p.name, true)}
-                            className={`w-3 h-3 rounded-full -mr-[6px] hover:scale-[1.6] transition-transform ring-2 shrink-0 ${isPending ? 'ring-amber-300/60 animate-pulse' : isPgm ? 'ring-emerald-400/60' : 'ring-black/40'}`}
-                            style={{
-                              background: isPending ? '#fbbf24' : isPgm ? '#10b981' : portColor,
-                              boxShadow: `0 0 ${isPgm ? '12px' : '8px'} ${isPending ? '#fbbf24' : isPgm ? '#10b981' : portColor}, inset 0 1px 1px rgba(255,255,255,0.3)`,
-                            }}
+                            className={`relative -mr-[12px] hover:scale-110 active:scale-95 transition-transform shrink-0 flex items-center justify-center ${isPending ? 'animate-pulse' : ''}`}
+                            style={{ width: 24, height: 24, padding: 0, background: 'transparent', border: 'none', cursor: 'pointer' }}
                             title={isPgm ? `${p.name} (PGM)` : (meta?.label ?? p.name)}
-                          ></button>
+                          >
+                            <span
+                              className={`block rounded-full ring-2 ${isPending ? 'ring-amber-300/60' : isPgm ? 'ring-emerald-400/60' : 'ring-black/40'}`}
+                              style={{
+                                width: 12, height: 12,
+                                background: isPending ? '#fbbf24' : isPgm ? '#10b981' : portColor,
+                                boxShadow: `0 0 ${isPgm ? '12px' : '8px'} ${isPending ? '#fbbf24' : isPgm ? '#10b981' : portColor}, inset 0 1px 1px rgba(255,255,255,0.3)`,
+                              }}
+                            ></span>
+                          </button>
                         </div>
                       );
                     })}

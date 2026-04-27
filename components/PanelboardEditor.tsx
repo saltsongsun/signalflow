@@ -162,20 +162,45 @@ export default function PanelboardEditor({ device, onSave, onClose }: Props) {
           </div>
         </section>
 
-        {/* 부하측 차단기 추가 */}
-        <section className="bg-white/[0.03] border border-white/10 rounded-lg p-3">
-          <div className="flex items-center justify-between mb-2">
-            <div>
-              <div className="text-[11px] font-bold text-neutral-300 uppercase tracking-wider">부하측 차단기 추가 (분기)</div>
-              <div className="text-[10px] text-neutral-500">메인 차단기 ({mainCapacity}A) 이하 용량만 선택 가능</div>
+        {/* 부하측 차단기 추가 — 멀티탭은 1구씩 빠르게 추가 */}
+        {device.role === 'power_strip' ? (
+          <section className="bg-yellow-500/5 border border-yellow-500/20 rounded-lg p-3">
+            <div className="flex items-center justify-between mb-2">
+              <div>
+                <div className="text-[11px] font-bold text-yellow-300 uppercase tracking-wider">멀티탭 구 (Outlet)</div>
+                <div className="text-[10px] text-neutral-500">현재 {breakers.length}구. 합계 부하가 16A를 넘으면 안 됩니다.</div>
+              </div>
+              <div className="flex gap-1">
+                <button
+                  onClick={() => addBreaker('MCCB', 'single', 16 as any)}
+                  className="px-3 py-1.5 text-[11px] font-bold rounded bg-yellow-500/20 hover:bg-yellow-500/40 border border-yellow-500/40 text-yellow-200"
+                >＋ 1구 추가</button>
+                <button
+                  onClick={() => {
+                    const n = parseInt(prompt('한꺼번에 추가할 구 수:', '4') ?? '');
+                    if (!n || n < 1) return;
+                    for (let i = 0; i < Math.min(n, 32); i++) addBreaker('MCCB', 'single', 16 as any);
+                  }}
+                  className="px-3 py-1.5 text-[11px] rounded bg-yellow-500/15 hover:bg-yellow-500/30 border border-yellow-500/30 text-yellow-200"
+                >＋ 여러 구</button>
+              </div>
             </div>
-            <div className="text-[10px] text-neutral-500">현재 <span className="text-cyan-300 font-bold">{breakers.length}</span>개 차단기</div>
-          </div>
-          <div className="grid grid-cols-2 gap-2 mb-2">
-            <BreakerAddGroup label="배선차단기 (MCCB)" kind="MCCB" mainCapacity={mainCapacity} onAdd={addBreaker} />
-            <BreakerAddGroup label="누전차단기 (ELCB)" kind="ELCB" mainCapacity={mainCapacity} onAdd={addBreaker} />
-          </div>
-        </section>
+          </section>
+        ) : (
+          <section className="bg-white/[0.03] border border-white/10 rounded-lg p-3">
+            <div className="flex items-center justify-between mb-2">
+              <div>
+                <div className="text-[11px] font-bold text-neutral-300 uppercase tracking-wider">부하측 차단기 추가 (분기)</div>
+                <div className="text-[10px] text-neutral-500">메인 차단기 ({mainCapacity}A) 이하 용량만 선택 가능</div>
+              </div>
+              <div className="text-[10px] text-neutral-500">현재 <span className="text-cyan-300 font-bold">{breakers.length}</span>개 차단기</div>
+            </div>
+            <div className="grid grid-cols-2 gap-2 mb-2">
+              <BreakerAddGroup label="배선차단기 (MCCB)" kind="MCCB" mainCapacity={mainCapacity} onAdd={addBreaker} />
+              <BreakerAddGroup label="누전차단기 (ELCB)" kind="ELCB" mainCapacity={mainCapacity} onAdd={addBreaker} />
+            </div>
+          </section>
+        )}
 
         {/* 부하측 차단기 목록 */}
         <section className="bg-white/[0.02] border border-white/10 rounded-lg overflow-hidden">
