@@ -1059,7 +1059,9 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
         if (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD) {
           if (!p.moved) {
             p.moved = true;
-            setDraggingCursor('device');
+            // ⚠ setState 호출하면 React가 rerender → 카드 left/top이 d.x/d.y로 덮어써짐
+            // 따라서 DOM body class 직접 조작 (rerender 없이 cursor만 변경)
+            document.body.classList.add('dragging-device');
           }
           const sc = stateRef.current.scale;
           const worldDx = dx / sc;
@@ -1218,6 +1220,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
 
       pointerRef.current = { type: 'none', downX: 0, downY: 0, shiftKey: false, moved: false };
       setDraggingCursor('none');
+      document.body.classList.remove('dragging-device');
     };
 
     window.addEventListener('mousemove', onMove);

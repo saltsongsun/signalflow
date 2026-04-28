@@ -184,3 +184,9 @@ body.is-dragging [class*="backdrop-blur"] {
 .icon-mode-active .cable-label {
   display: none !important;
 }
+
+/* 드래그 중 cursor — body class로 제어 (React rerender 회피) */
+body.dragging-device,
+body.dragging-device * {
+  cursor: grabbing !important;
+}
