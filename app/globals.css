@@ -190,3 +190,10 @@ body.dragging-device,
 body.dragging-device * {
   cursor: grabbing !important;
 }
+
+/* 장비 드래그 중엔 SVG 케이블 오버레이(라벨/클릭영역) 숨김.
+   오버레이는 React state 기준 좌표라 드래그를 따라오지 못하므로,
+   Canvas 선(드래그 추적됨)만 남기고 드롭 시 제자리에 다시 표시 */
+body.dragging-device [data-cable-overlay] {
+  visibility: hidden;
+}

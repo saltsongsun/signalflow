@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { supabase, Device, Connection, ConnectionType, Layer, DEFAULT_LAYERS, DEVICE_ROLE_LABELS, Rack, MULTIVIEW_LAYOUTS, MultiviewLayoutId, Project, CONNECTION_TYPE_COLORS } from '../lib/supabase';
 import { INITIAL_DEVICES, INITIAL_CONNECTIONS, TYPE_COLORS, CONN_TYPE_STYLES } from '../lib/initialData';
@@ -70,7 +70,6 @@ function deviceHeight(d: Device, visibleLayerIds: Set<string>) {
   // multiview: PGM/PVW + 소스 셀 그리드
   if (d.role === 'multiview') {
     const layoutId = (d.multiviewLayout as any) ?? 'pgm+pvw+6';
-    const layout = (typeof (window as any) !== 'undefined' ? null : null) || null;
     // MULTIVIEW_LAYOUTS가 상수이므로 import 없이도 동일 값 사용
     // sourceCells 룩업
     const sourceCellsMap: Record<string, number> = {
@@ -274,6 +273,8 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
 
   const [draggingCursor, setDraggingCursor] = useState<'none' | 'canvas' | 'marquee' | 'device'>('none');
   const [marqueeRect, setMarqueeRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  // 최신 marquee 값을 ref로 미러 — window 리스너 effect가 매 프레임 재등록되지 않도록
+  const marqueeRectRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
 
   // 캔버스 크기 추적 (window resize 대응)
   const [viewport, setViewport] = useState({ w: 1920, h: 1080 });
@@ -333,6 +334,78 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   stateRef.current.devices = devices;
   stateRef.current.selectedIds = selectedIds;
   stateRef.current.layers = layers;
+
+  // ===== 팬/줌 DOM-direct 뷰 트랜스폼 =====
+  // 팬/줌 매 프레임 setState하면 전체 트리가 리렌더되어 버벅임.
+  // 드래그 중엔 world 컨테이너/배경/Canvas만 직접 갱신하고,
+  // React state 커밋은 120ms 스로틀(컬링·라벨 갱신용) + 제스처 종료 시 확정.
+  const worldRef = useRef<HTMLDivElement | null>(null);
+  const canvasAreaRef = useRef<HTMLDivElement | null>(null);
+  const liveViewRef = useRef<{ scale: number; x: number; y: number } | null>(null);
+  const lastViewCommitRef = useRef(0);
+  const viewSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 도면 영역 위 상단바 높이 — 화면 좌표 ↔ 월드 좌표 변환 시 반드시 빼야 함
+  const canvasPadTop = () =>
+    typeof window !== 'undefined' && window.innerWidth >= 768 ? 88 : 48;
+
+  const getLiveView = () =>
+    liveViewRef.current ?? {
+      scale: stateRef.current.scale,
+      x: stateRef.current.offset.x,
+      y: stateRef.current.offset.y,
+    };
+
+  const applyViewDom = (s: number, x: number, y: number) => {
+    liveViewRef.current = { scale: s, x, y };
+    const world = worldRef.current;
+    if (world) world.style.transform = `translate(${x}px, ${y}px) scale(${s})`;
+    const area = canvasAreaRef.current;
+    if (area) {
+      area.style.backgroundSize = `${24 * s}px ${24 * s}px`;
+      area.style.backgroundPosition = `${x}px ${y}px`;
+    }
+    connectionCanvasRef.current?.updateTransform(s, x, y);
+  };
+
+  const commitView = (force = false) => {
+    const lv = liveViewRef.current;
+    if (!lv) return;
+    const now = performance.now();
+    if (!force && now - lastViewCommitRef.current < 120) return;
+    lastViewCommitRef.current = now;
+    setScale(lv.scale);
+    setOffset({ x: lv.x, y: lv.y });
+    if (force) liveViewRef.current = null;
+  };
+
+  // 휠 줌 종료 감지 — 마지막 이벤트 150ms 후 확정 커밋
+  const scheduleViewSettle = () => {
+    if (viewSettleTimerRef.current) clearTimeout(viewSettleTimerRef.current);
+    viewSettleTimerRef.current = setTimeout(() => commitView(true), 150);
+  };
+
+  // 드래그/팬 진행 중 다른 state 변경(실시간 이벤트, presence 등)으로 리렌더가 일어나면
+  // React가 카드 left/top·world transform을 구값으로 되돌린다 → 커밋 직후 다시 적용
+  useLayoutEffect(() => {
+    const lv = liveViewRef.current;
+    if (lv) applyViewDom(lv.scale, lv.x, lv.y);
+    const dragOff = dragOffsetRef.current;
+    const p = pointerRef.current;
+    if (dragOff && p.type === 'device' && p.origPositions) {
+      Object.entries(p.origPositions).forEach(([id, orig]) => {
+        const el = document.querySelector(`[data-device-id="${id}"]`) as HTMLElement | null;
+        if (el) {
+          el.style.left = `${orig.x + dragOff.worldDx}px`;
+          el.style.top = `${orig.y + dragOff.worldDy}px`;
+        }
+        document.querySelectorAll(`[data-badge-for="${id}"]`).forEach(b => {
+          (b as HTMLElement).style.transform = `translate(${dragOff.worldDx}px, ${dragOff.worldDy}px)`;
+        });
+      });
+      connectionCanvasRef.current?.updateDragOffset(dragOff);
+    }
+  });
 
   // ===== Load data =====
   useEffect(() => {
@@ -1014,6 +1087,64 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     return m;
   }, [devices, followPathFromOut]);
 
+  // hidePatchbay 모드의 가상 케이블(OUT 라벨 → IN 라벨) — SVG가 아니라 Canvas에서 그림.
+  // Canvas는 드래그 중 fromId/toId 기준으로 오프셋을 적용하므로 장비를 움직여도 선이 따라온다.
+  const canvasVirtualCables = useMemo(() => {
+    if (!hidePatchbay) return [];
+    const LABEL_WIDTH = 130;
+    const LABEL_PAD = 6;
+    const list: Array<{
+      fromId: string; toId: string;
+      x1: number; y1: number; x2: number; y2: number;
+      color: string; strokeWidth: number;
+      isTraced: boolean; isPatch: boolean; isPgm: boolean;
+      dashArray?: number[];
+      isVirtual: true;
+    }> = [];
+    devices.forEach(d => {
+      if (d.role === 'patchbay' || d.role === 'router') return;
+      if (!isDeviceVisible(d)) return;
+      const cache = visiblePortsCache.get(d.id);
+      if (!cache) return;
+      cache.out.forEach((p, idx) => {
+        const followed = followPathFromOut(d.id, p.name);
+        if (!followed || followed.chain.length === 0) return;
+        if (followed.finalDev.role === 'patchbay' || followed.finalDev.role === 'router') return;
+        const destCache = visiblePortsCache.get(followed.finalDev.id);
+        if (!destCache) return;
+        const toIdx = destCache.in.findIndex(x => x.name === followed.finalPort);
+        if (toIdx < 0) return;
+
+        const isVcTraced = !!traceId
+          && traced.ports.has(`${d.id}:${p.name}`)
+          && traced.ports.has(`${followed.finalDev.id}:${followed.finalPort}`);
+        if (traceId && !isVcTraced) return;
+
+        const lid = d.outputsMeta?.[p.name]?.layerId;
+        const layerColor = lid ? layerById.get(lid)?.color : undefined;
+        const clr = layerColor ?? (d.type === 'audio' ? TYPE_COLORS.audio.main : d.type === 'combined' ? TYPE_COLORS.combined.main : TYPE_COLORS.video.main);
+
+        const x1 = d.x + deviceWidth(d) + 6 + LABEL_WIDTH + LABEL_PAD;
+        const y1 = d.y + HEADER_H + PADDING_Y + idx * PORT_H + PORT_H / 2;
+        const x2 = followed.finalDev.x - 6 - LABEL_WIDTH - LABEL_PAD;
+        const y2 = followed.finalDev.y + HEADER_H + PADDING_Y + toIdx * PORT_H + PORT_H / 2;
+        if (!Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(x2) || !Number.isFinite(y2)) return;
+
+        list.push({
+          fromId: d.id, toId: followed.finalDev.id,
+          x1, y1, x2, y2,
+          color: clr,
+          strokeWidth: isVcTraced ? 2.8 : 1.6,
+          isTraced: isVcTraced, isPatch: false, isPgm: false,
+          dashArray: isVcTraced ? undefined : [2, 4],
+          isVirtual: true,
+        });
+      });
+    });
+    return list;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hidePatchbay, devices, visiblePortsCache, followPathFromOut, traceId, traced, layerById]);
+
   // ===== Global window listeners =====
   useEffect(() => {
     // 키보드: Cmd/Ctrl+Z — 편집모드 undo
@@ -1051,7 +1182,10 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       const dy = e.clientY - p.downY;
 
       if (p.type === 'canvas' && p.origOffset) {
-        setOffset({ x: p.origOffset.x + dx, y: p.origOffset.y + dy });
+        // DOM-direct 팬 — React 리렌더 없이 world/배경/Canvas만 이동, 커밋은 스로틀
+        const s = liveViewRef.current?.scale ?? stateRef.current.scale;
+        applyViewDom(s, p.origOffset.x + dx, p.origOffset.y + dy);
+        commitView();
         if (!p.moved && (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD)) {
           p.moved = true;
         }
@@ -1077,6 +1211,10 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
               el.style.left = `${newX}px`;
               el.style.top = `${newY}px`;
             }
+            // 카드 좌우의 허브 배지/목적지 라벨(카드 DOM 밖 형제 요소)도 함께 이동
+            document.querySelectorAll(`[data-badge-for="${id}"]`).forEach(b => {
+              (b as HTMLElement).style.transform = `translate(${worldDx}px, ${worldDy}px)`;
+            });
           });
           // Canvas에 드래그 오프셋 전달 — React state 없이 imperative redraw
           const newDragOffset = { ids: new Set(Object.keys(origs)), worldDx, worldDy };
@@ -1084,15 +1222,15 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
           connectionCanvasRef.current?.updateDragOffset(newDragOffset);
         }
       } else if (p.type === 'marquee' && p.worldStartX !== undefined && p.worldStartY !== undefined) {
-        const sc = stateRef.current.scale;
-        const offs = stateRef.current.offset;
-        const wx = (e.clientX - offs.x) / sc;
-        const wy = (e.clientY - offs.y) / sc;
+        const v = getLiveView();
+        const wx = (e.clientX - v.x) / v.scale;
+        const wy = (e.clientY - canvasPadTop() - v.y) / v.scale;
         const x = Math.min(p.worldStartX, wx);
         const y = Math.min(p.worldStartY, wy);
         const w = Math.abs(wx - p.worldStartX);
         const h = Math.abs(wy - p.worldStartY);
-        setMarqueeRect({ x, y, w, h });
+        marqueeRectRef.current = { x, y, w, h };
+        setMarqueeRect(marqueeRectRef.current);
         if (!p.moved && (w > DRAG_THRESHOLD || h > DRAG_THRESHOLD)) p.moved = true;
       }
     };
@@ -1142,6 +1280,12 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
             dragOffsetRef.current = null;
             connectionCanvasRef.current?.updateDragOffset(null);
           }
+          // 배지/라벨에 걸어둔 드래그용 transform 해제 (React가 관리하지 않는 인라인 속성)
+          ids.forEach(id => {
+            document.querySelectorAll(`[data-badge-for="${id}"]`).forEach(b => {
+              (b as HTMLElement).style.transform = '';
+            });
+          });
           // DB 저장
           const saves = Object.entries(finalPositions).map(([id, pos]) =>
             (supabase as any).from('devices').update({ x: pos.x, y: pos.y }).eq('id', id)
@@ -1197,7 +1341,8 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
           }
         }
       } else if (p.type === 'marquee' && p.worldStartX !== undefined && p.worldStartY !== undefined) {
-        if (p.moved && marqueeRect) {
+        const mq = marqueeRectRef.current;
+        if (p.moved && mq) {
           const vis = stateRef.current.visibleLayerIds;
           const inside = stateRef.current.devices.filter(dev => {
             if (dev.inputs.length + dev.outputs.length > 0) {
@@ -1207,15 +1352,18 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
             }
             const w = deviceWidth(dev);
             const h = deviceHeight(dev, vis);
-            return dev.x < marqueeRect.x + marqueeRect.w && dev.x + w > marqueeRect.x
-                && dev.y < marqueeRect.y + marqueeRect.h && dev.y + h > marqueeRect.y;
+            return dev.x < mq.x + mq.w && dev.x + w > mq.x
+                && dev.y < mq.y + mq.h && dev.y + h > mq.y;
           }).map(dev => dev.id);
           setSelectedIds(new Set(inside));
         }
+        marqueeRectRef.current = null;
         setMarqueeRect(null);
-      } else if (p.type === 'canvas' && !p.moved) {
+      } else if (p.type === 'canvas') {
+        // 팬 종료 — 스로틀로 미뤄둔 뷰 상태 확정 커밋
+        commitView(true);
         // 빈 공간 탭 (드래그 안 함) → 보기 모드면 trace 해제
-        if (!stateRef.current.editMode) setTraceId(null);
+        if (!p.moved && !stateRef.current.editMode) setTraceId(null);
       }
 
       pointerRef.current = { type: 'none', downX: 0, downY: 0, shiftKey: false, moved: false };
@@ -1250,13 +1398,15 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
 
     return () => {
       if (rafId != null) cancelAnimationFrame(rafId);
+      if (viewSettleTimerRef.current) clearTimeout(viewSettleTimerRef.current);
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
       window.removeEventListener('touchmove', onTouchMove);
       window.removeEventListener('touchend', onTouchEnd);
       window.removeEventListener('touchcancel', onTouchEnd);
     };
-  }, [marqueeRect]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ===== Canvas mousedown =====
   const onCanvasMouseDown = (e: React.MouseEvent) => {
@@ -1264,8 +1414,9 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     if (target.closest('[data-device-id], [data-port], [data-ui]')) return;
 
     if (editMode && e.shiftKey) {
-      const wx = (e.clientX - offset.x) / scale;
-      const wy = (e.clientY - offset.y) / scale;
+      const v = getLiveView();
+      const wx = (e.clientX - v.x) / v.scale;
+      const wy = (e.clientY - canvasPadTop() - v.y) / v.scale;
       pointerRef.current = {
         type: 'marquee',
         downX: e.clientX, downY: e.clientY,
@@ -1273,13 +1424,15 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
         worldStartX: wx, worldStartY: wy,
       };
       setDraggingCursor('marquee');
-      setMarqueeRect({ x: wx, y: wy, w: 0, h: 0 });
+      marqueeRectRef.current = { x: wx, y: wy, w: 0, h: 0 };
+      setMarqueeRect(marqueeRectRef.current);
     } else {
+      const v = getLiveView();
       pointerRef.current = {
         type: 'canvas',
         downX: e.clientX, downY: e.clientY,
         shiftKey: e.shiftKey, moved: false,
-        origOffset: offset,
+        origOffset: { x: v.x, y: v.y },
       };
       setDraggingCursor('canvas');
       // 편집모드에서 빈 공간 클릭은 다중선택 해제. 보기모드에서는 trace 유지.
@@ -1290,14 +1443,16 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   const onWheel = (e: React.WheelEvent) => {
     e.preventDefault();
     const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
+    const v = getLiveView();
     const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
+    const my = e.clientY - rect.top - canvasPadTop();  // 월드 원점은 상단바 아래에서 시작
     const delta = e.deltaY > 0 ? 0.9 : 1.1;
-    const newScale = Math.min(2, Math.max(0.15, scale * delta));
-    const wx = (mx - offset.x) / scale;
-    const wy = (my - offset.y) / scale;
-    setScale(newScale);
-    setOffset({ x: mx - wx * newScale, y: my - wy * newScale });
+    const newScale = Math.min(2, Math.max(0.15, v.scale * delta));
+    const wx = (mx - v.x) / v.scale;
+    const wy = (my - v.y) / v.scale;
+    applyViewDom(newScale, mx - wx * newScale, my - wy * newScale);
+    commitView();          // 120ms 스로틀 커밋
+    scheduleViewSettle();  // 휠 멈춘 뒤 확정 커밋
   };
 
   // ===== 터치/핀치 핸들러 (캔버스 레벨) =====
@@ -1314,21 +1469,23 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       const dist = Math.hypot(dx, dy);
       const midX = (t1.clientX + t2.clientX) / 2;
       const midY = (t1.clientY + t2.clientY) / 2;
+      const v = getLiveView();
       pinchRef.current = {
         active: true,
         startDist: dist,
-        startScale: scale,
+        startScale: v.scale,
         startMidX: midX, startMidY: midY,
-        startOffset: { ...offset },
+        startOffset: { x: v.x, y: v.y },
       };
     } else if (e.touches.length === 1) {
       // 한 손가락 팬 - canvas mousedown처럼 처리 (synthesized MouseEvent로 재활용하지 않고 직접)
       const t = e.touches[0];
+      const v = getLiveView();
       pointerRef.current = {
         type: 'canvas',
         downX: t.clientX, downY: t.clientY,
         shiftKey: false, moved: false,
-        origOffset: { ...offset },
+        origOffset: { x: v.x, y: v.y },
       };
       setDraggingCursor('canvas');
       if (editMode) setSelectedIds(new Set());
@@ -1350,9 +1507,9 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       const factor = dist / pinchRef.current.startDist;
       const newScale = Math.min(2, Math.max(0.15, pinchRef.current.startScale * factor));
 
-      // 핀치 중심점을 기준으로 zoom
+      // 핀치 중심점을 기준으로 zoom (월드 원점은 상단바 아래 시작 — padTop 보정)
       const mx0 = pinchRef.current.startMidX - rect.left;
-      const my0 = pinchRef.current.startMidY - rect.top;
+      const my0 = pinchRef.current.startMidY - rect.top - canvasPadTop();
       const wx = (mx0 - pinchRef.current.startOffset.x) / pinchRef.current.startScale;
       const wy = (my0 - pinchRef.current.startOffset.y) / pinchRef.current.startScale;
 
@@ -1362,8 +1519,8 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       const mx = mx0 + panDx;
       const my = my0 + panDy;
 
-      setScale(newScale);
-      setOffset({ x: mx - wx * newScale, y: my - wy * newScale });
+      applyViewDom(newScale, mx - wx * newScale, my - wy * newScale);
+      commitView();  // 120ms 스로틀 커밋 — 종료 시 onCanvasTouchEnd에서 확정
       return;
     }
     // 단일 터치 팬은 window-level move가 처리함 (Touch → Mouse 에뮬레이션)
@@ -1372,6 +1529,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   const onCanvasTouchEnd = () => {
     if (pinchRef.current.active) {
       pinchRef.current.active = false;
+      commitView(true);  // 핀치 종료 — 뷰 상태 확정
     }
   };
 
@@ -2580,6 +2738,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
 
       {/* Canvas */}
       <div
+        ref={canvasAreaRef}
         className={`absolute inset-0 pt-12 md:pt-[88px] ${cursorClass}`}
         onMouseDown={onCanvasMouseDown}
         onWheel={onWheel}
@@ -2606,10 +2765,11 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
             offsetX={offset.x}
             offsetY={offset.y}
             cables={canvasCables}
+            virtualCables={canvasVirtualCables as any}
           />
         </div>
 
-        <div style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`, transformOrigin: '0 0', width: '4000px', height: '3000px', position: 'relative' }}>
+        <div ref={worldRef} style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`, transformOrigin: '0 0', width: '4000px', height: '3000px', position: 'relative' }}>
           {/* 배경 이미지 — 도면 위에 깔리는 참조 이미지 */}
           {currentProject?.background_image_url && (
             <BackgroundImageLayer
@@ -2720,7 +2880,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
               });
             })()}
 
-            {editMode && connections.map(c => {
+            {editMode && <g data-cable-overlay>{connections.map(c => {
               if (!isConnVisible(c)) return null;
               if (c.from_device === c.to_device && c.is_patch) return null;
               // Trace 중이면 traced가 아닌 연결은 즉시 컷 — 렌더 작업 절약
@@ -2816,106 +2976,9 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                   )}
                 </g>
               );
-            })}
+            })}</g>}
 
-            {/* hidePatchbay 모드: 라벨-to-라벨 가상 케이블 */}
-            {/* Trace 중이면 trace 경로에 해당하는 vc만, 아니면 전체 */}
-            {hidePatchbay && (() => {
-              const LABEL_WIDTH = 130;
-              const LABEL_H_OFFSET = 8;
-              const LABEL_PAD = 6;
-
-              type VirtualCable = {
-                id: string;
-                fromDev: Device; fromPortIdx: number;
-                toDev: Device; toPortIdx: number;
-                code: string;
-                color: string;
-                isTraced: boolean;
-              };
-              const vcs: VirtualCable[] = [];
-
-              devices.forEach(d => {
-                if (d.role === 'patchbay' || d.role === 'router') return;
-                if (!isDeviceVisible(d)) return;
-                const cache = visiblePortsCache.get(d.id);
-                if (!cache) return;
-                cache.out.forEach((p, idx) => {
-                  const followed = followPathFromOut(d.id, p.name);
-                  if (!followed || followed.chain.length === 0) return;
-                  if (followed.finalDev.role === 'patchbay' || followed.finalDev.role === 'router') return;
-                  const destCache = visiblePortsCache.get(followed.finalDev.id);
-                  if (!destCache) return;
-                  const toIdx = destCache.in.findIndex(x => x.name === followed.finalPort);
-                  if (toIdx < 0) return;
-
-                  // trace 모드면 이 경로가 trace 체인에 포함되는지 확인
-                  const isVcTraced = !!traceId
-                    && traced.ports.has(`${d.id}:${p.name}`)
-                    && traced.ports.has(`${followed.finalDev.id}:${followed.finalPort}`);
-                  // trace 중인데 이 경로가 포함 안 되면 건너뜀
-                  if (traceId && !isVcTraced) return;
-
-                  const firstHop = followed.chain[0];
-                  const isRtHop = firstHop.hub.role === 'router';
-                  const hubList = devices.filter(x => x.role === firstHop.hub.role);
-                  const hubIdx = hubList.findIndex(x => x.id === firstHop.hub.id) + 1;
-                  const portNum = firstHop.hub.inputs.indexOf(firstHop.inPort) + 1;
-                  const prefix = isRtHop ? 'R' : 'P';
-                  const code = `${prefix}${String(hubIdx).padStart(2, '0')}-${String(portNum).padStart(2, '0')}`;
-                  const lid = d.outputsMeta?.[p.name]?.layerId;
-                  const layerColor = lid ? layerById.get(lid)?.color : undefined;
-                  const clr = layerColor ?? (d.type === 'audio' ? TYPE_COLORS.audio.main : d.type === 'combined' ? TYPE_COLORS.combined.main : TYPE_COLORS.video.main);
-                  vcs.push({
-                    id: `vc_${d.id}_${p.name}`,
-                    fromDev: d, fromPortIdx: idx,
-                    toDev: followed.finalDev, toPortIdx: toIdx,
-                    code, color: clr, isTraced: isVcTraced,
-                  });
-                });
-              });
-
-              return (
-                <g style={{ pointerEvents: 'none' }}>
-                  {vcs.map(vc => {
-                    const fromW = deviceWidth(vc.fromDev);
-                    // OUT 라벨 박스 오른쪽 끝점
-                    const x1 = vc.fromDev.x + fromW + 6 + LABEL_WIDTH + LABEL_PAD;
-                    const y1 = vc.fromDev.y + HEADER_H + PADDING_Y + vc.fromPortIdx * PORT_H + PORT_H / 2;
-                    // IN 라벨 박스 왼쪽 끝점
-                    const x2 = vc.toDev.x - 6 - LABEL_WIDTH - LABEL_PAD;
-                    const y2 = vc.toDev.y + HEADER_H + PADDING_Y + vc.toPortIdx * PORT_H + PORT_H / 2;
-
-                    const dxAbs = Math.abs(x2 - x1);
-                    const dyAbs = Math.abs(y2 - y1);
-                    const midX = (x1 + x2) / 2;
-                    const path = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
-
-                    const liveSrc = signalByOutput.out.get(`${vc.fromDev.id}:${vc.fromDev.outputs[vc.fromPortIdx]}`);
-                    const isLive = !!liveSrc;
-
-                    return (
-                      <g key={vc.id}>
-                        {vc.isTraced && (
-                          <path d={path} stroke={vc.color} strokeWidth={7} fill="none"
-                                opacity={0.4} filter="url(#glow-strong)" />
-                        )}
-                        <path d={path}
-                              stroke={vc.color}
-                              strokeWidth={vc.isTraced ? 2.8 : 1.6}
-                              strokeDasharray={vc.isTraced ? "6 12" : "2 4"}
-                              fill="none"
-                              opacity={vc.isTraced ? 1 : 0.5}
-                              filter={vc.isTraced ? 'url(#glow)' : undefined}
-                              className={vc.isTraced ? "flow-line" : ""}
-                              style={vc.isTraced ? { animationDuration: '1.2s' } : undefined}
-                        />
-                      </g>
-                    );
-                  })}
-                </g>
-              );
-            })()}
+            {/* hidePatchbay 모드 가상 케이블은 ConnectionCanvas(virtualCables)가 그림 — 드래그 추적 위해 */}
 
             {marqueeRect && (
               <rect
@@ -2936,10 +2999,11 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
             // 뷰포트 컬링 — 화면 밖 장비 skip
             const w = deviceWidth(d);
             const h = deviceHeight(d, visibleLayerIds);
-            const viewWorldLeft = (-offset.x - 200) / scale;
-            const viewWorldTop = (-offset.y - 200) / scale;
-            const viewWorldRight = (viewport.w - offset.x + 200) / scale;
-            const viewWorldBottom = (viewport.h - offset.y + 200) / scale;
+            // 여유폭 400px — 팬 중 스로틀 커밋(120ms) 사이에도 가장자리 빈틈이 안 보이게
+            const viewWorldLeft = (-offset.x - 400) / scale;
+            const viewWorldTop = (-offset.y - 400) / scale;
+            const viewWorldRight = (viewport.w - offset.x + 400) / scale;
+            const viewWorldBottom = (viewport.h - offset.y + 400) / scale;
             if (d.x + w < viewWorldLeft || d.x > viewWorldRight) return null;
             if (d.y + h < viewWorldTop || d.y > viewWorldBottom) return null;
 
@@ -3785,6 +3849,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
               {!isPatchbay && !isWallbox && role !== 'router' && inVis.length > 0 && (hubConnections.length > 0 || hidePatchbay) && (
                 <div
                   data-ui
+                  data-badge-for={d.id}
                   className="absolute flex flex-col items-end pointer-events-auto"
                   style={{
                     left: d.x - 160,
@@ -3884,6 +3949,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
               {!isPatchbay && !isWallbox && role !== 'router' && outVis.length > 0 && (
                 <div
                   data-ui
+                  data-badge-for={d.id}
                   className="absolute flex flex-col pointer-events-auto"
                   style={{
                     left: d.x + w + 6,
@@ -4060,10 +4126,10 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
 
         {/* Zoom */}
         <div data-ui className="absolute bottom-4 right-4 z-20 bg-black/60 backdrop-blur-xl border border-white/10 rounded-xl p-1 flex flex-col gap-0.5 shadow-lg">
-          <button onClick={() => setScale(s => Math.min(2, s * 1.2))} className="w-8 h-8 hover:bg-white/10 rounded-lg text-base transition">＋</button>
+          <button onClick={() => { const v = getLiveView(); applyViewDom(Math.min(2, v.scale * 1.2), v.x, v.y); commitView(true); }} className="w-8 h-8 hover:bg-white/10 rounded-lg text-base transition">＋</button>
           <div className="text-[10px] text-center text-neutral-400 font-mono py-1 border-y border-white/5">{Math.round(scale * 100)}%</div>
-          <button onClick={() => setScale(s => Math.max(0.15, s / 1.2))} className="w-8 h-8 hover:bg-white/10 rounded-lg text-base transition">−</button>
-          <button onClick={() => { setScale(0.7); setOffset({ x: 40, y: 70 }); }} className="w-8 h-8 hover:bg-white/10 rounded-lg text-[10px] transition" title="초기화">⊡</button>
+          <button onClick={() => { const v = getLiveView(); applyViewDom(Math.max(0.15, v.scale / 1.2), v.x, v.y); commitView(true); }} className="w-8 h-8 hover:bg-white/10 rounded-lg text-base transition">−</button>
+          <button onClick={() => { applyViewDom(0.7, 40, 70); commitView(true); }} className="w-8 h-8 hover:bg-white/10 rounded-lg text-[10px] transition" title="초기화">⊡</button>
         </div>
       </div>
 
