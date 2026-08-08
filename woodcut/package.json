@@ -1,0 +1,12 @@
+{
+  "name": "woodcut",
+  "version": "1.0.0",
+  "description": "목공 재단 최적화 PWA — 부재 목록으로 필요한 원장 수와 최적 재단 배치를 계산",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test",
+    "icons": "node tools/gen-icons.mjs",
+    "serve": "npx --yes serve -l 5173 ."
+  }
+}

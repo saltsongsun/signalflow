@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>우드컷 — 목공 재단 최적화</title>
+  <meta name="description" content="부재 목록만 입력하면 필요한 원장 수와 최적 재단 배치를 계산해 주는 목공 재단 도우미 (오프라인 지원 PWA)">
+  <meta name="theme-color" content="#9c5a2b">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png">
+  <link rel="stylesheet" href="./css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <div>
+        <h1>우드컷 <span class="sub">목공 재단 최적화</span></h1>
+        <p class="tagline">부재 목록만 입력하면 필요한 원장 수와 재단 배치를 계산합니다</p>
+      </div>
+      <button id="btn-install" class="btn btn-ghost" hidden>📲 앱 설치</button>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="grid-2">
+      <div class="card">
+        <h2>원장(판재) 설정</h2>
+        <div class="field">
+          <label for="stock-preset">규격 프리셋</label>
+          <select id="stock-preset">
+            <option value="0">합판/MDF 2440 × 1220</option>
+            <option value="1">합판/MDF 1220 × 2440 (세로 결)</option>
+            <option value="2">반장 1220 × 1220</option>
+            <option value="3">집성판 2440 × 610</option>
+            <option value="4">집성판 1200 × 600</option>
+            <option value="custom">직접 입력</option>
+          </select>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="stock-w">가로(mm)</label>
+            <input id="stock-w" type="number" inputmode="decimal" min="1" placeholder="2440">
+          </div>
+          <div class="field">
+            <label for="stock-h">세로(mm)</label>
+            <input id="stock-h" type="number" inputmode="decimal" min="1" placeholder="1220">
+          </div>
+          <div class="field">
+            <label for="stock-price">장당 가격(원, 선택)</label>
+            <input id="stock-price" type="number" inputmode="numeric" min="0" placeholder="45000">
+          </div>
+        </div>
+        <p class="hint">결 방향이 있는 판재라면 <strong>가로 = 결 방향</strong> 기준으로 입력하고, 결을 지켜야 하는 부재는 목록에서 회전을 끄세요.</p>
+      </div>
+
+      <div class="card">
+        <h2>재단 설정</h2>
+        <div class="field-row">
+          <div class="field">
+            <label for="kerf">톱날 두께(mm)</label>
+            <input id="kerf" type="number" inputmode="decimal" min="0" step="0.5" placeholder="5">
+          </div>
+          <div class="field">
+            <label for="trim">가장자리 손질(mm)</label>
+            <input id="trim" type="number" inputmode="decimal" min="0" step="1" placeholder="0">
+          </div>
+        </div>
+        <p class="hint">톱날 두께는 부재 사이마다, 가장자리 손질은 원장 4변에 적용됩니다. 원형톱 기준 4~5mm, 테이블쏘/판넬쏘는 3~4mm가 일반적입니다.</p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>부재 목록</h2>
+      <div class="table-scroll">
+        <table class="parts-table">
+          <thead>
+            <tr><th></th><th>부재 이름</th><th>가로(mm)</th><th>세로(mm)</th><th>수량</th><th>회전 허용</th><th></th></tr>
+          </thead>
+          <tbody id="parts-tbody"></tbody>
+        </table>
+      </div>
+      <div class="btn-row">
+        <button id="btn-add-part" class="btn">＋ 부재 추가</button>
+        <button id="btn-sample" class="btn btn-ghost">예시 불러오기 (책장)</button>
+        <button id="btn-clear-parts" class="btn btn-ghost">전체 삭제</button>
+      </div>
+      <details class="bulk">
+        <summary>여러 부재 한 번에 붙여넣기</summary>
+        <p class="hint">한 줄에 하나씩 <code>이름 가로 세로 [수량] [고정]</code> — 쉼표·탭·공백 모두 구분자로 인식합니다.<br>예) <code>선반 764 280 4</code> / <code>측판, 300, 1200, 2, 고정</code> (고정 = 결 방향 회전 금지)</p>
+        <textarea id="bulk-text" rows="5" placeholder="선반 764 280 4&#10;측판 300 1200 2 고정"></textarea>
+        <button id="btn-bulk-add" class="btn">목록에 추가</button>
+      </details>
+    </section>
+
+    <div class="calc-row">
+      <button id="btn-calc" class="btn btn-primary">🪚 재단 계산하기</button>
+    </div>
+
+    <section id="results" hidden>
+      <div id="alerts"></div>
+      <div id="summary" class="stats"></div>
+      <div id="sheets" class="sheets"></div>
+      <div class="card">
+        <h3>재단 목록</h3>
+        <div id="cutlist" class="table-scroll"></div>
+      </div>
+      <div class="card" id="offcuts"></div>
+      <div class="btn-row no-print">
+        <button id="btn-print" class="btn">🖨 배치도 인쇄</button>
+      </div>
+    </section>
+  </main>
+
+  <footer class="wrap foot">
+    <p>단위: mm · 길로틴 컷(한 방향으로 끝까지 자르는 방식) 기준 배치 · 입력값은 이 기기에 자동 저장됩니다 · 오프라인에서도 동작합니다</p>
+  </footer>
+
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
