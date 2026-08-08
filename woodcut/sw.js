@@ -1,12 +1,13 @@
 // 우드컷 서비스워커 — 오프라인 지원 (배포 시 VERSION을 올리면 캐시가 갱신됨)
 
-const VERSION = 'woodcut-v1';
+const VERSION = 'woodcut-v2';
 const ASSETS = [
   './',
   './index.html',
   './css/style.css',
   './js/app.js',
   './js/optimizer.js',
+  './js/lumber.js',
   './js/render.js',
   './manifest.webmanifest',
   './favicon.svg',

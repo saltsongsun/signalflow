@@ -98,3 +98,84 @@ export function renderSheetSVG(sheet, result) {
   out.push('</svg>');
   return out.join('');
 }
+
+// 각재 1개(bar)의 길이 재단 배치도
+export function renderBarSVG(bar, group, result, uid) {
+  const L = result.stockLen;
+  const H = Math.max(150, Math.min(240, L / 14)); // 원자재가 짧아도 라벨이 들어갈 높이 확보
+  const y0 = 6, bh = H - 12;
+  const trim = result.trim;
+  const hid = `hatch-${uid}`;
+  const out = [];
+
+  out.push(
+    `<svg viewBox="0 0 ${L} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" ` +
+      `aria-label="각재 ${esc(group.spec || '')} 원자재 ${bar.index + 1} 재단 배치도">`
+  );
+  out.push(
+    `<defs><pattern id="${hid}" width="60" height="60" patternUnits="userSpaceOnUse" ` +
+      `patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="60" ` +
+      `stroke="#8a7a5c" stroke-opacity="0.28" stroke-width="6"/></pattern></defs>`
+  );
+  out.push(
+    `<rect x="0" y="${y0}" width="${L}" height="${bh}" fill="#f8f3e6" stroke="#7c6844" ` +
+      `stroke-width="1.5" vector-effect="non-scaling-stroke"/>`
+  );
+
+  // 남는 길이(자투리) 영역: 마지막 부재 끝 ~ 끝단 손질 직전
+  const last = bar.pieces[bar.pieces.length - 1];
+  const usedEnd = last ? last.x + last.len : trim;
+  const leftoverStart = Math.min(usedEnd + (bar.pieces.length ? result.kerf : 0), L - trim);
+  if (L - trim - leftoverStart > 0.5) {
+    out.push(
+      `<rect x="${leftoverStart}" y="${y0}" width="${L - trim - leftoverStart}" height="${bh}" fill="url(#${hid})"/>`
+    );
+  }
+  // 끝단 손질 영역
+  if (trim > 0) {
+    out.push(
+      `<rect x="${trim}" y="${y0}" width="${L - trim * 2}" height="${bh}" fill="none" ` +
+        `stroke="#b39b6e" stroke-width="1" stroke-dasharray="18 14" vector-effect="non-scaling-stroke"/>`
+    );
+  }
+
+  bar.pieces.forEach((p, i) => {
+    const color = PALETTE[p.itemIndex % PALETTE.length];
+    const label = `${p.name} ${fmt(p.len)}`;
+    out.push(
+      `<g><rect x="${p.x}" y="${y0}" width="${p.len}" height="${bh}" fill="${color}" ` +
+        `stroke="#6d5c3d" stroke-width="1" vector-effect="non-scaling-stroke">` +
+        `<title>${esc(p.name)} — ${fmt(p.len)}mm</title></rect>`
+    );
+    const cx = p.x + p.len / 2;
+    const cy = y0 + bh / 2;
+    const fsH = Math.min(bh * 0.36, (p.len * 0.9) / Math.max(label.length, 1) / 0.6);
+    if (fsH >= 26) {
+      out.push(
+        `<text x="${cx}" y="${cy}" fill="${INK}" font-size="${fsH.toFixed(1)}" ` +
+          `text-anchor="middle" dominant-baseline="middle">${esc(label)}</text>`
+      );
+    } else {
+      // 좁은 부재는 세로 라벨 (길이만)
+      const lv = fmt(p.len);
+      const fsV = Math.min(p.len * 0.5, (bh * 0.9) / Math.max(lv.length, 1) / 0.6, 44);
+      if (fsV >= 18) {
+        out.push(
+          `<text x="${cx}" y="${cy}" fill="${INK}" font-size="${fsV.toFixed(1)}" ` +
+            `text-anchor="middle" dominant-baseline="middle" ` +
+            `transform="rotate(-90 ${cx} ${cy})">${lv}</text>`
+        );
+      }
+    }
+    out.push('</g>');
+    // 톱날 자리 표시
+    if (i < bar.pieces.length - 1 && result.kerf > 0) {
+      out.push(
+        `<rect x="${p.x + p.len}" y="${y0}" width="${result.kerf}" height="${bh}" fill="#6d5c3d" fill-opacity="0.5"/>`
+      );
+    }
+  });
+
+  out.push('</svg>');
+  return out.join('');
+}

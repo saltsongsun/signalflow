@@ -1,10 +1,12 @@
 // 우드컷 — UI 로직
 
 import { optimize, collectOffcuts, fmt } from './optimizer.js';
-import { renderSheetSVG, PALETTE } from './render.js';
+import { optimizeLumber, collectLumberOffcuts } from './lumber.js';
+import { renderSheetSVG, renderBarSVG, PALETTE } from './render.js';
 
 const STORAGE_KEY = 'woodcut.project.v1';
 const OFFCUT_MIN_SIDE = 50; // 이 크기(mm) 이상 양변이 남는 조각만 자투리로 표시
+const LUMBER_OFFCUT_MIN = 100; // 이 길이(mm) 이상 남는 각재만 자투리로 표시
 
 const PRESETS = [
   { label: '합판/MDF 2440 × 1220', w: 2440, h: 1220 },
@@ -26,7 +28,21 @@ const SAMPLE = {
     { name: '뒷판', w: 1164, h: 768, qty: 1, rot: true },
     { name: '서랍 앞판', w: 380, h: 180, qty: 2, rot: true },
   ],
+  lumber: {
+    stockLen: 3600,
+    kerf: 3,
+    trim: 10,
+    price: 6500,
+    items: [
+      { spec: '30×30', name: '다리', len: 120, qty: 4 },
+      { spec: '30×30', name: '받침 가로대', len: 764, qty: 2 },
+      { spec: '30×30', name: '받침 세로대', len: 264, qty: 2 },
+      { spec: '30×30', name: '뒤 보강대', len: 1164, qty: 1 },
+    ],
+  },
 };
+
+const DEFAULT_LUMBER = { stockLen: 3600, kerf: 3, trim: 0, price: 0, items: [] };
 
 const $ = (id) => document.getElementById(id);
 const el = {
@@ -40,6 +56,13 @@ const el = {
   addPart: $('btn-add-part'),
   sample: $('btn-sample'),
   clearParts: $('btn-clear-parts'),
+  lumberLen: $('lumber-len'),
+  lumberKerf: $('lumber-kerf'),
+  lumberTrim: $('lumber-trim'),
+  lumberPrice: $('lumber-price'),
+  lumberTbody: $('lumber-tbody'),
+  addLumber: $('btn-add-lumber'),
+  clearLumber: $('btn-clear-lumber'),
   bulkText: $('bulk-text'),
   bulkAdd: $('btn-bulk-add'),
   calc: $('btn-calc'),
@@ -59,6 +82,7 @@ let state = {
   trim: 0,
   price: 0,
   parts: [{ name: '', w: '', h: '', qty: 1, rot: true }],
+  lumber: { ...DEFAULT_LUMBER, items: [] },
 };
 
 // ---------- 저장/불러오기 ----------
@@ -76,7 +100,12 @@ function load() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return;
     const data = JSON.parse(raw);
-    if (data && data.stock && Array.isArray(data.parts)) state = data;
+    if (data && data.stock && Array.isArray(data.parts)) {
+      // 예전 저장본에는 lumber가 없을 수 있음
+      data.lumber = { ...DEFAULT_LUMBER, ...(data.lumber || {}) };
+      if (!Array.isArray(data.lumber.items)) data.lumber.items = [];
+      state = data;
+    }
   } catch (e) {
     /* 손상된 데이터는 무시 */
   }
@@ -103,6 +132,10 @@ function syncSettingsToForm() {
   el.trim.value = state.trim;
   const idx = PRESETS.findIndex((p) => p.w === num(state.stock.w) && p.h === num(state.stock.h));
   el.preset.value = idx >= 0 ? String(idx) : 'custom';
+  el.lumberLen.value = state.lumber.stockLen || '';
+  el.lumberKerf.value = state.lumber.kerf;
+  el.lumberTrim.value = state.lumber.trim;
+  el.lumberPrice.value = state.lumber.price || '';
 }
 
 function readSettings() {
@@ -111,6 +144,10 @@ function readSettings() {
   state.price = num(el.price.value);
   state.kerf = num(el.kerf.value);
   state.trim = num(el.trim.value);
+  state.lumber.stockLen = num(el.lumberLen.value);
+  state.lumber.kerf = num(el.lumberKerf.value);
+  state.lumber.trim = num(el.lumberTrim.value);
+  state.lumber.price = num(el.lumberPrice.value);
 }
 
 function renderPartsTable() {
@@ -131,6 +168,21 @@ function renderPartsTable() {
 
 function escAttr(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+function renderLumberTable() {
+  el.lumberTbody.innerHTML = '';
+  state.lumber.items.forEach((it, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td data-label="색"><span class="chip" style="background:${PALETTE[i % PALETTE.length]}"></span></td>
+      <td data-label="규격(단면)"><input type="text" data-lfield="spec" data-i="${i}" value="${escAttr(it.spec)}" placeholder="30×30"></td>
+      <td data-label="부재 이름"><input type="text" data-lfield="name" data-i="${i}" value="${escAttr(it.name)}" placeholder="각재 ${i + 1}"></td>
+      <td data-label="길이(mm)"><input type="number" inputmode="decimal" min="1" data-lfield="len" data-i="${i}" value="${it.len}" placeholder="720"></td>
+      <td data-label="수량"><input type="number" inputmode="numeric" min="1" step="1" data-lfield="qty" data-i="${i}" value="${it.qty}"></td>
+      <td data-label=""><button type="button" class="btn-icon btn-lremove" data-i="${i}" aria-label="각재 삭제">✕</button></td>`;
+    el.lumberTbody.appendChild(tr);
+  });
 }
 
 // ---------- 부재 조작 ----------
@@ -171,21 +223,34 @@ function parseBulk(text) {
 
 // ---------- 계산/결과 ----------
 
-function currentInput() {
+function hasPanelRows() {
+  return state.parts.some((p) => num(p.w) > 0 && num(p.h) > 0 && num(p.qty) > 0);
+}
+
+function hasLumberRows() {
+  return state.lumber.items.some((it) => num(it.len) > 0 && num(it.qty) > 0);
+}
+
+function computeAll() {
   readSettings();
-  return {
-    parts: state.parts,
-    stock: state.stock,
-    kerf: state.kerf,
-    trim: state.trim,
-  };
+  const panel = hasPanelRows()
+    ? optimize({ parts: state.parts, stock: state.stock, kerf: state.kerf, trim: state.trim })
+    : null;
+  const lumber = hasLumberRows()
+    ? optimizeLumber({
+        items: state.lumber.items,
+        stockLen: state.lumber.stockLen,
+        kerf: state.lumber.kerf,
+        trim: state.lumber.trim,
+      })
+    : null;
+  return { panel, lumber };
 }
 
 let hasResult = false;
 
 function calc() {
-  const result = optimize(currentInput());
-  renderResults(result);
+  renderResults(computeAll());
   hasResult = true;
   el.results.hidden = false;
   el.results.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -195,78 +260,127 @@ let recalcTimer = null;
 function scheduleRecalc() {
   if (!hasResult) return;
   clearTimeout(recalcTimer);
-  recalcTimer = setTimeout(() => {
-    const result = optimize(currentInput());
-    renderResults(result);
-  }, 400);
+  recalcTimer = setTimeout(() => renderResults(computeAll()), 400);
 }
 
-function renderResults(result) {
-  // 경고/오류
+function renderResults({ panel, lumber }) {
   el.alerts.innerHTML = '';
-  for (const msg of result.errors || []) {
+  const addAlert = (cls, msg) => {
     const div = document.createElement('div');
-    div.className = 'alert alert-error';
+    div.className = `alert ${cls}`;
     div.textContent = msg;
     el.alerts.appendChild(div);
-  }
-  if (result.sheets.length && result.kerf === 0) {
-    const div = document.createElement('div');
-    div.className = 'alert alert-warn';
-    div.textContent = '톱날 두께(kerf)가 0mm입니다. 실제 재단에서는 톱날 손실을 감안해 주세요.';
-    el.alerts.appendChild(div);
-  }
+  };
 
-  if (!result.sheets.length) {
+  if (!panel && !lumber) {
+    addAlert('alert-error', '판재 또는 각재 부재를 입력해 주세요.');
     el.summary.innerHTML = '';
     el.sheets.innerHTML = '';
     el.cutlist.innerHTML = '';
     el.offcuts.innerHTML = '';
+    el.offcuts.hidden = true;
     return;
   }
 
-  // 요약 카드
-  const pieceCount = result.sheets.reduce((a, s) => a + s.placements.length, 0);
-  const cards = [
-    { label: '필요 원장', value: `${result.sheetCount}장` },
-    { label: '전체 수율', value: `${(result.utilization * 100).toFixed(1)}%` },
-    { label: '배치한 부재', value: `${pieceCount}개` },
-  ];
-  if (state.price > 0) {
-    cards.push({ label: '예상 자재비', value: `${(state.price * result.sheetCount).toLocaleString('ko-KR')}원` });
+  for (const msg of panel?.errors || []) addAlert('alert-error', msg);
+  for (const msg of lumber?.errors || []) addAlert('alert-error', msg);
+  if (panel && panel.sheets.length && panel.kerf === 0) {
+    addAlert('alert-warn', '판재 톱날 두께(kerf)가 0mm입니다. 실제 재단에서는 톱날 손실을 감안해 주세요.');
   }
+  if (lumber && lumber.barCount && lumber.kerf === 0) {
+    addAlert('alert-warn', '각재 톱날 두께(kerf)가 0mm입니다. 실제 재단에서는 톱날 손실을 감안해 주세요.');
+  }
+
+  // 요약 카드
+  const cards = [];
+  if (panel && panel.sheets.length) {
+    cards.push({ label: '필요 원장', value: `${panel.sheetCount}장` });
+    cards.push({ label: '판재 수율', value: `${(panel.utilization * 100).toFixed(1)}%` });
+  }
+  if (lumber && lumber.barCount) {
+    cards.push({ label: '각재 원자재', value: `${lumber.barCount}개` });
+    cards.push({ label: '각재 수율', value: `${(lumber.utilization * 100).toFixed(1)}%` });
+  }
+  const pieceCount =
+    (panel ? panel.sheets.reduce((a, s) => a + s.placements.length, 0) : 0) +
+    (lumber ? lumber.totalPieces || 0 : 0);
+  if (pieceCount) cards.push({ label: '배치한 부재', value: `${pieceCount}개` });
+  let cost = 0;
+  if (panel && panel.sheets.length && state.price > 0) cost += state.price * panel.sheetCount;
+  if (lumber && lumber.barCount && state.lumber.price > 0) cost += state.lumber.price * lumber.barCount;
+  if (cost > 0) cards.push({ label: '예상 자재비', value: `${cost.toLocaleString('ko-KR')}원` });
   el.summary.innerHTML = cards
     .map((c) => `<div class="stat"><div class="stat-value">${c.value}</div><div class="stat-label">${c.label}</div></div>`)
     .join('');
 
-  // 배치도
-  el.sheets.innerHTML = result.sheets
-    .map((s) => {
-      const cap = `원장 ${s.index + 1} / ${result.sheetCount} — ${fmt(result.stock.w)} × ${fmt(result.stock.h)}mm · 수율 ${(s.utilization * 100).toFixed(1)}% · 부재 ${s.placements.length}개`;
-      return `<figure class="sheet-block"><figcaption>${cap}</figcaption>${renderSheetSVG(s, result)}</figure>`;
-    })
-    .join('');
+  // 배치도 (판재 → 각재)
+  let sheetsHtml = '';
+  if (panel) {
+    sheetsHtml += panel.sheets
+      .map((s) => {
+        const cap = `원장 ${s.index + 1} / ${panel.sheetCount} — ${fmt(panel.stock.w)} × ${fmt(panel.stock.h)}mm · 수율 ${(s.utilization * 100).toFixed(1)}% · 부재 ${s.placements.length}개`;
+        return `<figure class="sheet-block"><figcaption>${cap}</figcaption>${renderSheetSVG(s, panel)}</figure>`;
+      })
+      .join('');
+  }
+  if (lumber) {
+    lumber.groups.forEach((g, gi) => {
+      sheetsHtml += g.bars
+        .map((bar) => {
+          const specTxt = g.spec ? `${escAttr(g.spec)} ` : '';
+          const cap = `각재 ${specTxt}원자재 ${bar.index + 1} / ${g.barCount} — ${fmt(lumber.stockLen)}mm · 수율 ${(bar.utilization * 100).toFixed(1)}% · 남는 길이 ${fmt(bar.leftover)}mm`;
+          return `<figure class="sheet-block bar-block"><figcaption>${cap}</figcaption>${renderBarSVG(bar, g, lumber, `b${gi}-${bar.index}`)}</figure>`;
+        })
+        .join('');
+    });
+  }
+  el.sheets.innerHTML = sheetsHtml;
 
   // 재단 목록
-  const rows = result.parts
-    .map((p) => {
-      const placed = result.sheets.reduce(
-        (a, s) => a + s.placements.filter((pl) => pl.partIndex === p.partIndex).length,
-        0
-      );
-      const chip = `<span class="chip" style="background:${PALETTE[p.partIndex % PALETTE.length]}"></span>`;
-      const rot = p.rot ? '허용' : '<strong>고정</strong>';
-      return `<tr><td>${chip} ${p.partIndex + 1}. ${escAttr(p.name)}</td><td class="num">${fmt(p.w)} × ${fmt(p.h)}</td><td class="num">${p.qty}</td><td class="num">${placed}</td><td>${rot}</td></tr>`;
-    })
-    .join('');
-  el.cutlist.innerHTML = `
-    <table class="list-table">
-      <thead><tr><th>부재</th><th class="num">치수(mm)</th><th class="num">수량</th><th class="num">배치</th><th>회전</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>`;
+  let cutHtml = '';
+  if (panel && panel.parts.length) {
+    const rows = panel.parts
+      .map((p) => {
+        const placed = panel.sheets.reduce(
+          (a, s) => a + s.placements.filter((pl) => pl.partIndex === p.partIndex).length,
+          0
+        );
+        const chip = `<span class="chip" style="background:${PALETTE[p.partIndex % PALETTE.length]}"></span>`;
+        const rot = p.rot ? '허용' : '<strong>고정</strong>';
+        return `<tr><td>${chip} ${p.partIndex + 1}. ${escAttr(p.name)}</td><td class="num">${fmt(p.w)} × ${fmt(p.h)}</td><td class="num">${p.qty}</td><td class="num">${placed}</td><td>${rot}</td></tr>`;
+      })
+      .join('');
+    cutHtml += `
+      <h4>판재</h4>
+      <table class="list-table">
+        <thead><tr><th>부재</th><th class="num">치수(mm)</th><th class="num">수량</th><th class="num">배치</th><th>회전</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+  if (lumber && lumber.items.length) {
+    const rows = lumber.items
+      .map((it) => {
+        const placed = lumber.groups.reduce(
+          (a, g) => a + g.bars.reduce((b, bar) => b + bar.pieces.filter((p) => p.itemIndex === it.itemIndex).length, 0),
+          0
+        );
+        const chip = `<span class="chip" style="background:${PALETTE[it.itemIndex % PALETTE.length]}"></span>`;
+        const spec = it.spec ? escAttr(it.spec) : '<span class="muted">—</span>';
+        return `<tr><td>${chip} ${it.itemIndex + 1}. ${escAttr(it.name)}</td><td>${spec}</td><td class="num">${fmt(it.len)}</td><td class="num">${it.qty}</td><td class="num">${placed}</td></tr>`;
+      })
+      .join('');
+    cutHtml += `
+      <h4>각재</h4>
+      <table class="list-table">
+        <thead><tr><th>부재</th><th>규격</th><th class="num">길이(mm)</th><th class="num">수량</th><th class="num">배치</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+  el.cutlist.innerHTML = cutHtml;
 
   // 자투리
-  const offcuts = collectOffcuts(result, OFFCUT_MIN_SIDE).slice(0, 30);
+  let offHtml = '';
+  const offcuts = panel ? collectOffcuts(panel, OFFCUT_MIN_SIDE).slice(0, 30) : [];
   if (offcuts.length) {
     const orows = offcuts
       .map(
@@ -274,15 +388,30 @@ function renderResults(result) {
           `<tr><td>원장 ${o.sheet + 1}</td><td class="num">${fmt(o.w)} × ${fmt(o.h)}</td><td class="num">${(o.area / 1e6).toFixed(2)}㎡</td></tr>`
       )
       .join('');
-    el.offcuts.innerHTML = `
-      <h3>활용 가능한 자투리 <span class="muted">(양변 ${OFFCUT_MIN_SIDE}mm 이상)</span></h3>
+    offHtml += `
+      <h4>판재 <span class="muted">(양변 ${OFFCUT_MIN_SIDE}mm 이상)</span></h4>
       <table class="list-table">
         <thead><tr><th>위치</th><th class="num">크기(mm)</th><th class="num">면적</th></tr></thead>
         <tbody>${orows}</tbody>
       </table>`;
-  } else {
-    el.offcuts.innerHTML = '';
   }
+  const lumberOffcuts = lumber ? collectLumberOffcuts(lumber, LUMBER_OFFCUT_MIN).slice(0, 30) : [];
+  if (lumberOffcuts.length) {
+    const orows = lumberOffcuts
+      .map(
+        (o) =>
+          `<tr><td>각재 ${o.spec ? escAttr(o.spec) + ' ' : ''}원자재 ${o.bar + 1}</td><td class="num">${fmt(o.len)}mm</td></tr>`
+      )
+      .join('');
+    offHtml += `
+      <h4>각재 <span class="muted">(${LUMBER_OFFCUT_MIN}mm 이상)</span></h4>
+      <table class="list-table">
+        <thead><tr><th>위치</th><th class="num">남는 길이</th></tr></thead>
+        <tbody>${orows}</tbody>
+      </table>`;
+  }
+  el.offcuts.hidden = !offHtml;
+  el.offcuts.innerHTML = offHtml ? `<h3>활용 가능한 자투리</h3>${offHtml}` : '';
 }
 
 // ---------- 이벤트 ----------
@@ -308,6 +437,49 @@ function bindEvents() {
       scheduleRecalc();
     });
   }
+
+  for (const input of [el.lumberLen, el.lumberKerf, el.lumberTrim, el.lumberPrice]) {
+    input.addEventListener('input', () => {
+      readSettings();
+      scheduleSave();
+      scheduleRecalc();
+    });
+  }
+
+  el.lumberTbody.addEventListener('input', (e) => {
+    const t = e.target;
+    const i = Number(t.dataset.i);
+    const f = t.dataset.lfield;
+    if (!Number.isInteger(i) || !f || !state.lumber.items[i]) return;
+    if (f === 'spec' || f === 'name') state.lumber.items[i][f] = t.value;
+    else state.lumber.items[i][f] = t.value === '' ? '' : Number(t.value);
+    scheduleSave();
+    scheduleRecalc();
+  });
+
+  el.lumberTbody.addEventListener('click', (e) => {
+    const btn = e.target.closest('.btn-lremove');
+    if (!btn) return;
+    state.lumber.items.splice(Number(btn.dataset.i), 1);
+    renderLumberTable();
+    scheduleSave();
+    scheduleRecalc();
+  });
+
+  el.addLumber.addEventListener('click', () => {
+    const prev = state.lumber.items[state.lumber.items.length - 1];
+    state.lumber.items.push({ spec: prev ? prev.spec : '', name: '', len: '', qty: 1 });
+    renderLumberTable();
+    scheduleSave();
+  });
+
+  el.clearLumber.addEventListener('click', () => {
+    if (!state.lumber.items.length || !confirm('각재 목록을 모두 지울까요?')) return;
+    state.lumber.items = [];
+    renderLumberTable();
+    scheduleSave();
+    scheduleRecalc();
+  });
 
   el.tbody.addEventListener('input', (e) => {
     const t = e.target;
@@ -337,6 +509,7 @@ function bindEvents() {
     state = JSON.parse(JSON.stringify(SAMPLE));
     syncSettingsToForm();
     renderPartsTable();
+    renderLumberTable();
     scheduleSave();
     calc();
   });
@@ -396,5 +569,6 @@ function setupPWA() {
 load();
 syncSettingsToForm();
 renderPartsTable();
+renderLumberTable();
 bindEvents();
 setupPWA();

@@ -71,7 +71,7 @@
     </section>
 
     <section class="card">
-      <h2>부재 목록</h2>
+      <h2>판재 부재 목록 <span class="muted">(원장 재단)</span></h2>
       <div class="table-scroll">
         <table class="parts-table">
           <thead>
@@ -91,6 +91,41 @@
         <textarea id="bulk-text" rows="5" placeholder="선반 764 280 4&#10;측판 300 1200 2 고정"></textarea>
         <button id="btn-bulk-add" class="btn">목록에 추가</button>
       </details>
+    </section>
+
+    <section class="card">
+      <h2>각재 부재 목록 <span class="muted">(길이 재단)</span></h2>
+      <div class="field-row">
+        <div class="field">
+          <label for="lumber-len">원자재 길이(mm)</label>
+          <input id="lumber-len" type="number" inputmode="decimal" min="1" placeholder="3600">
+        </div>
+        <div class="field">
+          <label for="lumber-kerf">톱날 두께(mm)</label>
+          <input id="lumber-kerf" type="number" inputmode="decimal" min="0" step="0.5" placeholder="3">
+        </div>
+        <div class="field">
+          <label for="lumber-trim">끝단 손질(mm)</label>
+          <input id="lumber-trim" type="number" inputmode="decimal" min="0" step="1" placeholder="0">
+        </div>
+        <div class="field">
+          <label for="lumber-price">개당 가격(원, 선택)</label>
+          <input id="lumber-price" type="number" inputmode="numeric" min="0" placeholder="6500">
+        </div>
+      </div>
+      <div class="table-scroll">
+        <table class="parts-table lumber-table">
+          <thead>
+            <tr><th></th><th>규격(단면)</th><th>부재 이름</th><th>길이(mm)</th><th>수량</th><th></th></tr>
+          </thead>
+          <tbody id="lumber-tbody"></tbody>
+        </table>
+      </div>
+      <div class="btn-row">
+        <button id="btn-add-lumber" class="btn">＋ 각재 추가</button>
+        <button id="btn-clear-lumber" class="btn btn-ghost">각재 전체 삭제</button>
+      </div>
+      <p class="hint">다루끼(30×30)·투바이(38×89) 같은 <strong>규격(단면)이 같은 것끼리</strong> 묶어 원자재를 최소로 쓰도록 배치합니다. 끝단 손질은 원자재 양쪽 끝에 각각 적용됩니다. 각재가 없으면 비워 두세요.</p>
     </section>
 
     <div class="calc-row">
