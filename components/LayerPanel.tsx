@@ -47,7 +47,7 @@ export default function LayerPanel({ layers, onClose }: Props) {
   return (
     <div
       data-ui
-      className="fixed top-[72px] left-4 z-40 w-72 bg-gradient-to-b from-neutral-900/95 to-neutral-950/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl shadow-black/60 overflow-hidden"
+      className="fixed top-[56px] left-4 z-40 w-72 bg-gradient-to-b from-neutral-900/95 to-neutral-950/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl shadow-black/60 overflow-hidden"
       style={{ maxHeight: 'calc(100vh - 100px)' }}
     >
       <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between bg-gradient-to-r from-purple-500/10 to-transparent">

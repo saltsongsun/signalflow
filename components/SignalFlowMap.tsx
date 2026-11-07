@@ -1,7 +1,16 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { flushSync } from 'react-dom';
-import { supabase, Device, Connection, ConnectionType, Layer, DEFAULT_LAYERS, DEVICE_ROLE_LABELS, Rack, MULTIVIEW_LAYOUTS, MultiviewLayoutId, Project, CONNECTION_TYPE_COLORS } from '../lib/supabase';
+import {
+  ArrowLeft, Eye, Cable, Pencil, Layers, Plus, Minus, Undo2, Maximize, Settings2, ChevronDown, Check,
+  Trash2, X, Users, Lock, Unlock, Wrench, SlidersHorizontal, Crosshair, Group, Ungroup,
+  AlignStartVertical, AlignCenterVertical, AlignEndVertical, AlignStartHorizontal, AlignCenterHorizontal,
+  AlignEndHorizontal, AlignHorizontalDistributeCenter, AlignVerticalDistributeCenter,
+  Box, LayoutGrid, SlidersVertical, Server, CreditCard, Zap, PlugZap, Lightbulb, Plug,
+  Route, Spline, Palette, Square, PanelsTopLeft, RotateCcw,
+} from 'lucide-react';
+import { supabase, Device, Connection, ConnectionType, Layer, DEFAULT_LAYERS, DEVICE_ROLE_LABELS, DeviceRole, Rack, MULTIVIEW_LAYOUTS, MultiviewLayoutId, Project, CONNECTION_TYPE_COLORS } from '../lib/supabase';
 import { INITIAL_DEVICES, INITIAL_CONNECTIONS, TYPE_COLORS, CONN_TYPE_STYLES } from '../lib/initialData';
 import DeviceEditor from './DeviceEditor';
 import LayerPanel from './LayerPanel';
@@ -16,9 +25,11 @@ import PanelboardEditor from './PanelboardEditor';
 import BackgroundImageLayer from './BackgroundImageLayer';
 import { computeBreakerLoad, deviceWatts, deviceAmps, breakerCapacityWatts, formatWatts, formatAmps } from '../lib/powerCalc';
 
-type TraceMode = 'both' | 'upstream' | 'downstream';
+const TOPBAR_H = 48;         // 상단 바 높이 (모든 화면 공통 1줄)
+const MIN_SCALE = 0.15;
+const MAX_SCALE = 2;
 
-const PORT_H = 28;           // 22 → 28 (포트 행 간격 더 여유)
+const PORT_H = 28;          // 22 → 28 (포트 행 간격 더 여유)
 const HEADER_H = 58;         // 50 → 58 (헤더 여유)
 const PADDING_Y = 18;        // 14 → 18 (세로 내부 패딩)
 const DRAG_THRESHOLD = 4;
@@ -183,6 +194,111 @@ function patchbayPortXY(d: Device, dir: 'in' | 'out', portIdx: number) {
   return { x: d.x + fx, y: d.y + fy };
 }
 
+// ===== 역할 배지 스타일 (아이콘 · 배경 · 글자 · 테두리) =====
+const ROLE_STYLE: Partial<Record<DeviceRole, { icon: string; bg: string; fg: string; bd: string }>> = {
+  switcher:       { icon: '⇆', bg: 'rgba(16,185,129,0.15)', fg: '#34D399', bd: 'rgba(52,211,153,0.4)' },
+  router:         { icon: '⇅', bg: 'rgba(249,115,22,0.18)', fg: '#FB923C', bd: 'rgba(251,146,60,0.45)' },
+  splitter:       { icon: '⇶', bg: 'rgba(16,185,129,0.15)', fg: '#34D399', bd: 'rgba(52,211,153,0.4)' },
+  patchbay:       { icon: '⊟', bg: 'rgba(20,184,166,0.15)', fg: '#2DD4BF', bd: 'rgba(45,212,191,0.4)' },
+  wallbox:        { icon: '▦', bg: 'rgba(245,158,11,0.15)', fg: '#FBBF24', bd: 'rgba(251,191,36,0.4)' },
+  source:         { icon: '▶', bg: 'rgba(132,204,22,0.2)',  fg: '#A3E635', bd: 'rgba(163,230,53,0.4)' },
+  display:        { icon: '🖵', bg: 'rgba(14,165,233,0.18)', fg: '#38BDF8', bd: 'rgba(56,189,248,0.4)' },
+  multiview:      { icon: '▦', bg: 'rgba(139,92,246,0.18)', fg: '#A78BFA', bd: 'rgba(167,139,250,0.45)' },
+  audio_mixer:    { icon: '🎛', bg: 'rgba(244,63,94,0.18)',  fg: '#FB7185', bd: 'rgba(251,113,133,0.45)' },
+  io_box:         { icon: '📦', bg: 'rgba(34,211,238,0.18)', fg: '#22D3EE', bd: 'rgba(34,211,238,0.45)' },
+  panelboard:     { icon: '⚡', bg: 'rgba(245,158,11,0.2)',  fg: '#FBBF24', bd: 'rgba(251,191,36,0.5)' },
+  power_supply:   { icon: '🔌', bg: 'rgba(234,179,8,0.2)',   fg: '#FACC15', bd: 'rgba(250,204,21,0.5)' },
+  power_consumer: { icon: '💡', bg: 'rgba(249,115,22,0.2)',  fg: '#FB923C', bd: 'rgba(251,146,60,0.5)' },
+  power_strip:    { icon: '🔌', bg: 'rgba(250,204,21,0.2)',  fg: '#FACC15', bd: 'rgba(250,204,21,0.5)' },
+  connector:      { icon: '━', bg: 'rgba(148,163,184,0.15)', fg: '#CBD5E1', bd: 'rgba(203,213,225,0.3)' },
+};
+
+// 범례 — 케이블 색/패턴
+const LEGEND_LINES: Array<{ name: string; color: string; desc: string; dash?: string }> = [
+  { name: 'Video',    color: '#3B82F6', desc: '비디오 신호' },
+  { name: 'Audio',    color: '#EF4444', desc: '오디오 신호' },
+  { name: 'Tie-Line', color: '#A855F7', desc: '연결선',       dash: '1 4' },
+  { name: 'Control',  color: '#10B981', desc: '제어 신호',    dash: '6 3' },
+  { name: 'Power',    color: '#FACC15', desc: '전력 (W=V×A)' },
+  { name: 'Network',  color: '#FFFFFF', desc: '네트워크',     dash: '6 3' },
+  { name: 'Signal',   color: '#94A3B8', desc: '일반 신호',    dash: '4 4' },
+  { name: 'Patch',    color: '#F97316', desc: '수동 패치',    dash: '5 4' },
+];
+
+// ===== 툴바 UI 프리미티브 =====
+const TB_BASE = 'h-8 px-2 sm:px-2.5 inline-flex items-center gap-1.5 rounded-md text-[12px] font-medium whitespace-nowrap shrink-0 transition-colors';
+const TB_IDLE = 'text-neutral-300 hover:text-white hover:bg-white/10';
+const TB_ON = 'bg-white/15 text-white';
+
+function TbButton({ active, onClick, title, children, className = '' }: {
+  active?: boolean; onClick?: () => void; title?: string; children: ReactNode; className?: string;
+}) {
+  return (
+    <button type="button" onClick={onClick} title={title} className={`${TB_BASE} ${active ? TB_ON : TB_IDLE} ${className}`}>
+      {children}
+    </button>
+  );
+}
+
+// 드롭다운 메뉴 — 바깥 클릭 / Esc 로 닫힘
+function Dropdown({ label, title, align = 'left', buttonClassName = '', children }: {
+  label: ReactNode; title?: string; align?: 'left' | 'right'; buttonClassName?: string;
+  children: (close: () => void) => ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: Event) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('touchstart', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('touchstart', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+  return (
+    <div ref={ref} className="relative shrink-0" data-ui>
+      <button type="button" title={title} aria-expanded={open} onClick={() => setOpen(o => !o)}
+        className={`${TB_BASE} ${open ? TB_ON : TB_IDLE} ${buttonClassName}`}>
+        {label}
+        <ChevronDown size={13} className="hidden sm:block opacity-60 -mr-0.5" />
+      </button>
+      {open && (
+        <div className={`absolute top-full mt-1.5 ${align === 'right' ? 'right-0' : 'left-0'} z-50 min-w-[230px] max-h-[70vh] overflow-y-auto rounded-lg border border-white/10 bg-neutral-900 shadow-2xl shadow-black/60 py-1`}>
+          {children(() => setOpen(false))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MenuItem({ icon, label, hint, checked, danger, onClick }: {
+  icon?: ReactNode; label: ReactNode; hint?: ReactNode; checked?: boolean; danger?: boolean; onClick: () => void;
+}) {
+  return (
+    <button type="button" onClick={onClick}
+      className={`w-full flex items-center gap-2.5 px-3 py-2 text-left text-[12.5px] ${danger ? 'text-rose-300 hover:bg-rose-500/15' : 'text-neutral-200 hover:bg-white/10'}`}>
+      <span className="w-4 flex justify-center shrink-0 text-neutral-400">{icon}</span>
+      <span className="flex-1 min-w-0 truncate">{label}</span>
+      {hint !== undefined && <span className="text-[11px] text-neutral-500 font-mono shrink-0">{hint}</span>}
+      {checked !== undefined && (
+        <span className={`w-4 shrink-0 flex justify-center ${checked ? 'text-sky-400' : 'text-transparent'}`}><Check size={14} /></span>
+      )}
+    </button>
+  );
+}
+const MenuLabel = ({ children }: { children: ReactNode }) => (
+  <div className="px-3 pt-2 pb-1 text-[10.5px] font-semibold tracking-wider text-neutral-500">{children}</div>
+);
+const MenuDivider = () => <div className="my-1 border-t border-white/10" />;
+const BarSep = () => <div className="w-px h-5 bg-white/10 mx-0.5 shrink-0" />;
+
 export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   const projectId = project?.id ?? 'default';
   // 프로젝트 메타는 편집 가능하므로 로컬 state로 관리
@@ -229,12 +345,9 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   const [viewMode, setViewMode] = useState<ViewMode>('view');
   // 아이콘 모드 — 모든 카드를 작게 압축 표시 (도면 한눈에 보기)
   const [iconMode, setIconMode] = useState(false);
-  const [showMoreMenu, setShowMoreMenu] = useState(false);
   const editMode = viewMode !== 'view';   // 기존 코드 호환
-  const setEditMode = (b: boolean) => setViewMode(b ? 'edit' : 'view');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [traceId, setTraceId] = useState<string | null>(null);
-  const [traceMode, setTraceMode] = useState<TraceMode>('both');
   // 라우터/패치베이 연결선 표시 토글 — 이 Set에 포함된 장비만 라인 표시
   const [inspectHubs, setInspectHubs] = useState<Set<string>>(new Set());
   // 도면에 패치베이 카드/관련 연결선 숨김 토글 — 기본 ON
@@ -250,8 +363,18 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   const [showBulkEditor, setShowBulkEditor] = useState(false);
   const [pendingFrom, setPendingFrom] = useState<{ device: string; port: string; connType?: ConnectionType } | null>(null);
 
-  const [scale, setScale] = useState(0.7);
-  const [offset, setOffset] = useState({ x: 40, y: 70 });
+  // ===== 뷰포트 (팬/줌) =====
+  // 팬/줌 중에는 React 재렌더 없이 DOM·Canvas만 직접 갱신하고(applyView),
+  // 동작이 끝났을 때 한 번만 재렌더(commitView)해서 컬링·라벨 LOD를 갱신한다.
+  // → 이전: 마우스 이동 1프레임마다 전체 도면(모든 카드) 재렌더 → 버벅임의 주원인
+  const viewRef = useRef<{ scale: number; offset: { x: number; y: number } }>({ scale: 0.7, offset: { x: 40, y: 40 } });
+  const [, setViewCommit] = useState(0);
+  const scale = viewRef.current.scale;
+  const offset = viewRef.current.offset;
+  const worldElRef = useRef<HTMLDivElement>(null);
+  const viewportElRef = useRef<HTMLDivElement>(null);
+  const zoomLabelRef = useRef<HTMLButtonElement>(null);
+  const viewCommitTimerRef = useRef<number | null>(null);
 
   // ===== Pointer tracking =====
   // 드래그가 실제로 일어났는지 장비/캔버스마다 판단하기 위한 상태
@@ -270,10 +393,24 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     // marquee 전용
     worldStartX?: number;
     worldStartY?: number;
+    // device drag 중 움직일 DOM(카드 + 카드 옆 라벨) 캐시
+    dragEls?: Array<{ el: HTMLElement; left: number; top: number }>;
   }>({ type: 'none', downX: 0, downY: 0, shiftKey: false, moved: false });
 
-  const [draggingCursor, setDraggingCursor] = useState<'none' | 'canvas' | 'marquee' | 'device'>('none');
-  const [marqueeRect, setMarqueeRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  // 마키(영역 선택) — state 대신 ref + DOM 직접 갱신 (드래그 중 매 프레임 재렌더 방지)
+  const marqueeRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+  const marqueeElRef = useRef<SVGRectElement>(null);
+  const drawMarquee = (r: { x: number; y: number; w: number; h: number } | null) => {
+    marqueeRef.current = r;
+    const el = marqueeElRef.current;
+    if (!el) return;
+    if (!r) { el.setAttribute('display', 'none'); return; }
+    el.setAttribute('display', 'inline');
+    el.setAttribute('x', String(r.x));
+    el.setAttribute('y', String(r.y));
+    el.setAttribute('width', String(r.w));
+    el.setAttribute('height', String(r.h));
+  };
 
   // 캔버스 크기 추적 (window resize 대응)
   const [viewport, setViewport] = useState({ w: 1920, h: 1080 });
@@ -281,6 +418,62 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   const connectionCanvasRef = useRef<any>(null);
   // 현재 드래그 중인 ID + 오프셋 (Canvas에 imperative로 전달)
   const dragOffsetRef = useRef<{ ids: Set<string>; worldDx: number; worldDy: number } | null>(null);
+
+  // 뷰 변환을 DOM/Canvas에 즉시 반영 (React 재렌더 없음)
+  const applyView = (s: number, o: { x: number; y: number }) => {
+    viewRef.current = { scale: s, offset: o };
+    const w = worldElRef.current;
+    if (w) w.style.transform = `translate(${o.x}px, ${o.y}px) scale(${s})`;
+    const vp = viewportElRef.current;
+    if (vp) {
+      vp.style.backgroundSize = `${24 * s}px ${24 * s}px`;
+      vp.style.backgroundPosition = `${o.x}px ${o.y}px`;
+    }
+    connectionCanvasRef.current?.updateTransform(s, o.x, o.y);
+    const lbl = zoomLabelRef.current?.firstChild;
+    if (lbl) lbl.nodeValue = `${Math.round(s * 100)}%`;
+  };
+  // 팬/줌이 끝났을 때 1회 재렌더 (컬링/라벨 갱신)
+  const commitView = () => {
+    if (viewCommitTimerRef.current != null) { clearTimeout(viewCommitTimerRef.current); viewCommitTimerRef.current = null; }
+    worldElRef.current?.classList.remove('is-moving', 'is-zooming');
+    setViewCommit(n => n + 1);
+  };
+  // 휠/핀치처럼 끝 신호가 없는 연속 입력 — 잠잠해지면 커밋
+  // (줌에는 GPU 레이어(is-moving)를 쓰지 않음 — 배율이 바뀔 때마다 도면 전체를 다시 래스터해서 오히려 느림.
+  //  측정: 휠 p95 66ms → 33ms. 팬은 반대로 레이어가 있어야 빠름: p95 50ms → 17ms)
+  const scheduleCommitView = (ms = 160) => {
+    worldElRef.current?.classList.add('is-zooming');
+    if (viewCommitTimerRef.current != null) clearTimeout(viewCommitTimerRef.current);
+    viewCommitTimerRef.current = window.setTimeout(commitView, ms);
+  };
+  const setView = (s: number, o: { x: number; y: number }) => { applyView(s, o); commitView(); };
+  // 화면(캔버스 영역) 좌표 sx,sy 를 고정점으로 factor 배 확대/축소한 결과
+  const zoomAround = (factor: number, sx: number, sy: number) => {
+    const { scale: s0, offset: o0 } = viewRef.current;
+    const s1 = Math.min(MAX_SCALE, Math.max(MIN_SCALE, s0 * factor));
+    const wx = (sx - o0.x) / s0;
+    const wy = (sy - o0.y) / s0;
+    return { s: s1, o: { x: sx - wx * s1, y: sy - wy * s1 } };
+  };
+  // 버튼 줌 — 화면 중앙 기준
+  const zoomBy = (factor: number) => {
+    const r = viewportElRef.current?.getBoundingClientRect();
+    const { s, o } = zoomAround(factor, (r?.width ?? viewport.w) / 2, (r?.height ?? viewport.h - TOPBAR_H) / 2);
+    setView(s, o);
+  };
+  // 브라우저 좌표 → 도면(world) 좌표
+  const screenToWorld = (clientX: number, clientY: number) => {
+    const r = viewportElRef.current?.getBoundingClientRect();
+    const { scale: s, offset: o } = viewRef.current;
+    return { x: (clientX - (r?.left ?? 0) - o.x) / s, y: (clientY - (r?.top ?? TOPBAR_H) - o.y) / s };
+  };
+  // 새 장비를 놓을 위치 — 현재 화면의 왼쪽 위 근처
+  const spawnPos = () => {
+    const { scale: s, offset: o } = viewRef.current;
+    return { x: (-o.x + 400) / s, y: (-o.y + 160) / s };
+  };
+
   useEffect(() => {
     const update = () => setViewport({ w: window.innerWidth, h: window.innerHeight });
     update();
@@ -299,7 +492,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   }>({ active: false, startDist: 0, startScale: 1, startMidX: 0, startMidY: 0, startOffset: { x: 0, y: 0 } });
 
   // state mirror
-  const stateRef = useRef({ scale, offset, editMode, viewMode, devices, selectedIds, visibleLayerIds: new Set<string>(), layers });
+  const stateRef = useRef({ editMode, viewMode, devices, selectedIds, visibleLayerIds: new Set<string>(), layers, modalOpen: false });
 
   // ===== Undo stack =====
   // 편집 모드에서 Cmd/Ctrl+Z로 마지막 동작을 되돌림.
@@ -326,8 +519,6 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     setUndoLabel(stack[stack.length - 1]?.label ?? null);
     return true;
   };
-  stateRef.current.scale = scale;
-  stateRef.current.offset = offset;
   stateRef.current.editMode = editMode;
   stateRef.current.viewMode = viewMode;
   stateRef.current.devices = devices;
@@ -382,34 +573,31 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       setLoading(false);
     })();
 
-    const ch = (supabase as any).channel(`sfm_${projectId}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'devices' }, (p: any) => {
-        // 다른 프로젝트의 변경은 무시
-        if (p.new?.project_id && p.new.project_id !== projectId) return;
-        if (p.old?.project_id && p.old.project_id !== projectId) return;
-        if (p.eventType === 'INSERT') setDevices(prev => [...prev.filter(d => d.id !== p.new.id), p.new]);
-        else if (p.eventType === 'UPDATE') setDevices(prev => prev.map(d => d.id === p.new.id ? p.new : d));
-        else if (p.eventType === 'DELETE') setDevices(prev => prev.filter(d => d.id !== p.old.id));
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'connections' }, (p: any) => {
-        if (p.new?.project_id && p.new.project_id !== projectId) return;
-        if (p.old?.project_id && p.old.project_id !== projectId) return;
-        if (p.eventType === 'INSERT') setConnections(prev => [...prev.filter(c => c.id !== p.new.id), p.new]);
-        else if (p.eventType === 'UPDATE') setConnections(prev => prev.map(c => c.id === p.new.id ? p.new : c));
-        else if (p.eventType === 'DELETE') setConnections(prev => prev.filter(c => c.id !== p.old.id));
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'layers' }, (p: any) => {
-        if (p.new?.project_id && p.new.project_id !== projectId) return;
-        if (p.old?.project_id && p.old.project_id !== projectId) return;
-        if (p.eventType === 'INSERT') setLayers(prev => [...prev.filter(l => l.id !== p.new.id), p.new]);
-        else if (p.eventType === 'UPDATE') setLayers(prev => prev.map(l => l.id === p.new.id ? p.new : l));
-        else if (p.eventType === 'DELETE') setLayers(prev => prev.filter(l => l.id !== p.old.id));
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'racks' }, (p: any) => {
-        if (p.eventType === 'INSERT') setRacks(prev => [...prev.filter(r => r.id !== p.new.id), p.new]);
-        else if (p.eventType === 'UPDATE') setRacks(prev => prev.map(r => r.id === p.new.id ? p.new : r));
-        else if (p.eventType === 'DELETE') setRacks(prev => prev.filter(r => r.id !== p.old.id));
-      });
+    // 실시간 동기화 — INSERT/UPDATE는 서버에서 이 프로젝트 것만 받도록 필터
+    // (이전: 모든 프로젝트의 변경을 전부 받아서 클라이언트에서 버림 / racks는 필터 자체가 없었음)
+    // DELETE 이벤트는 Supabase에서 필터를 지원하지 않으므로 id로 로컬에 있는 것만 반영
+    const ch = (supabase as any).channel(`sfm_${projectId}`);
+    const pf = `project_id=eq.${projectId}`;
+    const upsertById = <T extends { id: string }>(prev: T[], row: T): T[] => {
+      const i = prev.findIndex(x => x.id === row.id);
+      if (i < 0) return [...prev, row];
+      const next = prev.slice();
+      next[i] = row;
+      return next;
+    };
+    const subscribeTable = <T extends { id: string }>(table: string, set: (fn: (prev: T[]) => T[]) => void) => {
+      ch.on('postgres_changes', { event: 'INSERT', schema: 'public', table, filter: pf }, (p: any) => set(prev => upsertById(prev, p.new)))
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table, filter: pf }, (p: any) => set(prev => upsertById(prev, p.new)))
+        .on('postgres_changes', { event: 'DELETE', schema: 'public', table }, (p: any) => {
+          const id = p.old?.id;
+          if (!id) return;
+          set(prev => (prev.some(x => x.id === id) ? prev.filter(x => x.id !== id) : prev));
+        });
+    };
+    subscribeTable<Device>('devices', setDevices);
+    subscribeTable<Connection>('connections', setConnections);
+    subscribeTable<Layer>('layers', setLayers);
+    subscribeTable<Rack>('racks', setRacks);
     ch.on('presence', { event: 'sync' }, () => {
       setOnline(Object.keys(ch.presenceState()).length || 1);
     });
@@ -421,6 +609,23 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   }, [projectId]);
 
   const devById = useMemo(() => new Map(devices.map(d => [d.id, d])), [devices]);
+
+  // 허브(패치베이/라우터) 순번 — "P01-05" 코드용. (이전: 포트마다 devices.filter()로 매번 재계산)
+  const hubOrdinal = useMemo(() => {
+    const m = new Map<string, number>();
+    let pb = 0, rt = 0;
+    devices.forEach(d => {
+      if (d.role === 'patchbay') m.set(d.id, ++pb);
+      else if (d.role === 'router') m.set(d.id, ++rt);
+    });
+    return m;
+  }, [devices]);
+  const hubCode = (hub: Device, inPort: string) => {
+    const prefix = hub.role === 'router' ? 'R' : 'P';
+    const n = hubOrdinal.get(hub.id) ?? 0;
+    const portNum = hub.inputs.indexOf(inPort) + 1;
+    return `${prefix}${String(n).padStart(2, '0')}-${String(portNum).padStart(2, '0')}`;
+  };
 
   // ===== 전력 과부하 추적 =====
   // breakerLoads: panelboardId → breakerId → BreakerLoad
@@ -502,11 +707,8 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   stateRef.current.visibleLayerIds = visibleLayerIds;
   const layerById = useMemo(() => new Map(layers.map(l => [l.id, l])), [layers]);
 
-  const isDeviceVisible = (d: Device): boolean => {
-    const hasAny = d.inputs.length + d.outputs.length > 0;
-    if (!hasAny) return true;
-    return visiblePorts(d, 'in', visibleLayerIds).length + visiblePorts(d, 'out', visibleLayerIds).length > 0;
-  };
+  // visibleDeviceIds(아래 useMemo)로 O(1) 조회 — 이전엔 호출마다 포트 배열을 다시 필터링
+  const isDeviceVisible = (d: Device): boolean => visibleDeviceIds.has(d.id);
   const isConnVisible = (c: Connection): boolean => {
     const from = devById.get(c.from_device);
     const to = devById.get(c.to_device);
@@ -533,6 +735,26 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       if (d.role === 'power_supply') {
         d.outputs.forEach(p => out.set(`${d.id}:${p}`, d.id));
       }
+    });
+
+    // 패치베이 OUT → 소스 IN 매핑을 루프 밖에서 1회만 계산
+    // (이전: 반복 × 패치베이 × 전체 연결 수 만큼 매번 다시 훑음)
+    // 우선순위는 기존과 동일 — 수동 패치(자기 자신 연결) 먼저, 없으면 normals
+    const selfPatches = new Map<string, Map<string, string>>(); // devId → (to_port → from_port)
+    connections.forEach(c => {
+      if (c.from_device !== c.to_device || !c.is_patch) return;
+      let m = selfPatches.get(c.from_device);
+      if (!m) { m = new Map(); selfPatches.set(c.from_device, m); }
+      m.set(c.to_port, c.from_port);
+    });
+    const patchbayOutToIn = new Map<string, Map<string, string>>();
+    devices.forEach(d => {
+      if (d.role !== 'patchbay') return;
+      const rev = new Map<string, string>();
+      const patches = selfPatches.get(d.id);
+      if (patches) for (const [pIn, pOut] of patches) if (!rev.has(pOut)) rev.set(pOut, pIn);
+      if (d.normals) for (const [nIn, nOut] of Object.entries(d.normals)) if (!rev.has(nOut)) rev.set(nOut, nIn);
+      patchbayOutToIn.set(d.id, rev);
     });
 
     const iterations = Math.max(8, devices.length + 2);
@@ -594,22 +816,10 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
         }
 
         if (d.role === 'patchbay') {
-          const patches = new Map<string, string>();
-          connections.forEach(c => {
-            if (c.from_device === d.id && c.to_device === d.id && c.is_patch) {
-              patches.set(c.to_port, c.from_port);
-            }
-          });
+          const rev = patchbayOutToIn.get(d.id);
+          if (!rev) return;
           d.outputs.forEach(outPort => {
-            let sourceIn: string | undefined;
-            for (const [pIn, pOut] of patches.entries()) {
-              if (pOut === outPort) { sourceIn = pIn; break; }
-            }
-            if (!sourceIn && d.normals) {
-              for (const [nIn, nOut] of Object.entries(d.normals)) {
-                if (nOut === outPort) { sourceIn = nIn; break; }
-              }
-            }
+            const sourceIn = rev.get(outPort);
             if (!sourceIn) return;
             const srcSig = inSignal.get(`${d.id}:${sourceIn}`);
             if (!srcSig) return;
@@ -669,6 +879,17 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     return m;
   }, [devices, signalByOutput, devById]);
 
+  // "장비:OUT포트" → 그 포트에서 나가는 연결 목록 (추적 BFS용 인덱스)
+  const connListByFromPort = useMemo(() => {
+    const m = new Map<string, Connection[]>();
+    connections.forEach(c => {
+      const k = `${c.from_device}:${c.from_port}`;
+      const a = m.get(k);
+      if (a) a.push(c); else m.set(k, [c]);
+    });
+    return m;
+  }, [connections]);
+
   const traced = useMemo(() => {
     if (!traceId) return { devices: new Set<string>(), connections: new Set<string>(), ports: new Set<string>() };
     const dSet = new Set<string>([traceId]);
@@ -705,16 +926,16 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       });
 
       const visited = new Set<string>();
-      while (queue.length > 0) {
-        const cur = queue.shift()!;
+      let head = 0;
+      while (head < queue.length) {
+        const cur = queue[head++];
         const key = `${cur.devId}:${cur.port}:${cur.isOut ? 'o' : 'i'}`;
         if (visited.has(key)) continue;
         visited.add(key);
 
         if (cur.isOut) {
-          // OUT 포트 → 연결된 to_device/to_port의 IN으로 전달
-          connections.forEach(c => {
-            if (c.from_device !== cur.devId || c.from_port !== cur.port) return;
+          // OUT 포트 → 연결된 to_device/to_port의 IN으로 전달 (인덱스 조회 — 이전엔 매 홉마다 전체 연결 스캔)
+          (connListByFromPort.get(`${cur.devId}:${cur.port}`) ?? []).forEach(c => {
             if (c.from_device === c.to_device && c.is_patch) return;
             // 이 신호가 실제로 여기로 전달되는지 확인
             if (signalByOutput.inSignal.get(`${c.to_device}:${c.to_port}`) !== sourceId) return;
@@ -773,13 +994,8 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       });
     }
 
-    if (typeof console !== 'undefined') {
-      console.log('[Trace]', startDev.name, startDev.role, 'dev:', dSet.size, 'conn:', cSet.size, 'port:', pSet.size);
-    }
-
     return { devices: dSet, connections: cSet, ports: pSet };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [traceId, connections, visibleLayerIds, devices, signalByOutput]);
+  }, [traceId, devById, connListByFromPort, signalByOutput]);
 
 
   // ===== 성능 최적화: connection 인덱스 =====
@@ -841,6 +1057,17 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     });
     return m;
   }, [devices, visibleLayerIds]);
+
+  // 보이는 장비 집합 — 포트가 하나도 없거나, 보이는 레이어의 포트가 1개 이상인 장비
+  const visibleDeviceIds = useMemo(() => {
+    const s = new Set<string>();
+    devices.forEach(d => {
+      if (d.inputs.length + d.outputs.length === 0) { s.add(d.id); return; }
+      const c = visiblePortsCache.get(d.id);
+      if (c && c.in.length + c.out.length > 0) s.add(d.id);
+    });
+    return s;
+  }, [devices, visiblePortsCache]);
 
   // ===== Canvas 렌더링용 cable data (정적) =====
   // dragOffset은 의존성에서 제외 — 드래그 중엔 이 memo 재계산 안 됨. Canvas 안에서 offset 적용.
@@ -1015,16 +1242,29 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   }, [devices, followPathFromOut]);
 
   // ===== Global window listeners =====
+  const fitRef = useRef<() => void>(() => {});
   useEffect(() => {
-    // 키보드: Cmd/Ctrl+Z — 편집모드 undo
+    // 키보드: Cmd/Ctrl+Z — 편집모드 undo / Esc — 연결대기·추적·선택 해제 / F — 전체 보기
     const onKey = async (e: KeyboardEvent) => {
+      const ae = document.activeElement as HTMLElement | null;
+      const tag = (ae?.tagName ?? '').toLowerCase();
+      const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || !!ae?.isContentEditable;
+      if (typing) return; // 입력 중이면 브라우저 기본 동작에 맡김
+      const modalOpen = stateRef.current.modalOpen;
+      if (e.key === 'Escape' && !modalOpen) {
+        setPendingFrom(null);
+        setTraceId(null);
+        setSelectedIds(prev => (prev.size ? new Set() : prev));
+        return;
+      }
+      if (!modalOpen && (e.key === 'f' || e.key === 'F' || e.key === 'ㄹ') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        fitRef.current();
+        return;
+      }
       const isUndo = (e.metaKey || e.ctrlKey) && !e.shiftKey && (e.key === 'z' || e.key === 'Z' || e.key === 'ㅋ');
       if (!isUndo) return;
       // 편집모드 아니면 무시
       if (!stateRef.current.editMode) return;
-      // 입력 포커스 중이면 기본 undo에 맡김
-      const tag = (document.activeElement?.tagName ?? '').toLowerCase();
-      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
       e.preventDefault();
       await popUndo();
     };
@@ -1051,48 +1291,50 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       const dy = e.clientY - p.downY;
 
       if (p.type === 'canvas' && p.origOffset) {
-        setOffset({ x: p.origOffset.x + dx, y: p.origOffset.y + dy });
+        // 캔버스 팬 — React 재렌더 없이 transform만 갱신 (끝날 때 commitView 1회)
         if (!p.moved && (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD)) {
           p.moved = true;
+          worldElRef.current?.classList.add('is-moving');
+          document.body.classList.add('is-dragging');
         }
+        if (p.moved) applyView(viewRef.current.scale, { x: p.origOffset.x + dx, y: p.origOffset.y + dy });
       } else if (p.type === 'device' && p.origPositions) {
-        if (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD) {
+        if (p.moved || Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD) {
           if (!p.moved) {
             p.moved = true;
             // ⚠ setState 호출하면 React가 rerender → 카드 left/top이 d.x/d.y로 덮어써짐
             // 따라서 DOM body class 직접 조작 (rerender 없이 cursor만 변경)
-            document.body.classList.add('dragging-device');
+            document.body.classList.add('dragging-device', 'is-dragging');
+            // 움직일 DOM을 한 번만 찾아 캐시 — 카드 + 카드 옆 IN/OUT 라벨(data-follow)
+            const els: Array<{ el: HTMLElement; left: number; top: number }> = [];
+            Object.keys(p.origPositions).forEach(id => {
+              const sel = `[data-device-id="${CSS.escape(id)}"], [data-follow="${CSS.escape(id)}"]`;
+              document.querySelectorAll<HTMLElement>(sel).forEach(el => {
+                els.push({ el, left: parseFloat(el.style.left) || 0, top: parseFloat(el.style.top) || 0 });
+              });
+            });
+            p.dragEls = els;
           }
-          const sc = stateRef.current.scale;
+          const sc = viewRef.current.scale;
           const worldDx = dx / sc;
           const worldDy = dy / sc;
-          const origs = p.origPositions;
           // DOM 직접 조작 — React setState 우회해서 드래그 중 성능 극대화
-          Object.keys(origs).forEach(id => {
-            const orig = origs[id];
-            const el = document.querySelector(`[data-device-id="${id}"]`) as HTMLElement | null;
-            if (el) {
-              const newX = orig.x + worldDx;
-              const newY = orig.y + worldDy;
-              el.style.left = `${newX}px`;
-              el.style.top = `${newY}px`;
-            }
+          p.dragEls?.forEach(({ el, left, top }) => {
+            el.style.left = `${left + worldDx}px`;
+            el.style.top = `${top + worldDy}px`;
           });
           // Canvas에 드래그 오프셋 전달 — React state 없이 imperative redraw
-          const newDragOffset = { ids: new Set(Object.keys(origs)), worldDx, worldDy };
+          const newDragOffset = { ids: new Set(Object.keys(p.origPositions)), worldDx, worldDy };
           dragOffsetRef.current = newDragOffset;
           connectionCanvasRef.current?.updateDragOffset(newDragOffset);
         }
       } else if (p.type === 'marquee' && p.worldStartX !== undefined && p.worldStartY !== undefined) {
-        const sc = stateRef.current.scale;
-        const offs = stateRef.current.offset;
-        const wx = (e.clientX - offs.x) / sc;
-        const wy = (e.clientY - offs.y) / sc;
-        const x = Math.min(p.worldStartX, wx);
-        const y = Math.min(p.worldStartY, wy);
-        const w = Math.abs(wx - p.worldStartX);
-        const h = Math.abs(wy - p.worldStartY);
-        setMarqueeRect({ x, y, w, h });
+        const wpt = screenToWorld(e.clientX, e.clientY);
+        const x = Math.min(p.worldStartX, wpt.x);
+        const y = Math.min(p.worldStartY, wpt.y);
+        const w = Math.abs(wpt.x - p.worldStartX);
+        const h = Math.abs(wpt.y - p.worldStartY);
+        drawMarquee({ x, y, w, h });
         if (!p.moved && (w > DRAG_THRESHOLD || h > DRAG_THRESHOLD)) p.moved = true;
       }
     };
@@ -1107,6 +1349,9 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     const onUp = async () => {
       const p = pointerRef.current;
       if (p.type === 'none') return;
+      // 포인터 상태는 즉시 초기화 — 아래 DB 저장(await) 중 새 드래그가 시작돼도 덮어쓰지 않도록
+      pointerRef.current = { type: 'none', downX: 0, downY: 0, shiftKey: false, moved: false };
+      document.body.classList.remove('dragging-device', 'is-dragging', 'is-panning', 'is-marquee');
 
       if (p.type === 'device') {
         if (p.moved) {
@@ -1197,6 +1442,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
           }
         }
       } else if (p.type === 'marquee' && p.worldStartX !== undefined && p.worldStartY !== undefined) {
+        const marqueeRect = marqueeRef.current;
         if (p.moved && marqueeRect) {
           const vis = stateRef.current.visibleLayerIds;
           const inside = stateRef.current.devices.filter(dev => {
@@ -1212,15 +1458,15 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
           }).map(dev => dev.id);
           setSelectedIds(new Set(inside));
         }
-        setMarqueeRect(null);
-      } else if (p.type === 'canvas' && !p.moved) {
-        // 빈 공간 탭 (드래그 안 함) → 보기 모드면 trace 해제
-        if (!stateRef.current.editMode) setTraceId(null);
+        drawMarquee(null);
+      } else if (p.type === 'canvas') {
+        if (p.moved) {
+          commitView();
+        } else if (!stateRef.current.editMode) {
+          // 빈 공간 탭 (드래그 안 함) → 보기 모드면 trace 해제
+          setTraceId(null);
+        }
       }
-
-      pointerRef.current = { type: 'none', downX: 0, downY: 0, shiftKey: false, moved: false };
-      setDraggingCursor('none');
-      document.body.classList.remove('dragging-device');
     };
 
     window.addEventListener('mousemove', onMove);
@@ -1256,48 +1502,58 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       window.removeEventListener('touchend', onTouchEnd);
       window.removeEventListener('touchcancel', onTouchEnd);
     };
-  }, [marqueeRect]);
+    // 모든 값은 ref로 읽으므로 1회만 등록 (이전: 마키 사각형이 바뀔 때마다 리스너 재등록)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 휠 줌 — passive:false 네이티브 리스너 (React onWheel은 passive라 preventDefault가 안 먹음)
+  useEffect(() => {
+    const el = viewportElRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;          // 줄 단위 → px
+      // 마우스 휠은 한 칸에 ~14%, 트랙패드 핀치(ctrlKey)는 미세하게 — 부드러운 연속 줌
+      let factor = Math.exp(-dy * (e.ctrlKey ? 0.01 : 0.0015));
+      factor = Math.min(1.25, Math.max(0.8, factor));
+      const { s, o } = zoomAround(factor, e.clientX - r.left, e.clientY - r.top);
+      applyView(s, o);
+      scheduleCommitView();
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading]);
 
   // ===== Canvas mousedown =====
   const onCanvasMouseDown = (e: React.MouseEvent) => {
+    if (e.button === 2) return;                 // 우클릭은 무시
     const target = e.target as HTMLElement;
     if (target.closest('[data-device-id], [data-port], [data-ui]')) return;
+    if (e.button === 1) e.preventDefault();     // 휠 클릭 드래그 = 팬 (자동 스크롤 방지)
 
-    if (editMode && e.shiftKey) {
-      const wx = (e.clientX - offset.x) / scale;
-      const wy = (e.clientY - offset.y) / scale;
+    if (editMode && e.shiftKey && e.button === 0) {
+      const w = screenToWorld(e.clientX, e.clientY);
       pointerRef.current = {
         type: 'marquee',
         downX: e.clientX, downY: e.clientY,
         shiftKey: true, moved: false,
-        worldStartX: wx, worldStartY: wy,
+        worldStartX: w.x, worldStartY: w.y,
       };
-      setDraggingCursor('marquee');
-      setMarqueeRect({ x: wx, y: wy, w: 0, h: 0 });
+      document.body.classList.add('is-marquee');
+      drawMarquee({ x: w.x, y: w.y, w: 0, h: 0 });
     } else {
       pointerRef.current = {
         type: 'canvas',
         downX: e.clientX, downY: e.clientY,
         shiftKey: e.shiftKey, moved: false,
-        origOffset: offset,
+        origOffset: { ...viewRef.current.offset },
       };
-      setDraggingCursor('canvas');
+      document.body.classList.add('is-panning');
       // 편집모드에서 빈 공간 클릭은 다중선택 해제. 보기모드에서는 trace 유지.
-      if (editMode && !e.shiftKey) setSelectedIds(new Set());
+      if (editMode && !e.shiftKey && selectedIds.size > 0) setSelectedIds(new Set());
     }
-  };
-
-  const onWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-    const delta = e.deltaY > 0 ? 0.9 : 1.1;
-    const newScale = Math.min(2, Math.max(0.15, scale * delta));
-    const wx = (mx - offset.x) / scale;
-    const wy = (my - offset.y) / scale;
-    setScale(newScale);
-    setOffset({ x: mx - wx * newScale, y: my - wy * newScale });
   };
 
   // ===== 터치/핀치 핸들러 (캔버스 레벨) =====
@@ -1314,13 +1570,16 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       const dist = Math.hypot(dx, dy);
       const midX = (t1.clientX + t2.clientX) / 2;
       const midY = (t1.clientY + t2.clientY) / 2;
+      // 진행 중이던 한 손가락 팬은 취소 (핀치로 전환)
+      pointerRef.current = { type: 'none', downX: 0, downY: 0, shiftKey: false, moved: false };
       pinchRef.current = {
         active: true,
         startDist: dist,
-        startScale: scale,
+        startScale: viewRef.current.scale,
         startMidX: midX, startMidY: midY,
-        startOffset: { ...offset },
+        startOffset: { ...viewRef.current.offset },
       };
+      worldElRef.current?.classList.add('is-zooming');
     } else if (e.touches.length === 1) {
       // 한 손가락 팬 - canvas mousedown처럼 처리 (synthesized MouseEvent로 재활용하지 않고 직접)
       const t = e.touches[0];
@@ -1328,10 +1587,9 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
         type: 'canvas',
         downX: t.clientX, downY: t.clientY,
         shiftKey: false, moved: false,
-        origOffset: { ...offset },
+        origOffset: { ...viewRef.current.offset },
       };
-      setDraggingCursor('canvas');
-      if (editMode) setSelectedIds(new Set());
+      if (editMode && selectedIds.size > 0) setSelectedIds(new Set());
     }
   };
 
@@ -1348,7 +1606,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
 
       const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
       const factor = dist / pinchRef.current.startDist;
-      const newScale = Math.min(2, Math.max(0.15, pinchRef.current.startScale * factor));
+      const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, pinchRef.current.startScale * factor));
 
       // 핀치 중심점을 기준으로 zoom
       const mx0 = pinchRef.current.startMidX - rect.left;
@@ -1362,8 +1620,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       const mx = mx0 + panDx;
       const my = my0 + panDy;
 
-      setScale(newScale);
-      setOffset({ x: mx - wx * newScale, y: my - wy * newScale });
+      applyView(newScale, { x: mx - wx * newScale, y: my - wy * newScale });
       return;
     }
     // 단일 터치 팬은 window-level move가 처리함 (Touch → Mouse 에뮬레이션)
@@ -1372,11 +1629,13 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   const onCanvasTouchEnd = () => {
     if (pinchRef.current.active) {
       pinchRef.current.active = false;
+      commitView();
     }
   };
 
   // ===== Device mousedown =====
   const onDeviceMouseDown = (e: React.MouseEvent, d: Device) => {
+    if (((e as any).button ?? 0) !== 0) return; // 좌클릭(또는 터치)만
     // audio/video/input 등의 UI 컨트롤이면 장비 드래그 시작하지 않음
     const tgt = e.target as HTMLElement;
     if (tgt.closest('[data-ui]') || ['AUDIO', 'VIDEO', 'INPUT', 'BUTTON', 'SELECT', 'TEXTAREA'].includes(tgt.tagName)) {
@@ -1434,15 +1693,8 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   const onDeviceClickView = (e: React.MouseEvent, d: Device) => {
     if (editMode) return;
     e.stopPropagation();
-    setTraceId(t => {
-      // 동일 장비 다시 클릭 → 트레이스 해제
-      if (t === d.id) return null;
-      // 소스 → 하향(다운스트림)만, 디스플레이 → 상향(업스트림)만 자동 설정
-      if (d.role === 'source') setTraceMode('downstream');
-      else if (d.role === 'display') setTraceMode('upstream');
-      else setTraceMode('both');
-      return d.id;
-    });
+    // 동일 장비 다시 클릭 → 트레이스 해제
+    setTraceId(t => (t === d.id ? null : d.id));
   };
 
   // ===== 보기 모드 퀵 액션 =====
@@ -1510,18 +1762,28 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
         to_device: deviceId, to_port: port,
         conn_type: pendingFrom.connType ?? d.inputsMeta?.[port]?.connType ?? null,
         project_id: projectId,
-      };
+      } as unknown as Connection;
       // 덮어쓸 기존 연결 스냅샷
-      const overwritten = connections.find(c => c.to_device === deviceId && c.to_port === port);
+      const isOverwritten = (c: Connection) => c.to_device === deviceId && c.to_port === port;
+      const overwritten = connections.filter(isOverwritten);
+      // 낙관적 반영 — DB 왕복 + 실시간 에코를 기다리지 않고 즉시 표시 (이전: 0.5~1초 지연)
+      setConnections(prev => [...prev.filter(c => !isOverwritten(c)), newConn]);
+      setPendingFrom(null);
       await (supabase as any).from('connections').delete().eq('to_device', deviceId).eq('to_port', port);
-      await (supabase as any).from('connections').insert(newConn);
+      const { error } = await (supabase as any).from('connections').insert(newConn);
+      if (error) {
+        console.error('[Connect error]', error);
+        setConnections(prev => [...prev.filter(c => c.id !== newConn.id), ...overwritten]);
+        alert(`케이블 저장 실패: ${error.message ?? error}`);
+        return;
+      }
       pushUndo('케이블 연결 되돌리기', async () => {
+        setConnections(prev => [...prev.filter(c => c.id !== newConn.id), ...overwritten]);
         await (supabase as any).from('connections').delete().eq('id', newConn.id);
-        if (overwritten) {
+        if (overwritten.length > 0) {
           await (supabase as any).from('connections').insert(overwritten);
         }
       });
-      setPendingFrom(null);
     }
   };
 
@@ -1530,8 +1792,28 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     e.stopPropagation();
   };
 
-  // 장비 insert 시 CHECK 제약/컬럼 누락 자동 우회
+  // 장비 + 연결된 케이블 삭제 (로컬 즉시 반영 → DB)
+  const removeDeviceAndConns = async (id: string) => {
+    setDevices(prev => prev.filter(x => x.id !== id));
+    setConnections(prev => prev.filter(c => c.from_device !== id && c.to_device !== id));
+    await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
+    await (supabase as any).from('devices').delete().eq('id', id);
+  };
+
+  // 장비 insert — 로컬에 즉시 표시(낙관적)하고 DB 저장. 실패하면 되돌림.
   const insertDeviceSafe = async (d: Device): Promise<{ ok: boolean; err?: any }> => {
+    setDevices(prev => [...prev.filter(x => x.id !== d.id), d]);
+    const res = await insertDeviceRaw(d);
+    if (!res.ok) {
+      console.error('[DB insert error]', res.err);
+      setDevices(prev => prev.filter(x => x.id !== d.id));
+      alert(`장비 추가 실패: ${res.err?.message ?? JSON.stringify(res.err)}`);
+    }
+    return res;
+  };
+
+  // 장비 insert 시 CHECK 제약/컬럼 누락 자동 우회
+  const insertDeviceRaw = async (d: Device): Promise<{ ok: boolean; err?: any }> => {
     const tryOnce = async (payload: any): Promise<any> => {
       const { error } = await (supabase as any).from('devices').insert(payload);
       if (!error) return { ok: true };
@@ -1562,19 +1844,17 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     const defaultLayer = layers[0]?.id ?? 'layer_video';
     const d: Device = {
       id, name: '새 장비', type: 'video', role: 'standard',
-      x: (-offset.x + 400) / scale, y: (-offset.y + 200) / scale,
+      ...spawnPos(),
       width: 200, inputs: ['IN-1'], outputs: ['OUT-1'],
       inputsMeta: { 'IN-1': { name: 'IN-1', layerId: defaultLayer } },
       outputsMeta: { 'OUT-1': { name: 'OUT-1', layerId: defaultLayer } },
       physPorts: {}, routing: {},
       project_id: projectId,
     };
-    await insertDeviceSafe(d);
-    pushUndo('장비 추가 되돌리기', async () => {
-      await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
-      await (supabase as any).from('devices').delete().eq('id', id);
-    });
     setEditingDevice(d);
+    await insertDeviceSafe(d);
+    pushUndo('장비 추가 되돌리기', () => removeDeviceAndConns(id));
+
   };
 
   // 멀티뷰 장비 추가 — 기본 IN 8채널(PGM, PVW + 6 소스)
@@ -1586,7 +1866,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     inputs.forEach(p => { inputsMeta[p] = { name: p, layerId: defaultLayer }; });
     const d: Device = {
       id, name: '멀티뷰', type: 'video', role: 'multiview',
-      x: (-offset.x + 400) / scale, y: (-offset.y + 200) / scale,
+      ...spawnPos(),
       width: 340,
       inputs, outputs: [],
       inputsMeta, outputsMeta: {},
@@ -1596,12 +1876,10 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       physPorts: {}, routing: {},
       project_id: projectId,
     };
-    await insertDeviceSafe(d);
-    pushUndo('멀티뷰 추가 되돌리기', async () => {
-      await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
-      await (supabase as any).from('devices').delete().eq('id', id);
-    });
     setEditingDevice(d);
+    await insertDeviceSafe(d);
+    pushUndo('멀티뷰 추가 되돌리기', () => removeDeviceAndConns(id));
+
   };
 
   // 오디오 콘솔 추가 — 기본: 16 IN / 8 OUT, 채널/버스 비어있음
@@ -1616,7 +1894,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     outputs.forEach(p => { outputsMeta[p] = { name: p, layerId: audioLayer, connType: 'XLR' }; });
     const d: Device = {
       id, name: '오디오 콘솔', type: 'audio', role: 'audio_mixer',
-      x: (-offset.x + 400) / scale, y: (-offset.y + 200) / scale,
+      ...spawnPos(),
       width: 280,
       inputs, outputs,
       inputsMeta, outputsMeta,
@@ -1628,12 +1906,10 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       physPorts: {}, routing: {},
       project_id: projectId,
     };
-    await insertDeviceSafe(d);
-    pushUndo('오디오 콘솔 추가 되돌리기', async () => {
-      await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
-      await (supabase as any).from('devices').delete().eq('id', id);
-    });
     setEditingMixer(d);
+    await insertDeviceSafe(d);
+    pushUndo('오디오 콘솔 추가 되돌리기', () => removeDeviceAndConns(id));
+
   };
 
   // I/O 박스 추가 — 종류 선택받아 생성
@@ -1654,20 +1930,17 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       role: 'io_box',
       ioBoxKind: kind,
       ioBoxProtocol: 'Dante',
-      x: (-offset.x + 400) / scale,
-      y: (-offset.y + 200) / scale,
+      ...spawnPos(),
       width: 240,
       inputs, outputs,
       inputsMeta, outputsMeta,
       physPorts: {}, routing: {},
       project_id: projectId,
     };
-    await insertDeviceSafe(d);
-    pushUndo(`${kind === 'stagebox' ? '스테이지박스' : '옵션카드'} 추가 되돌리기`, async () => {
-      await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
-      await (supabase as any).from('devices').delete().eq('id', id);
-    });
     setEditingDevice(d);
+    await insertDeviceSafe(d);
+    pushUndo(`${kind === 'stagebox' ? '스테이지박스' : '옵션카드'} 추가 되돌리기`, () => removeDeviceAndConns(id));
+
   };
 
   // 배전반 추가
@@ -1676,7 +1949,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     const powerLayer = layers.find(l => (l.name ?? '').toLowerCase().includes('power') || (l.name ?? '').includes('전력'))?.id ?? layers[0]?.id ?? 'layer_video';
     const d: Device = {
       id, name: '배전반', type: 'audio', role: 'panelboard',
-      x: (-offset.x + 400) / scale, y: (-offset.y + 200) / scale,
+      ...spawnPos(),
       width: 260,
       inputs: ['MAIN-IN'], outputs: [],
       inputsMeta: { 'MAIN-IN': { name: 'MAIN-IN', layerId: powerLayer, connType: 'POWER' as any, label: '메인 인입' } },
@@ -1688,12 +1961,10 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       physPorts: {}, routing: {},
       project_id: projectId,
     };
-    await insertDeviceSafe(d);
-    pushUndo('배전반 추가 되돌리기', async () => {
-      await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
-      await (supabase as any).from('devices').delete().eq('id', id);
-    });
     setEditingPanel(d);
+    await insertDeviceSafe(d);
+    pushUndo('배전반 추가 되돌리기', () => removeDeviceAndConns(id));
+
   };
 
   // 전력 공급 장비
@@ -1702,7 +1973,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     const powerLayer = layers.find(l => (l.name ?? '').toLowerCase().includes('power') || (l.name ?? '').includes('전력'))?.id ?? layers[0]?.id ?? 'layer_video';
     const d: Device = {
       id, name: '전력 공급', type: 'audio', role: 'power_supply',
-      x: (-offset.x + 400) / scale, y: (-offset.y + 200) / scale,
+      ...spawnPos(),
       width: 200,
       inputs: [], outputs: ['OUT-1'],
       inputsMeta: {},
@@ -1711,11 +1982,10 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       physPorts: {}, routing: {},
       project_id: projectId,
     };
-    await insertDeviceSafe(d);
-    pushUndo('전력 공급 추가 되돌리기', async () => {
-      await (supabase as any).from('devices').delete().eq('id', id);
-    });
     setEditingDevice(d);
+    await insertDeviceSafe(d);
+    pushUndo('전력 공급 추가 되돌리기', () => removeDeviceAndConns(id));
+
   };
 
   // 전력 소비 장비
@@ -1724,7 +1994,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     const powerLayer = layers.find(l => (l.name ?? '').toLowerCase().includes('power') || (l.name ?? '').includes('전력'))?.id ?? layers[0]?.id ?? 'layer_video';
     const d: Device = {
       id, name: '전력 소비', type: 'audio', role: 'power_consumer',
-      x: (-offset.x + 400) / scale, y: (-offset.y + 200) / scale,
+      ...spawnPos(),
       width: 180,
       inputs: ['IN-1'], outputs: [],
       inputsMeta: { 'IN-1': { name: 'IN-1', layerId: powerLayer, connType: 'POWER' as any } },
@@ -1733,11 +2003,10 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       physPorts: {}, routing: {},
       project_id: projectId,
     };
-    await insertDeviceSafe(d);
-    pushUndo('전력 소비 추가 되돌리기', async () => {
-      await (supabase as any).from('devices').delete().eq('id', id);
-    });
     setEditingDevice(d);
+    await insertDeviceSafe(d);
+    pushUndo('전력 소비 추가 되돌리기', () => removeDeviceAndConns(id));
+
   };
 
   // 멀티탭 — 16A 인입, 사용자가 구 수 지정 (기본 8구)
@@ -1761,7 +2030,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       name: `멀티탭 ${portCount}구`,
       type: 'power',
       role: 'power_strip',
-      x: (-offset.x + 400) / scale, y: (-offset.y + 200) / scale,
+      ...spawnPos(),
       width: 240,
       inputs, outputs,
       inputsMeta, outputsMeta,
@@ -1780,12 +2049,10 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       physPorts: {}, routing: {},
       project_id: projectId,
     };
-    await insertDeviceSafe(d);
-    pushUndo('멀티탭 추가 되돌리기', async () => {
-      await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
-      await (supabase as any).from('devices').delete().eq('id', id);
-    });
     setEditingDevice(d);
+    await insertDeviceSafe(d);
+    pushUndo('멀티탭 추가 되돌리기', () => removeDeviceAndConns(id));
+
   };
 
   const handleDuplicateDevice = async () => {
@@ -1809,11 +2076,9 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       normals: src.normals ? { ...src.normals } : undefined,
       project_id: projectId,
     };
-    await (supabase as any).from('devices').insert(clone);
-    pushUndo('복제 되돌리기', async () => {
-      await (supabase as any).from('devices').delete().eq('id', id);
-    });
     setEditingDevice(clone);
+    await insertDeviceSafe(clone);
+    pushUndo('복제 되돌리기', () => removeDeviceAndConns(id));
   };
 
   const handleSaveDevice = async (updates: Partial<Device>) => {
@@ -1877,37 +2142,40 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       await (supabase as any).from('devices').update(before).eq('id', targetId);
     });
   };
+  // 삭제 되돌리기 — 로컬 즉시 복원 후 DB 재삽입
+  const restoreDevicesAndConns = async (devs: Device[], conns: Connection[]) => {
+    const dIds = new Set(devs.map(d => d.id));
+    const cIds = new Set(conns.map(c => c.id));
+    setDevices(prev => [...prev.filter(d => !dIds.has(d.id)), ...devs]);
+    setConnections(prev => [...prev.filter(c => !cIds.has(c.id)), ...conns]);
+    if (devs.length > 0) await (supabase as any).from('devices').insert(devs);
+    if (conns.length > 0) await (supabase as any).from('connections').insert(conns);
+  };
   const handleDeleteDevice = async () => {
     if (!editingDevice) return;
-    const snapshot = { ...editingDevice };
+    const snapshot = { ...(devById.get(editingDevice.id) ?? editingDevice) };
     const relatedConns = connections.filter(c => c.from_device === snapshot.id || c.to_device === snapshot.id);
-    await (supabase as any).from('connections').delete().or(`from_device.eq.${snapshot.id},to_device.eq.${snapshot.id}`);
-    await (supabase as any).from('devices').delete().eq('id', snapshot.id);
-    pushUndo(`"${snapshot.name}" 삭제 되돌리기`, async () => {
-      await (supabase as any).from('devices').insert(snapshot);
-      if (relatedConns.length > 0) {
-        await (supabase as any).from('connections').insert(relatedConns);
-      }
-    });
     setEditingDevice(null);
+    await removeDeviceAndConns(snapshot.id);
+    pushUndo(`"${snapshot.name}" 삭제 되돌리기`, () => restoreDevicesAndConns([snapshot], relatedConns));
   };
   const handleDeleteSelected = async () => {
     if (selectedIds.size === 0) return;
     if (!confirm(`${selectedIds.size}개 장비 삭제?`)) return;
     const ids = Array.from(selectedIds);
-    const snapshotDevs = ids.map(id => devices.find(d => d.id === id)).filter(Boolean) as Device[];
-    const snapshotConns = connections.filter(c =>
-      ids.includes(c.from_device) || ids.includes(c.to_device)
-    );
-    for (const id of ids) {
-      await (supabase as any).from('connections').delete().or(`from_device.eq.${id},to_device.eq.${id}`);
-      await (supabase as any).from('devices').delete().eq('id', id);
-    }
+    const idSet = new Set(ids);
+    const snapshotDevs = devices.filter(d => idSet.has(d.id));
+    const snapshotConns = connections.filter(c => idSet.has(c.from_device) || idSet.has(c.to_device));
+    // 로컬 즉시 반영 후 DB는 한 번에 (이전: 장비마다 2번씩 순차 요청)
+    setDevices(prev => prev.filter(d => !idSet.has(d.id)));
+    setConnections(prev => prev.filter(c => !idSet.has(c.from_device) && !idSet.has(c.to_device)));
     setSelectedIds(new Set());
-    pushUndo(`${ids.length}개 삭제 되돌리기`, async () => {
-      if (snapshotDevs.length > 0) await (supabase as any).from('devices').insert(snapshotDevs);
-      if (snapshotConns.length > 0) await (supabase as any).from('connections').insert(snapshotConns);
-    });
+    await Promise.all([
+      (supabase as any).from('connections').delete().in('from_device', ids),
+      (supabase as any).from('connections').delete().in('to_device', ids),
+    ]);
+    await (supabase as any).from('devices').delete().in('id', ids);
+    pushUndo(`${ids.length}개 삭제 되돌리기`, () => restoreDevicesAndConns(snapshotDevs, snapshotConns));
   };
 
   // ========== 그룹화 ==========
@@ -2097,18 +2365,209 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     setUndoLabel(null);
   };
 
-  // 드래그 중엔 body에 class를 붙여 CSS 애니메이션 일시정지 (성능)
-  // loading 체크 이전에 두어야 Hook 순서 일관 유지
+  // ===== 렌더 최적화: 데이터가 바뀔 때만 다시 만드는 SVG 오버레이 =====
+  // (이전: 상태가 조금만 바뀌어도 매 렌더마다 전체 케이블 라벨/가상 케이블을 다시 계산)
+  const labelLod = scale > 0.5 ? 3 : scale > 0.45 ? 2 : scale > 0.4 ? 1 : 0;
+
+  // 편집/연결 모드 — 케이블 클릭 영역 + 연결방식/Tie-Line/PATCH 라벨
+  const editCableOverlay = useMemo(() => {
+    if (!editMode) return null;
+    return connections.map(c => {
+      if (!isConnVisible(c)) return null;
+      if (c.from_device === c.to_device && c.is_patch) return null;
+      // Trace 중이면 traced가 아닌 연결은 즉시 컷 — 렌더 작업 절약
+      if (traceId && !traced.connections.has(c.id)) return null;
+      const from = devById.get(c.from_device)!;
+      const to = devById.get(c.to_device)!;
+      const fromIsHub = from.role === 'router' || from.role === 'patchbay';
+      const toIsHub = to.role === 'router' || to.role === 'patchbay';
+      if (hidePatchbay && (fromIsHub || toIsHub)) return null;
+      if (fromIsHub || toIsHub) {
+        const inspectedHere =
+          (fromIsHub && inspectHubs.has(from.id)) ||
+          (toIsHub && inspectHubs.has(to.id));
+        const tracedHere = traceId && traced.connections.has(c.id);
+        if (!inspectedHere && !tracedHere) return null;
+      }
+      const outVis = visiblePortsCache.get(from.id)?.out ?? [];
+      const inVis = visiblePortsCache.get(to.id)?.in ?? [];
+      const fi = outVis.findIndex(p => p.name === c.from_port);
+      const ti = inVis.findIndex(p => p.name === c.to_port);
+      if (fi < 0 || ti < 0) return null;
+
+      // 모든 장비(패치베이 포함) 일반 카드 규칙 사용: OUT은 오른쪽 중앙, IN은 왼쪽 중앙
+      const x1 = from.x + deviceWidth(from);
+      const y1 = portYFromRenderIdx(from, fi);
+      const x2 = to.x;
+      const y2 = portYFromRenderIdx(to, ti);
+      const midX = (x1 + x2) / 2;
+      const path = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
+      const isTraced = traced.connections.has(c.id);
+      const ct = c.conn_type ?? from.outputsMeta?.[c.from_port]?.connType;
+      const style = ct ? CONN_TYPE_STYLES[ct] : undefined;
+      const fromLayerId = from.outputsMeta?.[c.from_port]?.layerId;
+      const layerColor = fromLayerId ? layerById.get(fromLayerId)?.color : undefined;
+      const typeColor = ct ? CONNECTION_TYPE_COLORS[ct as ConnectionType] : undefined;
+      const color = typeColor ?? layerColor ?? (from.type === 'audio' ? TYPE_COLORS.audio.main : from.type === 'combined' ? TYPE_COLORS.combined.main : TYPE_COLORS.video.main);
+      const isPgm = from.role === 'switcher' && from.pgmPort === c.from_port;
+      const isPatch = c.is_patch === true;
+      const mx = (x1 + x2) / 2;
+      const my = (y1 + y2) / 2;
+      const cableColor = isPatch ? '#F97316' : color;
+
+      return (
+        <g key={c.id} style={{ pointerEvents: 'none' }}>
+          {/* 베이스 라인은 ConnectionCanvas가 담당 — SVG는 클릭 영역/라벨만 */}
+          <path
+            d={path} stroke="transparent" strokeWidth={18} fill="none"
+            style={{ cursor: 'pointer', pointerEvents: 'stroke' }}
+            onClick={e => { e.stopPropagation(); setEditingCable(c); }}
+          />
+          {ct && (labelLod >= 3 || isTraced || isPgm || isPatch) && (
+            <g>
+              <rect x={mx - 24} y={my - 8.5} width="48" height="15" rx="4" fill="rgba(8,8,10,0.92)" stroke={cableColor} strokeWidth="0.6" />
+              <text x={mx} y={my + 2.8} textAnchor="middle" fontSize="9.5" fill={cableColor} fontFamily="var(--font-mono)" fontWeight="700" letterSpacing="0.02em">
+                {style?.label ?? ct}
+              </text>
+            </g>
+          )}
+          {c.tie_line && (labelLod >= 1 || isTraced) && (
+            <g>
+              <rect x={mx - 30} y={my + 8} width="60" height="12" rx="3" fill="rgba(20,15,5,0.92)" stroke="#F59E0B" strokeWidth="0.5" />
+              <text x={mx} y={my + 17} textAnchor="middle" fontSize="8.5" fill="#FCD34D" fontFamily="var(--font-mono)" fontWeight="700">
+                {c.tie_line}
+              </text>
+            </g>
+          )}
+          {isPatch && labelLod >= 2 && (
+            <g>
+              <rect x={mx - 22} y={my - 22} width="44" height="11" rx="2.5" fill="#F97316" opacity="0.95" />
+              <text x={mx} y={my - 14} textAnchor="middle" fontSize="7.5" fill="white" fontFamily="var(--font-mono)" fontWeight="800" letterSpacing="0.05em">
+                PATCH
+              </text>
+            </g>
+          )}
+        </g>
+      );
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editMode, connections, devById, visibleDeviceIds, visibleLayerIds, traceId, traced, hidePatchbay, inspectHubs, visiblePortsCache, layerById, labelLod]);
+
+  // 허브 숨김 모드 — 패치베이/라우터를 건너뛴 라벨-to-라벨 가상 케이블
+  const virtualCablesEl = useMemo(() => {
+    if (!hidePatchbay) return null;
+    const LABEL_WIDTH = 130;
+    const LABEL_PAD = 6;
+    const vcs: Array<{
+      id: string;
+      fromDev: Device; fromPortIdx: number;
+      toDev: Device; toPortIdx: number;
+      color: string;
+      isTraced: boolean;
+    }> = [];
+
+    devices.forEach(d => {
+      if (d.role === 'patchbay' || d.role === 'router') return;
+      if (!visibleDeviceIds.has(d.id)) return;
+      const cache = visiblePortsCache.get(d.id);
+      if (!cache) return;
+      cache.out.forEach((p, idx) => {
+        const followed = followPathFromOut(d.id, p.name);
+        if (!followed || followed.chain.length === 0) return;
+        if (followed.finalDev.role === 'patchbay' || followed.finalDev.role === 'router') return;
+        const destCache = visiblePortsCache.get(followed.finalDev.id);
+        if (!destCache) return;
+        const toIdx = destCache.in.findIndex(x => x.name === followed.finalPort);
+        if (toIdx < 0) return;
+        // trace 모드면 이 경로가 trace 체인에 포함되는지 확인
+        const isVcTraced = !!traceId
+          && traced.ports.has(`${d.id}:${p.name}`)
+          && traced.ports.has(`${followed.finalDev.id}:${followed.finalPort}`);
+        if (traceId && !isVcTraced) return;
+        const lid = d.outputsMeta?.[p.name]?.layerId;
+        const layerColor = lid ? layerById.get(lid)?.color : undefined;
+        const clr = layerColor ?? (d.type === 'audio' ? TYPE_COLORS.audio.main : d.type === 'combined' ? TYPE_COLORS.combined.main : TYPE_COLORS.video.main);
+        vcs.push({
+          id: `vc_${d.id}_${p.name}`,
+          fromDev: d, fromPortIdx: idx,
+          toDev: followed.finalDev, toPortIdx: toIdx,
+          color: clr, isTraced: isVcTraced,
+        });
+      });
+    });
+
+    return (
+      <g style={{ pointerEvents: 'none' }}>
+        {vcs.map(vc => {
+          // OUT 라벨 박스 오른쪽 끝점 → IN 라벨 박스 왼쪽 끝점
+          const x1 = vc.fromDev.x + deviceWidth(vc.fromDev) + 6 + LABEL_WIDTH + LABEL_PAD;
+          const y1 = vc.fromDev.y + HEADER_H + PADDING_Y + vc.fromPortIdx * PORT_H + PORT_H / 2;
+          const x2 = vc.toDev.x - 6 - LABEL_WIDTH - LABEL_PAD;
+          const y2 = vc.toDev.y + HEADER_H + PADDING_Y + vc.toPortIdx * PORT_H + PORT_H / 2;
+          const midX = (x1 + x2) / 2;
+          const path = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
+          return (
+            <g key={vc.id}>
+              {vc.isTraced && (
+                <path d={path} stroke={vc.color} strokeWidth={7} fill="none" opacity={0.4} filter="url(#glow-strong)" />
+              )}
+              <path d={path}
+                    stroke={vc.color}
+                    strokeWidth={vc.isTraced ? 2.8 : 1.6}
+                    strokeDasharray={vc.isTraced ? '6 12' : '2 4'}
+                    fill="none"
+                    opacity={vc.isTraced ? 1 : 0.5}
+                    filter={vc.isTraced ? 'url(#glow)' : undefined}
+                    className={vc.isTraced ? 'flow-line' : ''}
+                    style={vc.isTraced ? { animationDuration: '1.2s' } : undefined}
+              />
+            </g>
+          );
+        })}
+      </g>
+    );
+  }, [hidePatchbay, devices, visibleDeviceIds, visiblePortsCache, followPathFromOut, traceId, traced, layerById]);
+
+  // ===== 화면 맞춤 (전체 보기) =====
+  const fitToContent = (opts?: { minScale?: number; maxScale?: number }) => {
+    const vw = viewportElRef.current?.clientWidth ?? viewport.w;
+    const vh = viewportElRef.current?.clientHeight ?? (viewport.h - TOPBAR_H);
+    const vis = devices.filter(d =>
+      visibleDeviceIds.has(d.id) && !(hidePatchbay && (d.role === 'patchbay' || d.role === 'router')));
+    if (vis.length === 0 || vw <= 0 || vh <= 0) { setView(0.7, { x: 40, y: 40 }); return; }
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    vis.forEach(d => {
+      const w = iconMode ? 96 : deviceWidth(d);
+      const h = iconMode ? 36 : deviceHeight(d, visibleLayerIds);
+      minX = Math.min(minX, d.x); minY = Math.min(minY, d.y);
+      maxX = Math.max(maxX, d.x + w); maxY = Math.max(maxY, d.y + h);
+    });
+    // 카드 좌우의 IN/OUT 라벨(약 160px)과 여백 포함
+    minX -= iconMode ? 24 : 170; maxX += iconMode ? 24 : 150;
+    minY -= 24; maxY += 24;
+    const bw = maxX - minX, bh = maxY - minY;
+    const s = Math.min(opts?.maxScale ?? 1, Math.max(opts?.minScale ?? MIN_SCALE, Math.min(vw / bw, vh / bh)));
+    setView(s, { x: (vw - bw * s) / 2 - minX * s, y: (vh - bh * s) / 2 - minY * s });
+  };
+  fitRef.current = () => fitToContent();
+
+  // 처음 열면 도면 전체가 보이도록 자동 맞춤 (최대 100%)
+  const didAutoFitRef = useRef(false);
+  useEffect(() => { didAutoFitRef.current = false; }, [projectId]);
   useEffect(() => {
-    if (typeof document === 'undefined') return;
-    const b = document.body;
-    if (draggingCursor !== 'none') b.classList.add('is-dragging');
-    else b.classList.remove('is-dragging');
-  }, [draggingCursor]);
+    if (loading || didAutoFitRef.current) return;
+    didAutoFitRef.current = true;
+    fitToContent({ maxScale: 1 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, projectId]);
+
+  // 모달이 열려 있으면 Esc/F 단축키는 도면에 적용하지 않음
+  stateRef.current.modalOpen = !!(editingDevice || editingMixer || editingPanel || editingCable
+    || showPatchbayMgr || showWallboxMgr || showBulkEditor || showProjectSettings);
 
   if (loading) {
     return (
-      <div className="h-screen bg-gradient-to-br from-neutral-950 via-black to-neutral-950 flex items-center justify-center">
+      <div className="h-screen bg-neutral-950 flex items-center justify-center">
         <div className="flex items-center gap-3 text-neutral-400 text-sm">
           <div className="w-4 h-4 border-2 border-sky-500 border-t-transparent rounded-full animate-spin"></div>
           불러오는 중…
@@ -2117,477 +2576,334 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     );
   }
 
-  const cursorClass =
-    draggingCursor === 'canvas' ? 'cursor-grabbing'
-    : draggingCursor === 'marquee' ? 'cursor-crosshair'
-    : draggingCursor === 'device' ? 'cursor-grabbing'
-    : 'cursor-grab';
+  // ===== 렌더용 파생 값 =====
+  // 뷰포트 컬링 영역(world 좌표) — 화면의 60%만큼 여유를 둬서 팬 도중 빈 곳이 보이지 않게
+  const cullMX = Math.max(320, viewport.w * 0.6);
+  const cullMY = Math.max(320, viewport.h * 0.6);
+  const cull = {
+    l: (-offset.x - cullMX) / scale,
+    t: (-offset.y - cullMY) / scale,
+    r: (viewport.w - offset.x + cullMX) / scale,
+    b: (viewport.h - TOPBAR_H - offset.y + cullMY) / scale,
+  };
+  const hubDevices = devices.filter(d => d.role === 'router' || d.role === 'patchbay');
+  const allHubsInspected = hubDevices.length > 0 && hubDevices.every(h => inspectHubs.has(h.id));
+  const patchbayCount = devices.filter(d => d.role === 'patchbay').length;
+  const wallboxCount = devices.filter(d => d.role === 'wallbox').length;
+  const activeSources = devices.filter(d => d.role === 'source' && (d.imageUrl || d.audioUrl)).length;
+  const hasDisplays = devices.some(d => d.role === 'display');
+  const visibleLayerCount = layers.filter(l => l.visible).length;
+  const traceDev = traceId ? devById.get(traceId) : undefined;
+  const powerRoles = ['panelboard', 'power_supply', 'power_consumer', 'power_strip'].filter(r => isRoleEnabled(r));
+
+  const switchMode = (m: ViewMode) => {
+    if (m === 'view') { setViewMode('view'); setPendingFrom(null); setSelectedIds(new Set()); }
+    else if (m === 'connect') { setViewMode('connect'); setTraceId(null); setSelectedIds(new Set()); }
+    else { setViewMode('edit'); setTraceId(null); }
+  };
+  const toggleAllHubLines = () => {
+    if (allHubsInspected) setInspectHubs(new Set());
+    else setInspectHubs(new Set(hubDevices.map(h => h.id)));
+  };
+  const toggleBgLock = async () => {
+    if (!currentProject) return;
+    const newLocked = !(currentProject.background_locked ?? false);
+    setCurrentProject({ ...currentProject, background_locked: newLocked });
+    await (supabase as any).from('projects').update({ background_locked: newLocked }).eq('id', currentProject.id);
+  };
+  const ALIGN_ACTIONS: Array<{ kind: AlignType; title: string; icon: ReactNode; min3?: boolean }> = [
+    { kind: 'left',     title: '왼쪽 정렬',   icon: <AlignStartVertical size={15} /> },
+    { kind: 'center-x', title: '가로 중앙',   icon: <AlignCenterVertical size={15} /> },
+    { kind: 'right',    title: '오른쪽 정렬', icon: <AlignEndVertical size={15} /> },
+    { kind: 'top',      title: '위쪽 정렬',   icon: <AlignStartHorizontal size={15} /> },
+    { kind: 'center-y', title: '세로 중앙',   icon: <AlignCenterHorizontal size={15} /> },
+    { kind: 'bottom',   title: '아래쪽 정렬', icon: <AlignEndHorizontal size={15} /> },
+    { kind: 'dist-x',   title: '가로 균등 분배', icon: <AlignHorizontalDistributeCenter size={15} />, min3: true },
+    { kind: 'dist-y',   title: '세로 균등 분배', icon: <AlignVerticalDistributeCenter size={15} />, min3: true },
+  ];
+  const MODES: Array<{ id: ViewMode; label: string; icon: ReactNode; title: string; on: string }> = [
+    { id: 'view',    label: '보기', icon: <Eye size={14} />,    title: '보기 — 장비를 클릭하면 신호 경로를 추적합니다', on: 'bg-white/15 text-white' },
+    { id: 'connect', label: '연결', icon: <Cable size={14} />,  title: '연결 — 출력 포트 → 입력 포트 순서로 클릭해 케이블 연결', on: 'bg-sky-500 text-white' },
+    { id: 'edit',    label: '편집', icon: <Pencil size={14} />, title: '편집 — 장비 추가·이동·수정', on: 'bg-amber-500 text-neutral-950' },
+  ];
+  const ICON_BTN = 'h-8 w-8 inline-flex items-center justify-center rounded-md text-neutral-300 hover:text-white hover:bg-white/10 shrink-0';
+  const showSelectionBar = editMode && selectedIds.size > 0;
 
   return (
-    <div className="h-screen w-screen bg-gradient-to-br from-neutral-950 via-black to-neutral-950 text-white overflow-hidden relative select-none">
-      {/* Top bar */}
-      <div data-ui className="absolute top-0 left-0 right-0 z-30 bg-black/85 border-b border-white/10 shadow-xl shadow-black/40 backdrop-blur-md">
-        <div className="px-2 md:px-3 py-1.5 md:py-2">
-          <div className="flex items-center gap-1.5 md:gap-2 overflow-x-auto md:overflow-visible md:flex-wrap scrollbar-thin md:scrollbar-none" style={{ scrollbarWidth: 'thin' }}>
-          <div className="flex items-center gap-1.5 md:gap-2 shrink-0">
-          <a
-            href="/"
-            className="px-1.5 md:px-2 py-1 md:py-1.5 text-[11px] rounded-md hover:bg-white/10 text-neutral-400 hover:text-white whitespace-nowrap shrink-0"
-            title="프로젝트 목록"
-          >←</a>
-          <button
-            onClick={() => setShowProjectSettings(true)}
-            className="relative w-8 h-8 md:w-9 md:h-9 rounded-lg flex items-center justify-center shadow-lg shrink-0 hover:ring-2 hover:ring-white/40 transition"
-            style={{ background: currentProject?.thumbnail_color ? `linear-gradient(135deg, ${currentProject.thumbnail_color}, ${currentProject.thumbnail_color}cc)` : 'linear-gradient(135deg, #38bdf8, #a855f7)' }}
-            title="프로젝트 설정 (이름·색·배경이미지·활성 역할·용어 변경)"
-          >
-            <span className="text-lg">{currentProject?.icon ?? '📡'}</span>
-          </button>
-          <button
-            onClick={() => setShowProjectSettings(true)}
-            className="hidden md:block min-w-0 max-w-[200px] text-left hover:bg-white/5 px-1 rounded transition"
-            title="프로젝트 설정"
-          >
-            <div className="text-[12px] font-bold tracking-tight leading-tight truncate">{currentProject?.name ?? 'Signal Flow Map'}</div>
-            <div className="text-[10px] text-neutral-500 leading-tight font-mono truncate">{currentProject?.description ?? '신호 흐름 도면'}</div>
-          </button>
-          {/* 명확한 편집 버튼 — 모든 화면에서 보임 */}
-          <button
-            onClick={() => setShowProjectSettings(true)}
-            className="px-2.5 md:px-3 py-1.5 md:py-2 text-[11px] md:text-[12px] font-medium rounded-lg bg-gradient-to-r from-sky-500/80 to-purple-500/80 hover:from-sky-400 hover:to-purple-400 text-white shadow-md shadow-purple-500/30 whitespace-nowrap shrink-0 flex items-center gap-1"
-            title="프로젝트 편집 (이름·색·배경이미지·활성 역할·용어 변경)"
-          >
-            <span>⚙</span>
-            <span className="hidden sm:inline">프로젝트 편집</span>
-            <span className="sm:hidden">편집</span>
-          </button>
+    <div className="h-screen w-screen bg-neutral-950 text-white overflow-hidden relative select-none">
+      {/* ===== 상단 바 — 1줄: [목록·프로젝트] [모드] [추가·되돌리기] ··· [레이어·표시·관리] [상태] ===== */}
+      <div data-ui className="absolute top-0 left-0 right-0 z-30 flex items-center gap-1 px-2 bg-neutral-950 border-b border-white/10" style={{ height: TOPBAR_H }}>
+        <a href="/" className={ICON_BTN} title="프로젝트 목록"><ArrowLeft size={16} /></a>
+        <button
+          type="button"
+          onClick={() => setShowProjectSettings(true)}
+          className="h-9 flex items-center gap-2 pl-1 pr-2 rounded-md hover:bg-white/10 min-w-0 shrink"
+          title="프로젝트 설정 (이름·색·배경 이미지·사용할 장비 역할·용어)"
+        >
+          <span
+            className="w-7 h-7 rounded-md flex items-center justify-center text-[15px] shrink-0"
+            style={{ background: currentProject?.thumbnail_color ?? '#334155' }}
+          >{currentProject?.icon ?? '📡'}</span>
+          <span className="hidden sm:block min-w-0 max-w-[200px] text-left">
+            <span className="block text-[13px] font-semibold truncate leading-tight">{currentProject?.name ?? 'Signal Flow Map'}</span>
+            {currentProject?.description && (
+              <span className="block text-[10.5px] text-neutral-500 truncate leading-tight">{currentProject.description}</span>
+            )}
+          </span>
+          <Settings2 size={14} className="hidden md:block text-neutral-500 shrink-0" />
+        </button>
+
+        <div className="w-px h-6 bg-white/10 mx-1 shrink-0" />
+
+        {/* 모드 */}
+        <div className="flex items-center gap-0.5 bg-white/[0.06] rounded-lg p-0.5 shrink-0">
+          {MODES.map(m => (
+            <button
+              key={m.id}
+              type="button"
+              onClick={() => switchMode(m.id)}
+              title={m.title}
+              className={`h-7 px-2 sm:px-2.5 inline-flex items-center gap-1.5 rounded-md text-[12px] font-medium transition-colors ${viewMode === m.id ? m.on : 'text-neutral-400 hover:text-white'}`}
+            >
+              {m.icon}<span className="hidden sm:inline">{m.label}</span>
+            </button>
+          ))}
         </div>
 
-        <div className="w-px h-6 bg-white/10 shrink-0"></div>
-
-          <div className="flex items-center gap-0.5 bg-white/5 rounded-lg p-0.5 border border-white/10 shrink-0">
-            <button
-              onClick={() => { setViewMode('view'); setPendingFrom(null); setSelectedIds(new Set()); }}
-              className={`px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-md whitespace-nowrap ${viewMode === 'view' ? 'bg-gradient-to-r from-neutral-700 to-neutral-600 text-white shadow-md' : 'text-neutral-400 hover:text-white'}`}
-              title="보기 모드 — 신호 흐름만 추적"
-            >👁<span className="hidden sm:inline ml-1">보기</span></button>
-            <button
-              onClick={() => { setViewMode('connect'); setTraceId(null); setSelectedIds(new Set()); }}
-              className={`px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-md whitespace-nowrap ${viewMode === 'connect' ? 'bg-gradient-to-r from-cyan-500 to-sky-500 text-white shadow-md shadow-cyan-500/30' : 'text-neutral-400 hover:text-white'}`}
-              title="연결 모드 — 포트 클릭으로 케이블 연결만"
-            >🔌<span className="hidden sm:inline ml-1">연결</span></button>
-            <button
-              onClick={() => { setViewMode('edit'); setTraceId(null); }}
-              className={`px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-md whitespace-nowrap ${viewMode === 'edit' ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md shadow-amber-500/30' : 'text-neutral-400 hover:text-white'}`}
-              title="편집 모드 — 장비 더블클릭으로 편집"
-            >✎<span className="hidden sm:inline ml-1">편집</span></button>
-          </div>
-
-          <button
-            onClick={() => setShowLayerPanel(s => !s)}
-            className={`px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border whitespace-nowrap shrink-0 ${showLayerPanel ? 'bg-gradient-to-r from-purple-500 to-purple-600 text-white border-purple-400 shadow-md shadow-purple-500/30' : 'bg-white/5 border-white/10 text-neutral-300 hover:text-white hover:bg-white/10'}`}
-            title="레이어 관리"
-          >⧉<span className="hidden sm:inline ml-1">레이어</span> <span className="font-mono opacity-70">{layers.filter(l => l.visible).length}/{layers.length}</span></button>
-
-          {/* 더보기 메뉴 — lg 미만에서만 표시 (작은 화면 정리용) */}
-          <div className="md:hidden relative shrink-0">
-            <button
-              onClick={() => setShowMoreMenu(s => !s)}
-              className={`px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border whitespace-nowrap ${showMoreMenu ? 'bg-white/15 border-white/30 text-white' : 'bg-white/5 border-white/10 text-neutral-300 hover:text-white hover:bg-white/10'}`}
-              title="더보기 — 패치베이/월박스/허브 등"
-            >⋯<span className="hidden sm:inline ml-1">더보기</span></button>
-            {showMoreMenu && (
+        {/* 편집 모드: 추가 메뉴 + 되돌리기 */}
+        {editMode && (
+          <Dropdown
+            label={<><Plus size={15} /><span className="hidden sm:inline">추가</span></>}
+            title="장비 추가"
+            buttonClassName="ml-1 !bg-sky-600 hover:!bg-sky-500 !text-white"
+          >
+            {close => (
               <>
-                <div className="fixed inset-0 z-40" onClick={() => setShowMoreMenu(false)} />
-                <div className="absolute top-full right-0 mt-1 z-50 bg-neutral-950 border border-white/15 rounded-lg shadow-2xl py-1 min-w-[180px]" data-ui>
-                  <button
-                    onClick={() => { setShowMoreMenu(false); setShowPatchbayMgr(true); }}
-                    className="w-full text-left px-3 py-2 text-[12px] hover:bg-teal-500/15 text-teal-300 flex items-center gap-2"
-                  >⊟ 패치베이 관리 <span className="ml-auto font-mono text-[10px] opacity-60">{devices.filter(d => d.role === 'patchbay').length}</span></button>
-                  <button
-                    onClick={() => { setShowMoreMenu(false); setShowWallboxMgr(true); }}
-                    className="w-full text-left px-3 py-2 text-[12px] hover:bg-amber-500/15 text-amber-300 flex items-center gap-2"
-                  >▦ 월박스 관리 <span className="ml-auto font-mono text-[10px] opacity-60">{devices.filter(d => d.role === 'wallbox').length}</span></button>
-                  {devices.some(d => d.role === 'patchbay' || d.role === 'router') && (
-                    <button
-                      onClick={() => { setShowMoreMenu(false); setHidePatchbay(v => !v); }}
-                      className="w-full text-left px-3 py-2 text-[12px] hover:bg-teal-500/15 text-neutral-200 flex items-center gap-2"
-                    >{hidePatchbay ? '⊘ 허브 표시' : '⊟ 허브 숨김'}</button>
-                  )}
-                  {(() => {
-                    const allHubs = devices.filter(d => d.role === 'router' || d.role === 'patchbay');
-                    if (allHubs.length === 0) return null;
-                    const activeCount = allHubs.filter(h => inspectHubs.has(h.id)).length;
-                    const allOn = activeCount === allHubs.length;
-                    return (
-                      <button
-                        onClick={() => {
-                          setShowMoreMenu(false);
-                          if (allOn) setInspectHubs(new Set());
-                          else setInspectHubs(new Set(allHubs.map(h => h.id)));
-                        }}
-                        className="w-full text-left px-3 py-2 text-[12px] hover:bg-fuchsia-500/15 text-fuchsia-300 flex items-center gap-2"
-                      >👁 허브 연결선 {allOn ? 'OFF' : 'ON'}</button>
-                    );
-                  })()}
-                  <div className="border-t border-white/10 my-1"></div>
-                  <button
-                    onClick={() => { setShowMoreMenu(false); setShowLegend(s => !s); }}
-                    className="w-full text-left px-3 py-2 text-[12px] hover:bg-white/10 text-neutral-200 flex items-center gap-2"
-                  >🎨 신호 유형 범례</button>
-                </div>
+                <MenuLabel>기본</MenuLabel>
+                <MenuItem icon={<Box size={15} />} label="장비" hint="일반" onClick={() => { close(); handleAddDevice(); }} />
+                {isRoleEnabled('multiview') && (
+                  <MenuItem icon={<LayoutGrid size={15} />} label={t('멀티뷰')} hint="PGM/PVW" onClick={() => { close(); handleAddMultiview(); }} />
+                )}
+                {(isRoleEnabled('audio_mixer') || isRoleEnabled('io_box')) && <MenuLabel>음향</MenuLabel>}
+                {isRoleEnabled('audio_mixer') && (
+                  <MenuItem icon={<SlidersVertical size={15} />} label={t('콘솔')} hint="16 IN / 8 OUT" onClick={() => { close(); handleAddAudioMixer(); }} />
+                )}
+                {isRoleEnabled('io_box') && (
+                  <>
+                    <MenuItem icon={<Server size={15} />} label={t('스테이지박스')} hint="랜선 확장" onClick={() => { close(); handleAddIoBox('stagebox'); }} />
+                    <MenuItem icon={<CreditCard size={15} />} label={t('옵션카드')} hint="슬롯 내장" onClick={() => { close(); handleAddIoBox('option_card'); }} />
+                  </>
+                )}
+                {powerRoles.length > 0 && <MenuLabel>전력</MenuLabel>}
+                {isRoleEnabled('panelboard') && (
+                  <MenuItem icon={<Zap size={15} />} label={t('배전반')} onClick={() => { close(); handleAddPanelboard(); }} />
+                )}
+                {isRoleEnabled('power_supply') && (
+                  <MenuItem icon={<PlugZap size={15} />} label={t('공급')} hint="전력 공급" onClick={() => { close(); handleAddPowerSupply(); }} />
+                )}
+                {isRoleEnabled('power_consumer') && (
+                  <MenuItem icon={<Lightbulb size={15} />} label={t('소비')} hint="전력 소비" onClick={() => { close(); handleAddPowerConsumer(); }} />
+                )}
+                {isRoleEnabled('power_strip') && (
+                  <MenuItem icon={<Plug size={15} />} label={t('멀티탭')} hint="16A" onClick={() => { close(); handleAddPowerStrip(); }} />
+                )}
               </>
             )}
-          </div>
+          </Dropdown>
+        )}
+        {editMode && undoLabel && (
+          <TbButton onClick={() => popUndo()} title={`되돌리기: ${undoLabel} (Ctrl+Z)`}>
+            <Undo2 size={15} />
+            <span className="hidden lg:inline max-w-[160px] truncate">{undoLabel}</span>
+          </TbButton>
+        )}
 
-          {/* 배경 이미지 잠금 토글 — 배경 있을 때만 */}
-          {currentProject?.background_image_url && (
-            <button
-              onClick={async () => {
-                if (!currentProject) return;
-                const newLocked = !(currentProject.background_locked ?? false);
-                await (supabase as any).from('projects').update({
-                  background_locked: newLocked,
-                }).eq('id', currentProject.id);
-                setCurrentProject({ ...currentProject, background_locked: newLocked });
-              }}
-              className={`px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border whitespace-nowrap shrink-0 ${
-                currentProject.background_locked
-                  ? 'bg-amber-500/20 border-amber-500/40 text-amber-200 hover:bg-amber-500/30'
-                  : 'bg-emerald-500/20 border-emerald-500/40 text-emerald-200 hover:bg-emerald-500/30'
-              }`}
-              title={currentProject.background_locked ? '배경 잠금됨 (클릭하여 해제)' : '배경 편집 가능 (클릭하여 잠금)'}
-            >
-              {currentProject.background_locked ? '🔒' : '🔓'}<span className="hidden sm:inline ml-1">배경</span>
-            </button>
-          )}
+        <div className="flex-1 min-w-0" />
 
-          {/* 아이콘 모드 토글 — 모든 카드를 작게 압축 */}
-          <button
-            onClick={() => setIconMode(m => !m)}
-            className={`px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border whitespace-nowrap shrink-0 ${
-              iconMode
-                ? 'bg-gradient-to-r from-pink-500 to-purple-500 text-white border-pink-400 shadow-md shadow-pink-500/30'
-                : 'bg-white/5 border-white/10 text-neutral-300 hover:text-white hover:bg-white/10'
-            }`}
-            title={iconMode ? '아이콘 모드 켜짐 — 카드 압축 표시. 클릭하여 해제' : '아이콘 모드 — 모든 카드를 작은 아이콘으로 표시 (도면 한눈에 보기)'}
-          >
-            {iconMode ? '🔍' : '🗺'}<span className="hidden sm:inline ml-1">{iconMode ? '상세' : '아이콘'}</span>
-          </button>
-
-          {/* 신호 유형 범례 토글 */}
-          <button
-            onClick={() => setShowLegend(s => !s)}
-            className={`hidden md:flex px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border whitespace-nowrap shrink-0 items-center ${
-              showLegend
-                ? 'bg-white/15 border-white/30 text-white'
-                : 'bg-white/5 border-white/10 text-neutral-300 hover:text-white hover:bg-white/10'
-            }`}
-            title="신호 유형 범례 (Legend) — 색상별 의미"
-          >
-            🎨<span className="ml-1">범례</span>
-          </button>
-
-          <button
-            onClick={() => setShowPatchbayMgr(true)}
-            className="hidden md:flex px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border bg-white/5 border-teal-500/30 text-teal-300 hover:text-white hover:bg-teal-500/20 whitespace-nowrap shrink-0 items-center"
-            title="패치베이 관리"
-          >⊟<span className="ml-1">패치베이</span> <span className="font-mono opacity-70 ml-1">{devices.filter(d => d.role === 'patchbay').length}</span></button>
-
-          {devices.some(d => d.role === 'patchbay' || d.role === 'router') && (
-            <button
-              onClick={() => setHidePatchbay(v => !v)}
-              className={`hidden md:flex px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border items-center gap-1 whitespace-nowrap shrink-0 ${
-                hidePatchbay
-                  ? 'bg-teal-500 border-teal-400 text-white shadow-md shadow-teal-500/30'
-                  : 'bg-white/5 border-white/15 text-neutral-400 hover:bg-teal-500/20 hover:text-teal-200 hover:border-teal-500/40'
-              }`}
-              title={hidePatchbay ? '허브가 숨겨짐 — 클릭하면 표시' : '허브 표시중 — 클릭하면 숨김'}
-            >
-              <span className="font-mono">{hidePatchbay ? '⊘' : '⊟'}</span>
-              <span>허브{hidePatchbay ? ' 숨김' : ''}</span>
-            </button>
-          )}
-
-          <button
-            onClick={() => setShowWallboxMgr(true)}
-            className="hidden md:flex px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border bg-white/5 border-amber-500/30 text-amber-300 hover:text-white hover:bg-amber-500/20 whitespace-nowrap shrink-0 items-center"
-            title="월박스 관리"
-          >▦<span className="ml-1">월박스</span> <span className="font-mono opacity-70 ml-1">{devices.filter(d => d.role === 'wallbox').length}</span></button>
-
-          {/* 라우터/패치베이 선 전체 보기 토글 */}
-          {(() => {
-            const allHubs = devices.filter(d => d.role === 'router' || d.role === 'patchbay');
-            if (allHubs.length === 0) return null;
-            const activeCount = allHubs.filter(h => inspectHubs.has(h.id)).length;
-            const allOn = activeCount === allHubs.length;
-            const someOn = activeCount > 0 && !allOn;
-            return (
-              <button
-                onClick={() => {
-                  if (allOn) setInspectHubs(new Set());
-                  else setInspectHubs(new Set(allHubs.map(h => h.id)));
-                }}
-                className={`hidden md:flex px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border items-center gap-1 whitespace-nowrap shrink-0 ${
-                  allOn
-                    ? 'bg-fuchsia-500 border-fuchsia-400 text-white shadow-md shadow-fuchsia-500/40'
-                    : someOn
-                      ? 'bg-fuchsia-500/30 border-fuchsia-500/50 text-fuchsia-100'
-                      : 'bg-white/5 border-white/15 text-neutral-400 hover:bg-fuchsia-500/20 hover:text-fuchsia-200 hover:border-fuchsia-500/40'
-                }`}
-                title={`허브 연결선: ${allOn ? '전체 표시' : someOn ? `${activeCount}/${allHubs.length}` : '숨김'}`}
-              >
-                <span className="font-mono text-[13px]">👁</span>
-                <span className="hidden md:inline">Hub선</span>
-                <span className="text-[10px]">{allOn ? 'ON' : someOn ? `${activeCount}/${allHubs.length}` : 'OFF'}</span>
-              </button>
-            );
-          })()}
-
-          {(() => {
-            const activeSources = devices.filter(d => d.role === 'source' && (d.imageUrl || d.audioUrl)).length;
-            const liveDisplays = Array.from(displaySources.values()).length;
-            if (activeSources === 0 && devices.filter(d => d.role === 'display').length === 0) return null;
-            return (
-              <div
-                className="flex items-center gap-1.5 px-2 py-1 md:py-1.5 rounded-lg bg-gradient-to-r from-lime-500/10 to-sky-500/10 border border-lime-500/25 whitespace-nowrap shrink-0"
-                title="신호 시뮬레이션 활성"
-              >
-                <div className="w-1.5 h-1.5 rounded-full bg-lime-400 animate-pulse shadow-md shadow-lime-400/60"></div>
-                <span className="text-[11px] font-medium">
-                  <span className="text-lime-300 font-mono">▶{activeSources}</span>
-                  <span className="text-neutral-500 mx-0.5">→</span>
-                  <span className="text-sky-300 font-mono">🖵{liveDisplays}</span>
-                </span>
-              </div>
-            );
-          })()}
-
-          {!editMode && traceId && (
+        {/* 오른쪽: 보기 옵션 */}
+        <TbButton active={showLayerPanel} onClick={() => setShowLayerPanel(s => !s)} title="레이어 표시/관리">
+          <Layers size={15} />
+          <span className="hidden md:inline">레이어</span>
+          <span className="hidden sm:inline font-mono text-[11px] text-neutral-500">{visibleLayerCount}/{layers.length}</span>
+        </TbButton>
+        <Dropdown align="right" label={<><SlidersHorizontal size={15} /><span className="hidden md:inline">표시</span></>} title="표시 옵션">
+          {() => (
             <>
-              <div className="flex items-center gap-0.5 bg-sky-500/10 border border-sky-500/30 rounded-lg p-0.5 shrink-0">
-                {(['both','upstream','downstream'] as TraceMode[]).map(m => (
-                  <button key={m} onClick={() => setTraceMode(m)}
-                    className={`px-2 py-1 text-[11px] font-medium rounded-md ${traceMode === m ? 'bg-sky-500 text-white' : 'text-sky-300 hover:text-white'}`}
-                    title={m === 'both' ? '양방향' : m === 'upstream' ? '상류' : '하류'}
-                  >{m === 'both' ? '↔' : m === 'upstream' ? '⬅' : '➡'}</button>
-                ))}
-              </div>
-              <button
-                onClick={() => setTraceId(null)}
-                className="px-2 py-1 md:py-1.5 text-[11px] font-medium rounded-lg border bg-red-500/15 border-red-500/40 text-red-300 hover:bg-red-500 hover:text-white flex items-center gap-1 whitespace-nowrap shrink-0"
-                title="신호 추적 해제"
-              >
-                <span>✕</span>
-                <span className="hidden sm:inline">추적 해제</span>
-              </button>
-            </>
-          )}
-
-          {editMode && (
-            <>
-              <button onClick={handleAddDevice}
-                className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-sky-500 to-sky-600 hover:from-sky-400 hover:to-sky-500 text-white shadow-md shadow-sky-500/30 whitespace-nowrap shrink-0" title="장비 추가">＋<span className="hidden sm:inline ml-1">장비</span></button>
-              {isRoleEnabled('multiview') && (
-                <button onClick={handleAddMultiview}
-                  className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-white shadow-md shadow-violet-500/30 whitespace-nowrap shrink-0" title={`${t('멀티뷰')} 추가`}>▦<span className="hidden sm:inline ml-1">{t('멀티뷰')}</span></button>
-              )}
-              {isRoleEnabled('audio_mixer') && (
-                <button onClick={handleAddAudioMixer}
-                  className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-rose-500 to-rose-600 hover:from-rose-400 hover:to-rose-500 text-white shadow-md shadow-rose-500/30 whitespace-nowrap shrink-0" title={`${t('오디오 콘솔')} 추가`}>🎛<span className="hidden sm:inline ml-1">{t('콘솔')}</span></button>
-              )}
-              {isRoleEnabled('io_box') && (
+              <MenuItem icon={<Square size={14} />} label="아이콘 모드 (카드 축소)" checked={iconMode} onClick={() => setIconMode(m => !m)} />
+              {hubDevices.length > 0 && (
                 <>
-                  <button onClick={() => handleAddIoBox('stagebox')}
-                    className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-cyan-500 to-cyan-600 hover:from-cyan-400 hover:to-cyan-500 text-white shadow-md shadow-cyan-500/30 whitespace-nowrap shrink-0" title="스테이지박스 추가 (랜선으로 콘솔 확장)">📦<span className="hidden sm:inline ml-1">{t('스테이지박스')}</span></button>
-                  <button onClick={() => handleAddIoBox('option_card')}
-                    className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-teal-500 to-teal-600 hover:from-teal-400 hover:to-teal-500 text-white shadow-md shadow-teal-500/30 whitespace-nowrap shrink-0" title="옵션카드 추가 (콘솔 슬롯에 내장)">🃏<span className="hidden sm:inline ml-1">{t('옵션카드')}</span></button>
+                  <MenuItem icon={<Route size={15} />} label="허브(패치베이·라우터) 숨기기" checked={hidePatchbay} onClick={() => setHidePatchbay(v => !v)} />
+                  <MenuItem icon={<Spline size={15} />} label="허브 연결선 모두 표시" checked={allHubsInspected} onClick={toggleAllHubLines} />
                 </>
               )}
-              {isRoleEnabled('panelboard') && (
-                <button onClick={handleAddPanelboard}
-                  className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-white shadow-md shadow-amber-500/30 whitespace-nowrap shrink-0" title="배전반 추가">⚡<span className="hidden sm:inline ml-1">{t('배전반')}</span></button>
+              <MenuItem icon={<Palette size={15} />} label="범례" checked={showLegend} onClick={() => setShowLegend(s => !s)} />
+              {currentProject?.background_image_url && (
+                <MenuItem
+                  icon={currentProject.background_locked ? <Lock size={14} /> : <Unlock size={14} />}
+                  label="배경 이미지 잠금"
+                  checked={!!currentProject.background_locked}
+                  onClick={toggleBgLock}
+                />
               )}
-              {isRoleEnabled('power_supply') && (
-                <button onClick={handleAddPowerSupply}
-                  className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-yellow-500 to-amber-500 hover:from-yellow-400 hover:to-amber-400 text-white shadow-md shadow-yellow-500/30 whitespace-nowrap shrink-0" title="전력 공급 장비 추가">🔌<span className="hidden sm:inline ml-1">{t('공급')}</span></button>
-              )}
-              {isRoleEnabled('power_consumer') && (
-                <button onClick={handleAddPowerConsumer}
-                  className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-400 hover:to-red-400 text-white shadow-md shadow-orange-500/30 whitespace-nowrap shrink-0" title="전력 소비 장비 추가">💡<span className="hidden sm:inline ml-1">{t('소비')}</span></button>
-              )}
-              {isRoleEnabled('power_strip') && (
-                <button onClick={handleAddPowerStrip}
-                  className="px-2 md:px-2.5 py-1 md:py-1.5 text-[11px] font-medium rounded-lg bg-gradient-to-r from-amber-400 to-yellow-500 hover:from-amber-300 hover:to-yellow-400 text-black shadow-md shadow-amber-500/30 whitespace-nowrap shrink-0" title="멀티탭 추가 (16A · 8구)">🔌<span className="hidden sm:inline ml-1">{t('멀티탭')}</span></button>
-              )}
-              {selectedIds.size > 0 && (
-                <>
-                  <div className="px-2.5 py-1 text-[11px] rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 font-medium">
-                    {selectedIds.size}개 선택
-                    {selectedGroupInfo && (
-                      <span className="ml-1.5 text-[10px] px-1 rounded bg-fuchsia-500/20 text-fuchsia-200 border border-fuchsia-500/30 font-mono">
-                        ⬢ {selectedGroupInfo.name}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* 일괄편집 */}
-                  <button
-                    onClick={() => setShowBulkEditor(true)}
-                    className="px-2.5 py-1 text-[11px] rounded-lg bg-purple-500/15 hover:bg-purple-500 text-purple-200 hover:text-white border border-purple-500/30 hover:border-purple-400 font-medium transition"
-                    title="선택된 장비에 공통 필드 일괄 적용"
-                  >✎ 일괄편집</button>
-
-                  {/* 그룹화/해제 */}
-                  {selectedIds.size >= 2 && !selectedGroupInfo && (
-                    <button
-                      onClick={handleGroupSelected}
-                      className="px-2.5 py-1 text-[11px] rounded-lg bg-fuchsia-500/15 hover:bg-fuchsia-500 text-fuchsia-200 hover:text-white border border-fuchsia-500/30 hover:border-fuchsia-400 font-medium transition"
-                      title="선택된 장비를 하나의 그룹으로 묶기"
-                    >⬢ 그룹화</button>
-                  )}
-                  {selectedGroupInfo && (
-                    <>
-                      <button
-                        onClick={handleGroupSelected}
-                        className="px-2.5 py-1 text-[11px] rounded-lg bg-fuchsia-500/10 hover:bg-fuchsia-500/30 text-fuchsia-300 border border-fuchsia-500/30 font-medium transition"
-                        title="그룹 이름 변경"
-                      >✎ 이름</button>
-                      <button
-                        onClick={handleUngroupSelected}
-                        className="px-2.5 py-1 text-[11px] rounded-lg bg-white/5 hover:bg-rose-500/60 text-neutral-400 hover:text-white border border-white/10 transition"
-                        title="그룹 해제"
-                      >⬡ 해제</button>
-                    </>
-                  )}
-
-                  <button onClick={handleDeleteSelected}
-                    className="px-2.5 py-1 text-[11px] rounded-lg bg-rose-500/15 hover:bg-rose-500 text-rose-300 hover:text-white border border-rose-500/30 hover:border-rose-400 font-medium transition">삭제</button>
-                </>
-              )}
-              {selectedIds.size >= 2 && (
-                <div className="flex items-center gap-0.5 bg-purple-500/10 border border-purple-500/30 rounded-lg p-0.5" title="선택된 장비 정렬">
-                  <button onClick={() => handleAlign('left')} className="w-7 h-7 text-[14px] hover:bg-purple-500/30 rounded text-purple-200 hover:text-white transition flex items-center justify-center" title="왼쪽 정렬">⊣</button>
-                  <button onClick={() => handleAlign('center-x')} className="w-7 h-7 text-[14px] hover:bg-purple-500/30 rounded text-purple-200 hover:text-white transition flex items-center justify-center" title="가로 중앙">╎</button>
-                  <button onClick={() => handleAlign('right')} className="w-7 h-7 text-[14px] hover:bg-purple-500/30 rounded text-purple-200 hover:text-white transition flex items-center justify-center" title="오른쪽 정렬">⊢</button>
-                  <div className="w-px h-4 bg-purple-500/30 mx-0.5"></div>
-                  <button onClick={() => handleAlign('top')} className="w-7 h-7 text-[14px] hover:bg-purple-500/30 rounded text-purple-200 hover:text-white transition flex items-center justify-center" title="위쪽 정렬">⊤</button>
-                  <button onClick={() => handleAlign('center-y')} className="w-7 h-7 text-[14px] hover:bg-purple-500/30 rounded text-purple-200 hover:text-white transition flex items-center justify-center" title="세로 중앙">─</button>
-                  <button onClick={() => handleAlign('bottom')} className="w-7 h-7 text-[14px] hover:bg-purple-500/30 rounded text-purple-200 hover:text-white transition flex items-center justify-center" title="아래쪽 정렬">⊥</button>
-                  {selectedIds.size >= 3 && (
-                    <>
-                      <div className="w-px h-4 bg-purple-500/30 mx-0.5"></div>
-                      <button onClick={() => handleAlign('dist-x')} className="w-7 h-7 text-[11px] hover:bg-purple-500/30 rounded text-purple-200 hover:text-white transition font-bold flex items-center justify-center" title="가로 균등 분배">⇔</button>
-                      <button onClick={() => handleAlign('dist-y')} className="w-7 h-7 text-[11px] hover:bg-purple-500/30 rounded text-purple-200 hover:text-white transition font-bold flex items-center justify-center" title="세로 균등 분배">⇕</button>
-                    </>
-                  )}
-                </div>
-              )}
-              {undoLabel && (
-                <button
-                  onClick={() => popUndo()}
-                  className="px-2.5 py-1.5 text-[11px] rounded-lg bg-indigo-500/15 hover:bg-indigo-500 text-indigo-300 hover:text-white border border-indigo-500/30 hover:border-indigo-400 font-medium transition flex items-center gap-1.5"
-                  title="Ctrl+Z 로 되돌리기"
-                >
-                  <span className="font-mono text-[13px]">↶</span>
-                  <span className="truncate max-w-40">{undoLabel}</span>
-                  <span className="text-[9px] text-indigo-400/70 font-mono">⌘Z</span>
-                </button>
-              )}
-              <button onClick={handleResetAll}
-                className="px-2.5 py-1.5 text-[11px] rounded-lg bg-white/5 hover:bg-rose-500/80 text-neutral-500 hover:text-white border border-white/10 transition">⟲</button>
             </>
           )}
+        </Dropdown>
+        <Dropdown align="right" label={<><Wrench size={15} /><span className="hidden md:inline">관리</span></>} title="관리 도구">
+          {close => (
+            <>
+              <MenuItem icon={<PanelsTopLeft size={15} />} label="패치베이 관리" hint={patchbayCount} onClick={() => { close(); setShowPatchbayMgr(true); }} />
+              <MenuItem icon={<LayoutGrid size={15} />} label="월박스 관리" hint={wallboxCount} onClick={() => { close(); setShowWallboxMgr(true); }} />
+              <MenuItem icon={<Settings2 size={15} />} label="프로젝트 설정" onClick={() => { close(); setShowProjectSettings(true); }} />
+              {editMode && (
+                <>
+                  <MenuDivider />
+                  <MenuItem danger icon={<RotateCcw size={15} />} label="프로젝트 초기화 (전체 삭제)" onClick={() => { close(); handleResetAll(); }} />
+                </>
+              )}
+            </>
+          )}
+        </Dropdown>
 
-          <div className="ml-auto flex items-center gap-3 text-[11px]">
-            <span className="text-neutral-500 font-mono">{devices.length}D · {connections.length}C</span>
-            <div className="w-px h-4 bg-white/10"></div>
-            <div className="flex items-center gap-1.5">
-              <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shadow-md shadow-emerald-400/60"></div>
-              <span className="text-emerald-400 font-semibold font-mono">{online}</span>
-            </div>
-          </div>
-          </div>
+        {/* 상태: 신호 시뮬레이션 · 장비/케이블 수 · 접속자 */}
+        <div
+          className="hidden md:flex items-center gap-2.5 pl-2.5 ml-1 border-l border-white/10 text-[11px] font-mono text-neutral-500 shrink-0"
+          title={`장비 ${devices.length} · 케이블 ${connections.length} · 접속 ${online}명`}
+        >
+          {(activeSources > 0 || hasDisplays) && (
+            <span className="text-lime-400/90" title="신호 시뮬레이션: 활성 소스 → 신호가 도달한 디스플레이">
+              ▶{activeSources}→{displaySources.size}
+            </span>
+          )}
+          <span>{devices.length}D·{connections.length}C</span>
+          <span className="flex items-center gap-1 text-emerald-400"><Users size={12} />{online}</span>
         </div>
       </div>
 
       {showLayerPanel && <LayerPanel layers={layers} onClose={() => setShowLayerPanel(false)} />}
 
-      {/* 신호 유형 범례 — 도면 우하단 floating 패널 */}
+      {/* 신호 추적 상태 (보기 모드) */}
+      {!editMode && traceDev && (
+        <div data-ui className="absolute top-14 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 pl-3 pr-1 h-9 rounded-full bg-sky-950/90 border border-sky-500/40 shadow-lg text-[12px] whitespace-nowrap max-w-[calc(100vw-24px)]">
+          <Crosshair size={14} className="text-sky-300 shrink-0" />
+          <span className="text-sky-100 truncate">신호 추적 · <span className="font-semibold">{traceDev.name}</span></span>
+          <span className="text-sky-300/70 font-mono text-[11px] shrink-0">{traced.devices.size}대 · {traced.connections.size}선</span>
+          <button type="button" onClick={() => setTraceId(null)} className="h-7 w-7 inline-flex items-center justify-center rounded-full text-sky-200 hover:bg-white/10 shrink-0" title="추적 해제 (Esc)">
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* 케이블 연결 대기 */}
+      {pendingFrom && (
+        <div data-ui className="absolute top-14 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2.5 pl-3 pr-1 h-9 rounded-full bg-amber-950/90 border border-amber-500/40 shadow-lg text-[12px] whitespace-nowrap max-w-[calc(100vw-24px)]">
+          <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0" />
+          <span className="text-amber-100 truncate">
+            <span className="font-mono">{devById.get(pendingFrom.device)?.name} · {pendingFrom.port}</span>
+            <span className="text-amber-300/80 ml-2">→ 연결할 입력 포트를 클릭</span>
+          </span>
+          <button type="button" onClick={() => setPendingFrom(null)} className="h-7 px-2.5 rounded-full text-amber-200 hover:bg-white/10 text-[11.5px] shrink-0" title="취소 (Esc)">취소</button>
+        </div>
+      )}
+
+      {/* 범례 */}
       {showLegend && (
-        <div data-ui className="absolute bottom-4 right-4 z-20 bg-neutral-950/95 border border-white/15 rounded-lg shadow-2xl backdrop-blur p-3 min-w-[200px] max-w-[280px]">
-          <div className="flex items-center justify-between mb-2 pb-1.5 border-b border-white/10">
-            <div className="text-[11px] font-bold text-neutral-200 flex items-center gap-1.5">
-              <span>🎨</span> 신호 유형
-            </div>
-            <button onClick={() => setShowLegend(false)} className="text-neutral-500 hover:text-white text-[12px]">✕</button>
+        <div data-ui className="absolute bottom-[68px] right-4 z-20 w-[250px] rounded-xl border border-white/10 bg-neutral-900 shadow-2xl shadow-black/60 p-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-[12px] font-semibold text-neutral-200 flex items-center gap-1.5"><Palette size={13} /> 범례</div>
+            <button type="button" onClick={() => setShowLegend(false)} className="h-6 w-6 inline-flex items-center justify-center rounded hover:bg-white/10 text-neutral-400" title="닫기"><X size={13} /></button>
           </div>
-          <div className="space-y-1">
-            {[
-              { name: 'Video',    color: '#3B82F6', desc: '비디오 신호',  dash: undefined },
-              { name: 'Audio',    color: '#EF4444', desc: '오디오 신호',  dash: undefined },
-              { name: 'Tie-Line', color: '#A855F7', desc: '연결선',        dash: '1 4' },
-              { name: 'Control',  color: '#10B981', desc: '제어 신호',    dash: '6 3' },
-              { name: 'Power',    color: '#FACC15', desc: '전력 (W=V×A)', dash: undefined },
-              { name: 'Network',  color: '#FFFFFF', desc: '네트워크',      dash: '6 3' },
-              { name: 'Signal',   color: '#94A3B8', desc: '일반 신호',    dash: '4 4' },
-            ].map(t => (
-              <div key={t.name} className="flex items-center gap-2 py-0.5">
-                <svg width="36" height="10" className="shrink-0">
-                  <line x1="0" y1="5" x2="36" y2="5" stroke={t.color} strokeWidth="2" strokeDasharray={t.dash} />
+          <div className="text-[10.5px] text-neutral-500 mb-1">장비 타입</div>
+          <div className="flex gap-3 mb-2.5 text-[11px] text-neutral-300">
+            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-sky-500" />Video</span>
+            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-rose-500" />Audio</span>
+            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-purple-500" />V+A</span>
+          </div>
+          <div className="text-[10.5px] text-neutral-500 mb-1">케이블</div>
+          <div className="space-y-0.5">
+            {LEGEND_LINES.map(l => (
+              <div key={l.name} className="flex items-center gap-2 py-0.5">
+                <svg width="32" height="10" className="shrink-0">
+                  <line x1="0" y1="5" x2="32" y2="5" stroke={l.color} strokeWidth="2" strokeDasharray={l.dash} />
                 </svg>
-                <span className="text-[10.5px] font-mono font-bold text-white" style={{ minWidth: 56 }}>{t.name}</span>
-                <span className="text-[10px] text-neutral-400">{t.desc}</span>
+                <span className="text-[11px] font-mono font-semibold text-neutral-200 w-14">{l.name}</span>
+                <span className="text-[10.5px] text-neutral-500">{l.desc}</span>
               </div>
             ))}
           </div>
-          <div className="mt-2 pt-1.5 border-t border-white/10 text-[9.5px] text-neutral-500 leading-relaxed">
-            장비 편집 시 포트 또는 케이블의 <strong>연결 타입</strong>에서 선택하면 해당 색·패턴으로 표시됩니다. 동일 색의 흐름이 신호 흐름도 됩니다.
+          <div className="mt-2 pt-2 border-t border-white/10 text-[10px] text-neutral-500 leading-relaxed">
+            포트·케이블의 <span className="text-neutral-300">연결 타입</span>을 지정하면 해당 색·패턴으로 표시됩니다.
           </div>
         </div>
       )}
 
-      {pendingFrom && (
-        <div data-ui className="absolute top-12 md:top-[92px] left-1/2 -translate-x-1/2 z-30 px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500/20 to-orange-500/20 backdrop-blur-xl border border-amber-500/40 shadow-2xl shadow-amber-500/20">
-          <div className="flex items-center gap-3 text-xs">
-            <div className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></div>
-            <div>
-              <span className="text-amber-200 font-semibold">연결 대기: </span>
-              <span className="text-amber-100 font-mono">{devById.get(pendingFrom.device)?.name} · {pendingFrom.port}</span>
-              <span className="text-amber-300/70 ml-2">→ 입력 포트 클릭</span>
-            </div>
-            <button onClick={() => setPendingFrom(null)} className="ml-2 text-amber-300/70 hover:text-white underline text-[10px]">취소</button>
-          </div>
+      {/* 모드별 조작 안내 (한 줄) */}
+      {!showSelectionBar && (
+        <div className="hidden md:block absolute bottom-4 left-4 z-20 h-9 leading-9 px-3 rounded-lg bg-neutral-900/90 border border-white/10 text-[11.5px] text-neutral-400 pointer-events-none truncate max-w-[calc(100vw-260px)]">
+          {viewMode === 'view' && '장비 클릭: 신호 추적 · 스위처 OUT 클릭: PGM 지정 · 라우터 OUT 클릭: 입력 전환 · 드래그: 화면 이동 · 휠: 확대/축소 · F: 전체 보기'}
+          {viewMode === 'connect' && '출력 포트(오른쪽 ●) → 입력 포트(왼쪽 ●) 순서로 클릭하면 케이블이 연결됩니다 · 케이블 클릭: 속성 · Esc: 취소'}
+          {viewMode === 'edit' && '장비 클릭: 편집 · 드래그: 이동 · Shift+클릭: 다중 선택 · Shift+드래그: 영역 선택 · 케이블 클릭: 속성 · Ctrl+Z: 되돌리기'}
         </div>
       )}
 
-      <div data-ui className="absolute bottom-4 left-4 z-20 bg-black/60 backdrop-blur-xl border border-white/10 rounded-xl px-3 py-2.5 shadow-lg">
-        <div className="text-[10.5px] uppercase tracking-[0.12em] text-neutral-500 font-semibold mb-1.5">타입</div>
-        <div className="space-y-1 text-[11.5px]">
-          <div className="flex items-center gap-2"><div className="w-3 h-2.5 rounded-sm bg-gradient-to-r from-sky-400 to-sky-600 shadow-sm shadow-sky-500/50"></div> <span className="text-neutral-300">Video</span></div>
-          <div className="flex items-center gap-2"><div className="w-3 h-2.5 rounded-sm bg-gradient-to-r from-rose-400 to-rose-600 shadow-sm shadow-rose-500/50"></div> <span className="text-neutral-300">Audio</span></div>
-          <div className="flex items-center gap-2"><div className="w-3 h-2.5 rounded-sm bg-gradient-to-r from-purple-400 to-purple-600 shadow-sm shadow-purple-500/50"></div> <span className="text-neutral-300">V + A</span></div>
+      {/* 선택 도구 (편집 모드에서 장비 선택 시) */}
+      {showSelectionBar && (
+        <div data-ui className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-0.5 p-1 rounded-xl bg-neutral-900 border border-white/10 shadow-2xl shadow-black/60 max-w-[calc(100vw-24px)] overflow-x-auto">
+          <span className="px-2 text-[12px] text-amber-300 font-semibold whitespace-nowrap">{selectedIds.size}개 선택</span>
+          {selectedGroupInfo && (
+            <span className="text-[11px] px-1.5 py-0.5 rounded bg-fuchsia-500/15 text-fuchsia-200 whitespace-nowrap mr-1">⬢ {selectedGroupInfo.name}</span>
+          )}
+          <BarSep />
+          <TbButton onClick={() => setShowBulkEditor(true)} title="선택한 장비에 공통 값 일괄 적용"><Pencil size={14} />일괄편집</TbButton>
+          {selectedIds.size >= 2 && !selectedGroupInfo && (
+            <TbButton onClick={handleGroupSelected} title="선택한 장비를 하나의 그룹으로 묶기"><Group size={14} />그룹</TbButton>
+          )}
+          {selectedGroupInfo && (
+            <>
+              <TbButton onClick={handleGroupSelected} title="그룹 이름 변경">이름 변경</TbButton>
+              <TbButton onClick={handleUngroupSelected} title="그룹 해제"><Ungroup size={14} />해제</TbButton>
+            </>
+          )}
+          {selectedIds.size >= 2 && (
+            <>
+              <BarSep />
+              {ALIGN_ACTIONS.filter(a => !a.min3 || selectedIds.size >= 3).map(a => (
+                <button key={a.kind} type="button" onClick={() => handleAlign(a.kind)} title={a.title} className={ICON_BTN}>{a.icon}</button>
+              ))}
+            </>
+          )}
+          <BarSep />
+          <TbButton onClick={handleDeleteSelected} title="선택한 장비 삭제" className="!text-rose-300 hover:!bg-rose-500/20"><Trash2 size={14} />삭제</TbButton>
+          <button type="button" onClick={() => setSelectedIds(new Set())} title="선택 해제 (Esc)" className={ICON_BTN}><X size={14} /></button>
         </div>
-        {editMode && (
-          <div className="mt-2.5 pt-2 border-t border-white/10 text-[10.5px] text-neutral-500 space-y-0.5">
-            <div><kbd className="px-1 py-0.5 rounded bg-white/5 border border-white/10 text-neutral-400 font-mono text-[9px]">클릭</kbd> 편집</div>
-            <div><kbd className="px-1 py-0.5 rounded bg-white/5 border border-white/10 text-neutral-400 font-mono text-[9px]">Shift</kbd> 다중선택</div>
-            <div><kbd className="px-1 py-0.5 rounded bg-white/5 border border-white/10 text-neutral-400 font-mono text-[9px]">Shift+드래그</kbd> 박스</div>
-            <div><kbd className="px-1 py-0.5 rounded bg-white/5 border border-white/10 text-neutral-400 font-mono text-[9px]">케이블 클릭</kbd> tie-line/patch</div>
-          </div>
-        )}
+      )}
+
+      {/* 줌 */}
+      <div data-ui className="absolute bottom-4 right-4 z-20 flex items-center gap-0.5 p-1 rounded-xl bg-neutral-900 border border-white/10 shadow-lg">
+        <button type="button" onClick={() => zoomBy(1 / 1.2)} title="축소" className={ICON_BTN}><Minus size={15} /></button>
+        <button
+          type="button"
+          ref={zoomLabelRef}
+          onClick={() => zoomBy(1 / viewRef.current.scale)}
+          title="100%로 보기"
+          className="h-8 w-12 rounded-md text-[11px] font-mono text-neutral-400 hover:text-white hover:bg-white/10"
+        >{`${Math.round(scale * 100)}%`}</button>
+        <button type="button" onClick={() => zoomBy(1.2)} title="확대" className={ICON_BTN}><Plus size={15} /></button>
+        <div className="w-px h-5 bg-white/10 mx-0.5" />
+        <button type="button" onClick={() => fitToContent()} title="전체 보기 (F)" className={ICON_BTN}><Maximize size={15} /></button>
       </div>
 
-      {/* Canvas */}
+      {/* ===== 도면 캔버스 ===== */}
       <div
-        className={`absolute inset-0 pt-12 md:pt-[88px] ${cursorClass}`}
+        ref={viewportElRef}
+        data-canvas
+        className="absolute inset-x-0 bottom-0 overflow-hidden cursor-grab"
         onMouseDown={onCanvasMouseDown}
-        onWheel={onWheel}
         onTouchStart={onCanvasTouchStart}
         onTouchMove={onCanvasTouchMove}
         onTouchEnd={onCanvasTouchEnd}
         style={{
-          backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px)',
+          top: TOPBAR_H,
+          backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.05) 1px, transparent 1px)',
           backgroundSize: `${24 * scale}px ${24 * scale}px`,
           backgroundPosition: `${offset.x}px ${offset.y}px`,
           touchAction: 'none',                        // 브라우저 기본 팬/줌 차단 → 우리가 처리
@@ -2596,12 +2912,12 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
           WebkitTouchCallout: 'none',
         }}
       >
-        {/* Connection Canvas — 도면 컨테이너와 같은 좌표계 (부모의 padding 시작점부터) */}
-        <div className="absolute inset-x-0 bottom-0 top-12 md:top-[88px] overflow-hidden pointer-events-none">
+        {/* Connection Canvas — 도면과 같은 좌표계 */}
+        <div className="absolute inset-0 pointer-events-none">
           <ConnectionCanvas
             ref={connectionCanvasRef}
             width={viewport.w}
-            height={viewport.h - (viewport.w >= 768 ? 88 : 48)}
+            height={Math.max(1, viewport.h - TOPBAR_H)}
             scale={scale}
             offsetX={offset.x}
             offsetY={offset.y}
@@ -2609,7 +2925,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
           />
         </div>
 
-        <div style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`, transformOrigin: '0 0', width: '4000px', height: '3000px', position: 'relative' }}>
+        <div ref={worldElRef} style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`, transformOrigin: '0 0', width: '4000px', height: '3000px', position: 'relative' }}>
           {/* 배경 이미지 — 도면 위에 깔리는 참조 이미지 */}
           {currentProject?.background_image_url && (
             <BackgroundImageLayer
@@ -2720,212 +3036,14 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
               });
             })()}
 
-            {editMode && connections.map(c => {
-              if (!isConnVisible(c)) return null;
-              if (c.from_device === c.to_device && c.is_patch) return null;
-              // Trace 중이면 traced가 아닌 연결은 즉시 컷 — 렌더 작업 절약
-              if (traceId && !traced.connections.has(c.id)) return null;
-              const from = devById.get(c.from_device)!;
-              const to = devById.get(c.to_device)!;
-              const fromIsHub = from.role === 'router' || from.role === 'patchbay';
-              const toIsHub = to.role === 'router' || to.role === 'patchbay';
-              if (hidePatchbay && (fromIsHub || toIsHub)) return null;
-              const hubConn = fromIsHub || toIsHub;
-              if (hubConn) {
-                const inspectedHere =
-                  (fromIsHub && inspectHubs.has(from.id)) ||
-                  (toIsHub && inspectHubs.has(to.id));
-                const tracedHere = traceId && traced.connections.has(c.id);
-                if (!inspectedHere && !tracedHere) return null;
-              }
-              const outVis = visiblePortsCache.get(from.id)?.out ?? [];
-              const inVis = visiblePortsCache.get(to.id)?.in ?? [];
-              const fi = outVis.findIndex(p => p.name === c.from_port);
-              const ti = inVis.findIndex(p => p.name === c.to_port);
-              if (fi < 0 || ti < 0) return null;
+            {/* 편집/연결 모드 케이블 클릭 영역 + 라벨 (useMemo) */}
+            {editCableOverlay}
 
-              // 모든 장비(패치베이 포함) 일반 카드 규칙 사용: OUT은 오른쪽 중앙, IN은 왼쪽 중앙
-              const x1 = from.x + deviceWidth(from);
-              const y1 = portYFromRenderIdx(from, fi);
-              const x2 = to.x;
-              const y2 = portYFromRenderIdx(to, ti);
+            {/* 허브 숨김 모드 가상 케이블 (useMemo) */}
+            {virtualCablesEl}
 
-              // 경로 계산: 일반 수평 베지어
-              const dxAbs = Math.abs(x2 - x1);
-              const dyAbs = Math.abs(y2 - y1);
-              const midX = (x1 + x2) / 2;
-              const path = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
-              const isTraced = traced.connections.has(c.id);
-              const isDim = false;
-              const ct = c.conn_type ?? from.outputsMeta?.[c.from_port]?.connType;
-              const style = ct ? CONN_TYPE_STYLES[ct] : undefined;
-              const fromLayerId = from.outputsMeta?.[c.from_port]?.layerId;
-              const layerColor = fromLayerId ? layerById.get(fromLayerId)?.color : undefined;
-              // 연결 타입 우선 (CONNECTION_TYPE_COLORS)
-              const typeColor = ct ? CONNECTION_TYPE_COLORS[ct as ConnectionType] : undefined;
-              const color = typeColor ?? layerColor ?? (from.type === 'audio' ? TYPE_COLORS.audio.main : from.type === 'combined' ? TYPE_COLORS.combined.main : TYPE_COLORS.video.main);
-              const isPgm = from.role === 'switcher' && from.pgmPort === c.from_port;
-              const isPatch = c.is_patch === true;
-              // 이 케이블에 실제 신호(source)가 흐르는지
-              const liveSrcId = signalByOutput.out.get(`${c.from_device}:${c.from_port}`);
-              const isLive = !!liveSrcId;
-              const mx = (x1 + x2) / 2;
-              const my = (y1 + y2) / 2;
-
-              // 패치 케이블은 주황색, live는 색 더 선명
-              const cableColor = isPatch ? '#F97316' : color;
-              const cableDash = isPatch ? '5 4' : (style?.dash ?? undefined);
-
-              return (
-                <g key={c.id} opacity={isDim ? 0.1 : 1} style={{ pointerEvents: 'none' }}>
-                  {/* 베이스 라인은 ConnectionCanvas가 담당 — SVG는 인터랙티브/라벨만 */}
-                  {/* 편집모드에선 클릭 가능한 넓은 투명 path (선 hit area) */}
-                  {editMode && (
-                    <path
-                      d={path} stroke="transparent" strokeWidth={18} fill="none"
-                      style={{ cursor: 'pointer', pointerEvents: 'stroke' }}
-                      onClick={e => { e.stopPropagation(); setEditingCable(c); }}
-                    />
-                  )}
-                  {/* 연결방식 라벨 */}
-                  {ct && (scale > 0.5 || isTraced || isPgm || isPatch) && (
-                    <g>
-                      <rect x={mx - 24} y={my - 8.5} width="48" height="15" rx="4" fill="rgba(8,8,10,0.92)" stroke={cableColor} strokeWidth="0.6" />
-                      <text x={mx} y={my + 2.8} textAnchor="middle" fontSize="9.5" fill={cableColor} fontFamily="var(--font-mono)" fontWeight="700" letterSpacing="0.02em">
-                        {style?.label ?? ct}
-                      </text>
-                    </g>
-                  )}
-                  {/* Tie-Line 번호 */}
-                  {c.tie_line && (scale > 0.4 || isTraced) && (
-                    <g>
-                      <rect x={mx - 30} y={my + 8} width="60" height="12" rx="3" fill="rgba(20,15,5,0.92)" stroke="#F59E0B" strokeWidth="0.5" />
-                      <text x={mx} y={my + 17} textAnchor="middle" fontSize="8.5" fill="#FCD34D" fontFamily="var(--font-mono)" fontWeight="700">
-                        {c.tie_line}
-                      </text>
-                    </g>
-                  )}
-                  {/* Patch 뱃지 */}
-                  {isPatch && scale > 0.45 && (
-                    <g>
-                      <rect x={mx - 22} y={my - 22} width="44" height="11" rx="2.5" fill="#F97316" opacity="0.95" />
-                      <text x={mx} y={my - 14} textAnchor="middle" fontSize="7.5" fill="white" fontFamily="var(--font-mono)" fontWeight="800" letterSpacing="0.05em">
-                        PATCH
-                      </text>
-                    </g>
-                  )}
-                </g>
-              );
-            })}
-
-            {/* hidePatchbay 모드: 라벨-to-라벨 가상 케이블 */}
-            {/* Trace 중이면 trace 경로에 해당하는 vc만, 아니면 전체 */}
-            {hidePatchbay && (() => {
-              const LABEL_WIDTH = 130;
-              const LABEL_H_OFFSET = 8;
-              const LABEL_PAD = 6;
-
-              type VirtualCable = {
-                id: string;
-                fromDev: Device; fromPortIdx: number;
-                toDev: Device; toPortIdx: number;
-                code: string;
-                color: string;
-                isTraced: boolean;
-              };
-              const vcs: VirtualCable[] = [];
-
-              devices.forEach(d => {
-                if (d.role === 'patchbay' || d.role === 'router') return;
-                if (!isDeviceVisible(d)) return;
-                const cache = visiblePortsCache.get(d.id);
-                if (!cache) return;
-                cache.out.forEach((p, idx) => {
-                  const followed = followPathFromOut(d.id, p.name);
-                  if (!followed || followed.chain.length === 0) return;
-                  if (followed.finalDev.role === 'patchbay' || followed.finalDev.role === 'router') return;
-                  const destCache = visiblePortsCache.get(followed.finalDev.id);
-                  if (!destCache) return;
-                  const toIdx = destCache.in.findIndex(x => x.name === followed.finalPort);
-                  if (toIdx < 0) return;
-
-                  // trace 모드면 이 경로가 trace 체인에 포함되는지 확인
-                  const isVcTraced = !!traceId
-                    && traced.ports.has(`${d.id}:${p.name}`)
-                    && traced.ports.has(`${followed.finalDev.id}:${followed.finalPort}`);
-                  // trace 중인데 이 경로가 포함 안 되면 건너뜀
-                  if (traceId && !isVcTraced) return;
-
-                  const firstHop = followed.chain[0];
-                  const isRtHop = firstHop.hub.role === 'router';
-                  const hubList = devices.filter(x => x.role === firstHop.hub.role);
-                  const hubIdx = hubList.findIndex(x => x.id === firstHop.hub.id) + 1;
-                  const portNum = firstHop.hub.inputs.indexOf(firstHop.inPort) + 1;
-                  const prefix = isRtHop ? 'R' : 'P';
-                  const code = `${prefix}${String(hubIdx).padStart(2, '0')}-${String(portNum).padStart(2, '0')}`;
-                  const lid = d.outputsMeta?.[p.name]?.layerId;
-                  const layerColor = lid ? layerById.get(lid)?.color : undefined;
-                  const clr = layerColor ?? (d.type === 'audio' ? TYPE_COLORS.audio.main : d.type === 'combined' ? TYPE_COLORS.combined.main : TYPE_COLORS.video.main);
-                  vcs.push({
-                    id: `vc_${d.id}_${p.name}`,
-                    fromDev: d, fromPortIdx: idx,
-                    toDev: followed.finalDev, toPortIdx: toIdx,
-                    code, color: clr, isTraced: isVcTraced,
-                  });
-                });
-              });
-
-              return (
-                <g style={{ pointerEvents: 'none' }}>
-                  {vcs.map(vc => {
-                    const fromW = deviceWidth(vc.fromDev);
-                    // OUT 라벨 박스 오른쪽 끝점
-                    const x1 = vc.fromDev.x + fromW + 6 + LABEL_WIDTH + LABEL_PAD;
-                    const y1 = vc.fromDev.y + HEADER_H + PADDING_Y + vc.fromPortIdx * PORT_H + PORT_H / 2;
-                    // IN 라벨 박스 왼쪽 끝점
-                    const x2 = vc.toDev.x - 6 - LABEL_WIDTH - LABEL_PAD;
-                    const y2 = vc.toDev.y + HEADER_H + PADDING_Y + vc.toPortIdx * PORT_H + PORT_H / 2;
-
-                    const dxAbs = Math.abs(x2 - x1);
-                    const dyAbs = Math.abs(y2 - y1);
-                    const midX = (x1 + x2) / 2;
-                    const path = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
-
-                    const liveSrc = signalByOutput.out.get(`${vc.fromDev.id}:${vc.fromDev.outputs[vc.fromPortIdx]}`);
-                    const isLive = !!liveSrc;
-
-                    return (
-                      <g key={vc.id}>
-                        {vc.isTraced && (
-                          <path d={path} stroke={vc.color} strokeWidth={7} fill="none"
-                                opacity={0.4} filter="url(#glow-strong)" />
-                        )}
-                        <path d={path}
-                              stroke={vc.color}
-                              strokeWidth={vc.isTraced ? 2.8 : 1.6}
-                              strokeDasharray={vc.isTraced ? "6 12" : "2 4"}
-                              fill="none"
-                              opacity={vc.isTraced ? 1 : 0.5}
-                              filter={vc.isTraced ? 'url(#glow)' : undefined}
-                              className={vc.isTraced ? "flow-line" : ""}
-                              style={vc.isTraced ? { animationDuration: '1.2s' } : undefined}
-                        />
-                      </g>
-                    );
-                  })}
-                </g>
-              );
-            })()}
-
-            {marqueeRect && (
-              <rect
-                x={marqueeRect.x} y={marqueeRect.y}
-                width={marqueeRect.w} height={marqueeRect.h}
-                fill="rgba(59,130,246,0.08)"
-                stroke="rgba(59,130,246,0.8)" strokeWidth="1.5"
-                strokeDasharray="5 3" rx="4"
-              />
-            )}
+            {/* 마키(영역 선택) — DOM 직접 갱신 */}
+            <rect ref={marqueeElRef} display="none" fill="rgba(59,130,246,0.08)" stroke="rgba(59,130,246,0.8)" strokeWidth="1.5" strokeDasharray="5 3" rx="4" />
           </svg>
 
           {/* Devices */}
@@ -2933,42 +3051,20 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
             if (!isDeviceVisible(d)) return null;
             if (hidePatchbay && (d.role === 'patchbay' || d.role === 'router')) return null;
             if (traceId && !traced.devices.has(d.id)) return null;
-            // 뷰포트 컬링 — 화면 밖 장비 skip
+            // 뷰포트 컬링 — 화면 밖 장비 skip (카드 좌우 라벨 폭 포함)
             const w = deviceWidth(d);
             const h = deviceHeight(d, visibleLayerIds);
-            const viewWorldLeft = (-offset.x - 200) / scale;
-            const viewWorldTop = (-offset.y - 200) / scale;
-            const viewWorldRight = (viewport.w - offset.x + 200) / scale;
-            const viewWorldBottom = (viewport.h - offset.y + 200) / scale;
-            if (d.x + w < viewWorldLeft || d.x > viewWorldRight) return null;
-            if (d.y + h < viewWorldTop || d.y > viewWorldBottom) return null;
+            if (d.x + w + 170 < cull.l || d.x - 170 > cull.r) return null;
+            if (d.y + h < cull.t || d.y > cull.b) return null;
 
             const color = TYPE_COLORS[d.type] ?? TYPE_COLORS.video;
             const isSelected = selectedIds.has(d.id);
             const isTraceTarget = traceId === d.id;
-            const isTraced = traced.devices.has(d.id);
-            const isDim = false;
             const vpCached = visiblePortsCache.get(d.id);
             const inVis = vpCached?.in ?? [];
             const outVis = vpCached?.out ?? [];
             const role = d.role ?? 'standard';
-            const roleIcon =
-              role === 'switcher' ? '⇆'
-              : role === 'router' ? '⇅'
-              : role === 'splitter' ? '⇶'
-              : role === 'patchbay' ? '⊟'
-              : role === 'wallbox' ? '▦'
-              : role === 'source' ? '▶'
-              : role === 'display' ? '🖵'
-              : role === 'multiview' ? '▦'
-              : role === 'audio_mixer' ? '🎛'
-              : role === 'io_box' ? '📦'
-              : role === 'panelboard' ? '⚡'
-              : role === 'power_supply' ? '🔌'
-              : role === 'power_consumer' ? '💡'
-              : role === 'power_strip' ? '🔌'
-              : role === 'connector' ? '━'
-              : null;
+            const roleStyle = ROLE_STYLE[role];
             const isPatchbay = role === 'patchbay';
             const isWallbox = role === 'wallbox';
             const isSource = role === 'source';
@@ -3037,11 +3133,12 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                       : isRouterRole && !isSelected && !isTraceTarget ? 'rgba(249,115,22,0.5)'
                       : borderColor
                     }`,
+                    // 그림자는 선택/추적 대상에만 — 카드 수십 개의 그림자 페인트 비용 절감
                     boxShadow: isSelected
                       ? `0 0 0 2px rgba(251,191,36,0.6)`
                       : isTraceTarget
                       ? `0 0 0 2px ${color.glow}aa`
-                      : `0 2px 8px rgba(0,0,0,0.4)`,
+                      : undefined,
                     cursor: editMode ? 'move' : 'pointer',
                     transform: finalTransform || undefined,
                     transformOrigin: '0 0',
@@ -3059,64 +3156,17 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                 >
                   <div
                     className="w-1 h-5 rounded-full shrink-0"
-                    style={{ background: `linear-gradient(180deg, ${color.glow}, ${color.main})`, boxShadow: `0 0 8px ${color.glow}` }}
+                    style={{ background: `linear-gradient(180deg, ${color.glow}, ${color.main})` }}
                   ></div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
                       <div className="text-[14px] font-semibold truncate text-white leading-snug tracking-tight">{d.name}</div>
-                      {roleIcon && (
+                      {roleStyle && (
                         <span
                           className="text-[9px] px-1 py-[1px] rounded shrink-0 font-mono font-bold"
-                          style={{
-                            background:
-                              isWallbox ? 'rgba(245,158,11,0.15)'
-                              : isPatchbay ? 'rgba(20,184,166,0.15)'
-                              : role === 'router' ? 'rgba(249,115,22,0.18)'
-                              : isMultiview ? 'rgba(139,92,246,0.18)'
-                              : isAudioMixer ? 'rgba(244,63,94,0.18)'
-                              : isIoBox ? 'rgba(34,211,238,0.18)'
-                              : isPanelboard ? 'rgba(245,158,11,0.2)'
-                              : isPowerSupply ? 'rgba(234,179,8,0.2)'
-                              : isPowerConsumer ? 'rgba(249,115,22,0.2)'
-                              : isPowerStrip ? 'rgba(250,204,21,0.2)'
-                              : isSource ? 'rgba(132,204,22,0.2)'
-                              : isDisplay ? 'rgba(14,165,233,0.18)'
-                              : role === 'connector' ? 'rgba(148,163,184,0.15)'
-                              : 'rgba(16,185,129,0.15)',
-                            color:
-                              isWallbox ? '#FBBF24'
-                              : isPatchbay ? '#2DD4BF'
-                              : role === 'router' ? '#FB923C'
-                              : isMultiview ? '#A78BFA'
-                              : isAudioMixer ? '#FB7185'
-                              : isIoBox ? '#22D3EE'
-                              : isPanelboard ? '#FBBF24'
-                              : isPowerSupply ? '#FACC15'
-                              : isPowerConsumer ? '#FB923C'
-                              : isPowerStrip ? '#FACC15'
-                              : isSource ? '#A3E635'
-                              : isDisplay ? '#38BDF8'
-                              : role === 'connector' ? '#CBD5E1'
-                              : '#34D399',
-                            border: `0.5px solid ${
-                              isWallbox ? 'rgba(251,191,36,0.4)'
-                              : isPatchbay ? 'rgba(45,212,191,0.4)'
-                              : role === 'router' ? 'rgba(251,146,60,0.45)'
-                              : isMultiview ? 'rgba(167,139,250,0.45)'
-                              : isAudioMixer ? 'rgba(251,113,133,0.45)'
-                              : isIoBox ? 'rgba(34,211,238,0.45)'
-                              : isPanelboard ? 'rgba(251,191,36,0.5)'
-                              : isPowerSupply ? 'rgba(250,204,21,0.5)'
-                              : isPowerConsumer ? 'rgba(251,146,60,0.5)'
-                              : isPowerStrip ? 'rgba(250,204,21,0.5)'
-                              : isSource ? 'rgba(163,230,53,0.4)'
-                              : isDisplay ? 'rgba(56,189,248,0.4)'
-                              : role === 'connector' ? 'rgba(203,213,225,0.3)'
-                              : 'rgba(52,211,153,0.4)'
-                            }`,
-                          }}
+                          style={{ background: roleStyle.bg, color: roleStyle.fg, border: `0.5px solid ${roleStyle.bd}` }}
                           title={DEVICE_ROLE_LABELS[role]}
-                        >{roleIcon} {DEVICE_ROLE_LABELS[role]}</span>
+                        >{roleStyle.icon} {DEVICE_ROLE_LABELS[role]}</span>
                       )}
                       {/* 라우터/패치베이: 연결선 표시 토글 */}
                       {(role === 'router' || role === 'patchbay') && (
@@ -3168,9 +3218,6 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                       )}
                     </div>
                   </div>
-                  {editMode && (
-                    <div className="text-[9px] text-neutral-600 font-mono opacity-60 shrink-0">{w}×{Math.round(h)}</div>
-                  )}
                 </div>
 
                 {/* Ports — 패치베이도 일반 카드 형태로 통일 (관리 모드에서만 실사) */}
@@ -3222,7 +3269,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                               style={{
                                 width: 12, height: 12,
                                 background: isSel && canSelect ? '#22d3ee' : portColor,
-                                boxShadow: `0 0 ${isSel && canSelect ? '12px' : '8px'} ${isSel && canSelect ? '#22d3ee' : portColor}, inset 0 1px 1px rgba(255,255,255,0.3)`,
+                                boxShadow: isSel && canSelect ? '0 0 10px #22d3ee' : undefined,
                               }}
                             ></span>
                           </button>
@@ -3236,7 +3283,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                             <span className="text-[11.5px] text-neutral-200 font-mono truncate font-medium">{p.name}</span>
                             {ct && (
                               <span className="text-[9.5px] px-1.5 py-[2px] rounded font-mono font-semibold shrink-0"
-                                style={{ background: `${portColor}20`, color: portColor, border: `0.5px solid ${portColor}55`, boxShadow: `0 0 4px ${portColor}30` }}>
+                                style={{ background: `${portColor}20`, color: portColor, border: `0.5px solid ${portColor}55` }}>
                                 {ctStyle?.label ?? ct}
                               </span>
                             )}
@@ -3303,7 +3350,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                             )}
                             {ct && (
                               <span className="text-[9.5px] px-1.5 py-[2px] rounded font-mono font-semibold shrink-0"
-                                style={{ background: `${portColor}20`, color: portColor, border: `0.5px solid ${portColor}55`, boxShadow: `0 0 4px ${portColor}30` }}>
+                                style={{ background: `${portColor}20`, color: portColor, border: `0.5px solid ${portColor}55` }}>
                                 {ctStyle?.label ?? ct}
                               </span>
                             )}
@@ -3322,7 +3369,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                               style={{
                                 width: 12, height: 12,
                                 background: isPending ? '#fbbf24' : isPgm ? '#10b981' : portColor,
-                                boxShadow: `0 0 ${isPgm ? '12px' : '8px'} ${isPending ? '#fbbf24' : isPgm ? '#10b981' : portColor}, inset 0 1px 1px rgba(255,255,255,0.3)`,
+                                boxShadow: isPending ? '0 0 10px #fbbf24' : isPgm ? '0 0 10px #10b981' : undefined,
                               }}
                             ></span>
                           </button>
@@ -3785,6 +3832,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
               {!isPatchbay && !isWallbox && role !== 'router' && inVis.length > 0 && (hubConnections.length > 0 || hidePatchbay) && (
                 <div
                   data-ui
+                  data-follow={d.id}
                   className="absolute flex flex-col items-end pointer-events-auto"
                   style={{
                     left: d.x - 160,
@@ -3801,11 +3849,8 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                         // 공통 코드: OUT에서 쓴 것과 동일
                         const firstHop = rev.chain[0];
                         const isRtHop = firstHop.hub.role === 'router';
-                        const hubList = devices.filter(x => x.role === firstHop.hub.role);
-                        const hubIdx = hubList.findIndex(x => x.id === firstHop.hub.id) + 1;
                         const portNum = firstHop.hub.inputs.indexOf(firstHop.inPort) + 1;
-                        const prefix = isRtHop ? 'R' : 'P';
-                        const code = `${prefix}${String(hubIdx).padStart(2, '0')}-${String(portNum).padStart(2, '0')}`;
+                        const code = hubCode(firstHop.hub, firstHop.inPort);
                         const liveSrc = signalByOutput.inSignal.get(`${d.id}:${p.name}`);
                         const isLive = !!liveSrc;
                         const bg = isRtHop
@@ -3884,6 +3929,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
               {!isPatchbay && !isWallbox && role !== 'router' && outVis.length > 0 && (
                 <div
                   data-ui
+                  data-follow={d.id}
                   className="absolute flex flex-col pointer-events-auto"
                   style={{
                     left: d.x + w + 6,
@@ -3904,11 +3950,8 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                           if (info && (info.destDev.role === 'patchbay' || info.destDev.role === 'router')) {
                             const hubDev = info.destDev;
                             const isRt = hubDev.role === 'router';
-                            const hubList = devices.filter(x => x.role === hubDev.role);
-                            const hubIdx = hubList.findIndex(x => x.id === hubDev.id) + 1;
                             const hubPortNum = hubDev.inputs.indexOf(info.destConn.to_port) + 1;
-                            const prefix = isRt ? 'R' : 'P';
-                            const code = `${prefix}${String(hubIdx).padStart(2, '0')}-${String(hubPortNum).padStart(2, '0')}`;
+                            const code = hubCode(hubDev, info.destConn.to_port);
                             const bg = isRt
                               ? 'bg-orange-500/10 text-orange-400/60 border-orange-500/20'
                               : 'bg-teal-500/10 text-teal-400/60 border-teal-500/20';
@@ -3932,11 +3975,8 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                         // 허브 경유: "P01-05" (패치베이) 또는 "R01-05" (라우터) 형식
                         const firstHop = followed.chain[0];
                         const isRtHop = firstHop.hub.role === 'router';
-                        const hubList = devices.filter(x => x.role === firstHop.hub.role);
-                        const hubIdx = hubList.findIndex(x => x.id === firstHop.hub.id) + 1;
                         const portNum = firstHop.hub.inputs.indexOf(firstHop.inPort) + 1;
-                        const prefix = isRtHop ? 'R' : 'P';
-                        const code = `${prefix}${String(hubIdx).padStart(2, '0')}-${String(portNum).padStart(2, '0')}`;
+                        const code = hubCode(firstHop.hub, firstHop.inPort);
                         const liveSrc = signalByOutput.out.get(`${d.id}:${p.name}`);
                         const isLive = !!liveSrc;
                         // 허브 종류에 따라 색: 라우터=주황, 패치베이=청록
@@ -4058,13 +4098,6 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
           })}
         </div>
 
-        {/* Zoom */}
-        <div data-ui className="absolute bottom-4 right-4 z-20 bg-black/60 backdrop-blur-xl border border-white/10 rounded-xl p-1 flex flex-col gap-0.5 shadow-lg">
-          <button onClick={() => setScale(s => Math.min(2, s * 1.2))} className="w-8 h-8 hover:bg-white/10 rounded-lg text-base transition">＋</button>
-          <div className="text-[10px] text-center text-neutral-400 font-mono py-1 border-y border-white/5">{Math.round(scale * 100)}%</div>
-          <button onClick={() => setScale(s => Math.max(0.15, s / 1.2))} className="w-8 h-8 hover:bg-white/10 rounded-lg text-base transition">−</button>
-          <button onClick={() => { setScale(0.7); setOffset({ x: 40, y: 70 }); }} className="w-8 h-8 hover:bg-white/10 rounded-lg text-[10px] transition" title="초기화">⊡</button>
-        </div>
       </div>
 
       {showPatchbayMgr && (
@@ -4135,11 +4168,10 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
           onClose={() => setEditingCable(null)}
           onDelete={async () => {
             const snapshot = { ...editingCable };
-            await (supabase as any).from('connections').delete().eq('id', editingCable.id);
-            pushUndo('케이블 삭제 되돌리기', async () => {
-              await (supabase as any).from('connections').insert(snapshot);
-            });
+            setConnections(prev => prev.filter(c => c.id !== snapshot.id));
             setEditingCable(null);
+            await (supabase as any).from('connections').delete().eq('id', snapshot.id);
+            pushUndo('케이블 삭제 되돌리기', () => restoreDevicesAndConns([], [snapshot]));
           }}
         />
       )}
