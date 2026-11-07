@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase, Project, ProjectCategory, PROJECT_CATEGORY_LABELS, PROJECT_CATEGORY_COLORS } from '@/lib/supabase';
 import { PROJECT_TEMPLATES, getTemplateById } from '@/lib/projectTemplates';
+import { deleteAllSnapshots } from '@/lib/snapshots';
 
 export default function ProjectListPage() {
   const router = useRouter();
@@ -44,6 +45,8 @@ export default function ProjectListPage() {
     await (supabase as any).from('layers').delete().eq('project_id', id);
     await (supabase as any).from('racks').delete().eq('project_id', id);
     await (supabase as any).from('projects').delete().eq('id', id);
+    // 이 프로젝트의 스냅샷 파일도 정리 (실패해도 무시)
+    try { await deleteAllSnapshots(id); } catch { /* noop */ }
     setProjects(prev => prev.filter(p => p.id !== id));
   };
 

@@ -103,6 +103,76 @@ html, body {
   pointer-events: none;
 }
 
+/* ===== 도면 테마 변수 (다크 / 흰색 도면) ===== */
+.sfm-root {
+  --ui-bg: #0a0a0a;
+  --ui-bar: #0a0a0a;
+  --ui-panel: #171717;
+  --ui-border: rgba(255, 255, 255, 0.10);
+  --ui-text: #ffffff;
+  --ui-text-2: #d4d4d4;
+  --ui-muted: #8a8a8a;
+  --ui-hover: rgba(255, 255, 255, 0.08);
+  --ui-active: rgba(255, 255, 255, 0.15);
+  --ui-seg: rgba(255, 255, 255, 0.06);
+  --ui-grid: rgba(255, 255, 255, 0.05);
+  color-scheme: dark;
+}
+.sfm-root.theme-light {
+  --ui-bg: #f4f6f9;
+  --ui-bar: #ffffff;
+  --ui-panel: #ffffff;
+  --ui-border: rgba(15, 23, 42, 0.12);
+  --ui-text: #0f172a;
+  --ui-text-2: #334155;
+  --ui-muted: #64748b;
+  --ui-hover: rgba(15, 23, 42, 0.06);
+  --ui-active: rgba(15, 23, 42, 0.10);
+  --ui-seg: rgba(15, 23, 42, 0.05);
+  --ui-grid: rgba(15, 23, 42, 0.13);
+  color-scheme: light;
+}
+
+/* 흰색 도면: 장비 카드·카드 옆 라벨의 글자색을 흰 배경용으로 (어두운 배경용 Tailwind 색 보정) */
+.theme-light :is([data-device-id], [data-follow]) .text-white { color: #0f172a !important; }
+.theme-light :is([data-device-id], [data-follow]) [class*="text-neutral-1"],
+.theme-light :is([data-device-id], [data-follow]) [class*="text-neutral-2"] { color: #1e293b !important; }
+.theme-light :is([data-device-id], [data-follow]) [class*="text-neutral-3"] { color: #334155 !important; }
+.theme-light :is([data-device-id], [data-follow]) [class*="text-neutral-4"] { color: #475569 !important; }
+.theme-light :is([data-device-id], [data-follow]) [class*="text-neutral-5"] { color: #64748b !important; }
+.theme-light :is([data-device-id], [data-follow]) [class*="text-neutral-6"],
+.theme-light :is([data-device-id], [data-follow]) [class*="text-neutral-7"] { color: #94a3b8 !important; }
+.theme-light :is([data-device-id], [data-follow]) [class*="text-amber-"],
+.theme-light :is([data-device-id], [data-follow]) [class*="text-yellow-"] { color: #a16207 !important; }
+.theme-light :is([data-device-id], [data-follow]) [class*="text-orange-"] { color: #c2410c !important; }
+.theme-light :is([data-device-id], [data-follow]) [class*="text-rose-"],
+.theme-light :is([data-device-id], [data-follow]) [class*="text-red-"],
+.theme-light :is([data-device-id], [data-follow]) [class*="text-pink-"] { color: #be123c !important; }
+.theme-light :is([data-device-id], [data-follow]) [class*="text-emerald-"],
+.theme-light :is([data-device-id], [data-follow]) [class*="text-green-"] { color: #047857 !important; }
+.theme-light :is([data-device-id], [data-follow]) [class*="text-lime-"] { color: #4d7c0f !important; }
+.theme-light :is([data-device-id], [data-follow]) [class*="text-teal-"] { color: #0f766e !important; }
+.theme-light :is([data-device-id], [data-follow]) [class*="text-cyan-"] { color: #0e7490 !important; }
+.theme-light :is([data-device-id], [data-follow]) [class*="text-sky-"],
+.theme-light :is([data-device-id], [data-follow]) [class*="text-blue-"] { color: #0369a1 !important; }
+.theme-light :is([data-device-id], [data-follow]) [class*="text-violet-"],
+.theme-light :is([data-device-id], [data-follow]) [class*="text-purple-"],
+.theme-light :is([data-device-id], [data-follow]) [class*="text-fuchsia-"] { color: #7e22ce !important; }
+.theme-light :is([data-device-id], [data-follow]) .bg-white\/5,
+.theme-light :is([data-device-id], [data-follow]) [class*="bg-white/["] { background-color: rgba(15, 23, 42, 0.04) !important; }
+.theme-light :is([data-device-id], [data-follow]) [class*="border-white"] { border-color: rgba(15, 23, 42, 0.15) !important; }
+/* 선택/활성 배지처럼 진한 단색 배경 위의 글자는 흰색 유지 */
+.theme-light :is([data-device-id], [data-follow]) :is(.bg-orange-500, .bg-teal-500, .bg-sky-500) { color: #ffffff !important; }
+
+/* 검색으로 찾은 장비 — 잠깐 강조 */
+@keyframes device-flash {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(56, 189, 248, 0); }
+  30%, 70% { box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.9), 0 0 24px 6px rgba(56, 189, 248, 0.45); }
+}
+.device-flash {
+  animation: device-flash 0.9s ease-in-out 2;
+}
+
 /* 캔버스 커서 — React state 대신 body class로 제어 (재렌더 없음) */
 body.is-panning [data-canvas],
 body.is-panning [data-canvas] * {
