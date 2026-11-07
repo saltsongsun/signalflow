@@ -3,8 +3,48 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
+// ===== 저장 상태 추적 =====
+// 모든 쓰기 요청(POST/PATCH/PUT/DELETE — DB·Storage)을 한 곳에서 세어
+// 화면에 "저장 중 / 저장됨 / 저장 실패"를 보여준다. (어느 컴포넌트에서 저장하든 자동 반영)
+export type SaveStatus = { pending: number; error: string | null; errorAt: number; okAt: number };
+let saveStatus: SaveStatus = { pending: 0, error: null, errorAt: 0, okAt: 0 };
+const saveListeners = new Set<(s: SaveStatus) => void>();
+const emitSave = (patch: Partial<SaveStatus>) => {
+  saveStatus = { ...saveStatus, ...patch };
+  saveListeners.forEach(fn => fn(saveStatus));
+};
+export function subscribeSaveStatus(fn: (s: SaveStatus) => void): () => void {
+  saveListeners.add(fn);
+  fn(saveStatus);
+  return () => { saveListeners.delete(fn); };
+}
+
+const trackedFetch: typeof fetch = async (input, init) => {
+  const method = (init?.method ?? (typeof input === 'object' && 'method' in input ? (input as Request).method : 'GET')).toUpperCase();
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url;
+  const isWrite = method !== 'GET' && method !== 'HEAD' && /\/(rest|storage)\/v1\//.test(url)
+    && !/\/storage\/v1\/object\/list\//.test(url);          // 목록 조회(POST)는 저장이 아님
+  if (!isWrite) return fetch(input, init);
+  emitSave({ pending: saveStatus.pending + 1 });
+  try {
+    const res = await fetch(input, init);
+    if (res.ok) {
+      emitSave({ pending: saveStatus.pending - 1, okAt: Date.now(), error: null });
+    } else {
+      let detail = '';
+      try { const j = await res.clone().json(); detail = j?.message ?? j?.error ?? ''; } catch { /* noop */ }
+      emitSave({ pending: saveStatus.pending - 1, error: `${res.status} ${detail || res.statusText}`.trim(), errorAt: Date.now() });
+    }
+    return res;
+  } catch (err: any) {
+    emitSave({ pending: saveStatus.pending - 1, error: `네트워크 오류: ${err?.message ?? err}`, errorAt: Date.now() });
+    throw err;
+  }
+};
+
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   realtime: { params: { eventsPerSecond: 20 } },
+  global: { fetch: trackedFetch },
 });
 
 export const CONNECTION_TYPES = [
