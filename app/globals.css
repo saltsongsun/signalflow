@@ -87,10 +87,30 @@ html, body {
   }
 }
 
-/* 장비 카드에 GPU 레이어 분리 힌트 */
+/* 장비 카드: 레이아웃/페인트 격리.
+   (이전엔 카드마다 will-change: transform → 카드 수만큼 GPU 레이어가 생겨 줌할 때마다 전부 다시 래스터) */
 [data-device-id] {
-  will-change: transform;
   contain: layout paint;
+}
+
+/* 팬(이동) 중에만 도면 전체를 한 장의 GPU 레이어로 — 끝나면 해제해서 글자가 다시 선명하게 그려짐.
+   줌 중에는 레이어를 만들지 않음(배율 변경마다 전체 재래스터 → 오히려 느림). 둘 다 hover 계산은 끔 */
+.is-moving {
+  will-change: transform;
+  pointer-events: none;
+}
+.is-zooming {
+  pointer-events: none;
+}
+
+/* 캔버스 커서 — React state 대신 body class로 제어 (재렌더 없음) */
+body.is-panning [data-canvas],
+body.is-panning [data-canvas] * {
+  cursor: grabbing !important;
+}
+body.is-marquee [data-canvas],
+body.is-marquee [data-canvas] * {
+  cursor: crosshair !important;
 }
 
 /* 드래그 중엔 성능을 위해 애니메이션 정지 */
