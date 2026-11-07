@@ -24,6 +24,8 @@ type Props = {
   offsetY: number;
   cables: CableInfo[];
   virtualCables?: VirtualCableInfo[];
+  /** 흰색 도면 모드 — 흰 배경에서 선이 잘 보이도록 불투명도를 높임 */
+  light?: boolean;
 };
 
 export type ConnectionCanvasHandle = {
@@ -37,8 +39,10 @@ export type ConnectionCanvasHandle = {
  * Connection을 canvas에 그리는 렌더러. Imperative handle로 React 재렌더 없이 업데이트 가능.
  */
 const ConnectionCanvas = forwardRef<ConnectionCanvasHandle, Props>(function ConnectionCanvas({
-  width, height, scale: initScale, offsetX: initOffsetX, offsetY: initOffsetY, cables, virtualCables = []
+  width, height, scale: initScale, offsetX: initOffsetX, offsetY: initOffsetY, cables, virtualCables = [], light = false
 }, ref) {
+  const lightRef = useRef(light);
+  lightRef.current = light;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number | null>(null);
   const flowOffsetRef = useRef(0);
@@ -110,12 +114,12 @@ const ConnectionCanvas = forwardRef<ConnectionCanvasHandle, Props>(function Conn
     for (let i = 0; i < cs.length; i++) {
       const c = cs[i];
       if (c.isTraced) continue;
-      drawCable(ctx, applyOffset(c), flowOffsetRef.current, false, scale);
+      drawCable(ctx, applyOffset(c), flowOffsetRef.current, false, scale, lightRef.current);
     }
     for (let i = 0; i < vcs.length; i++) {
       const c = vcs[i];
       if (c.isTraced) continue;
-      drawCable(ctx, applyOffset(c), flowOffsetRef.current, false, scale);
+      drawCable(ctx, applyOffset(c), flowOffsetRef.current, false, scale, lightRef.current);
     }
 
     // Trace 케이블
@@ -188,7 +192,7 @@ const ConnectionCanvas = forwardRef<ConnectionCanvasHandle, Props>(function Conn
 
 export default ConnectionCanvas;
 
-function drawCable(ctx: CanvasRenderingContext2D, c: CableInfo, flowOffset: number, isTraced: boolean, scale: number = 1) {
+function drawCable(ctx: CanvasRenderingContext2D, c: CableInfo, flowOffset: number, isTraced: boolean, scale: number = 1, light: boolean = false) {
   const { x1, y1, x2, y2, color } = c;
 
   // 부드러운 곡선 — 수평 우선 elbow.
@@ -240,7 +244,7 @@ function drawCable(ctx: CanvasRenderingContext2D, c: CableInfo, flowOffset: numb
     ctx.save();
     drawPath();
     ctx.strokeStyle = color;
-    ctx.globalAlpha = c.isPgm || c.isPatch ? 0.85 : 0.55;
+    ctx.globalAlpha = c.isPgm || c.isPatch ? 0.85 : (light ? 0.8 : 0.55);
     ctx.lineWidth = c.strokeWidth;
     ctx.lineCap = 'round';
     if (c.dashArray) {

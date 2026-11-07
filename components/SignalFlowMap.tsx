@@ -8,8 +8,12 @@ import {
   AlignStartVertical, AlignCenterVertical, AlignEndVertical, AlignStartHorizontal, AlignCenterHorizontal,
   AlignEndHorizontal, AlignHorizontalDistributeCenter, AlignVerticalDistributeCenter,
   Box, LayoutGrid, SlidersVertical, Server, CreditCard, Zap, PlugZap, Lightbulb, Plug,
-  Route, Spline, Palette, Square, PanelsTopLeft, RotateCcw,
+  Route, Spline, Palette, Square, PanelsTopLeft, RotateCcw, History, Sun, Moon, Search,
 } from 'lucide-react';
+import SnapshotPanel from './SnapshotPanel';
+import SaveIndicator from './SaveIndicator';
+import { listSnapshots, createSnapshot, restoreSnapshot, deleteSnapshot, fetchProjectData, SnapshotMeta } from '../lib/snapshots';
+import { inkFor, LIGHT_TYPE_COLORS } from '../lib/colors';
 import { supabase, Device, Connection, ConnectionType, Layer, DEFAULT_LAYERS, DEVICE_ROLE_LABELS, DeviceRole, Rack, MULTIVIEW_LAYOUTS, MultiviewLayoutId, Project, CONNECTION_TYPE_COLORS } from '../lib/supabase';
 import { INITIAL_DEVICES, INITIAL_CONNECTIONS, TYPE_COLORS, CONN_TYPE_STYLES } from '../lib/initialData';
 import DeviceEditor from './DeviceEditor';
@@ -227,8 +231,9 @@ const LEGEND_LINES: Array<{ name: string; color: string; desc: string; dash?: st
 
 // ===== 툴바 UI 프리미티브 =====
 const TB_BASE = 'h-8 px-2 sm:px-2.5 inline-flex items-center gap-1.5 rounded-md text-[12px] font-medium whitespace-nowrap shrink-0 transition-colors';
-const TB_IDLE = 'text-neutral-300 hover:text-white hover:bg-white/10';
-const TB_ON = 'bg-white/15 text-white';
+// 색은 CSS 변수(--ui-*)로 — 다크/흰색 도면 모드에서 같은 코드로 동작 (globals.css의 .sfm-root 참고)
+const TB_IDLE = 'text-[var(--ui-text-2)] hover:text-[var(--ui-text)] hover:bg-[var(--ui-hover)]';
+const TB_ON = 'bg-[var(--ui-active)] text-[var(--ui-text)]';
 
 function TbButton({ active, onClick, title, children, className = '' }: {
   active?: boolean; onClick?: () => void; title?: string; children: ReactNode; className?: string;
@@ -270,7 +275,7 @@ function Dropdown({ label, title, align = 'left', buttonClassName = '', children
         <ChevronDown size={13} className="hidden sm:block opacity-60 -mr-0.5" />
       </button>
       {open && (
-        <div className={`absolute top-full mt-1.5 ${align === 'right' ? 'right-0' : 'left-0'} z-50 min-w-[230px] max-h-[70vh] overflow-y-auto rounded-lg border border-white/10 bg-neutral-900 shadow-2xl shadow-black/60 py-1`}>
+        <div className={`absolute top-full mt-1.5 ${align === 'right' ? 'right-0' : 'left-0'} z-50 min-w-[230px] max-h-[70vh] overflow-y-auto rounded-lg border border-[var(--ui-border)] bg-[var(--ui-panel)] shadow-2xl shadow-black/30 py-1`}>
           {children(() => setOpen(false))}
         </div>
       )}
@@ -283,10 +288,10 @@ function MenuItem({ icon, label, hint, checked, danger, onClick }: {
 }) {
   return (
     <button type="button" onClick={onClick}
-      className={`w-full flex items-center gap-2.5 px-3 py-2 text-left text-[12.5px] ${danger ? 'text-rose-300 hover:bg-rose-500/15' : 'text-neutral-200 hover:bg-white/10'}`}>
-      <span className="w-4 flex justify-center shrink-0 text-neutral-400">{icon}</span>
+      className={`w-full flex items-center gap-2.5 px-3 py-2 text-left text-[12.5px] ${danger ? 'text-rose-500 hover:bg-rose-500/15' : 'text-[var(--ui-text)] hover:bg-[var(--ui-hover)]'}`}>
+      <span className="w-4 flex justify-center shrink-0 text-[var(--ui-muted)]">{icon}</span>
       <span className="flex-1 min-w-0 truncate">{label}</span>
-      {hint !== undefined && <span className="text-[11px] text-neutral-500 font-mono shrink-0">{hint}</span>}
+      {hint !== undefined && <span className="text-[11px] text-[var(--ui-muted)] font-mono shrink-0">{hint}</span>}
       {checked !== undefined && (
         <span className={`w-4 shrink-0 flex justify-center ${checked ? 'text-sky-400' : 'text-transparent'}`}><Check size={14} /></span>
       )}
@@ -294,10 +299,10 @@ function MenuItem({ icon, label, hint, checked, danger, onClick }: {
   );
 }
 const MenuLabel = ({ children }: { children: ReactNode }) => (
-  <div className="px-3 pt-2 pb-1 text-[10.5px] font-semibold tracking-wider text-neutral-500">{children}</div>
+  <div className="px-3 pt-2 pb-1 text-[10.5px] font-semibold tracking-wider text-[var(--ui-muted)]">{children}</div>
 );
-const MenuDivider = () => <div className="my-1 border-t border-white/10" />;
-const BarSep = () => <div className="w-px h-5 bg-white/10 mx-0.5 shrink-0" />;
+const MenuDivider = () => <div className="my-1 border-t border-[var(--ui-border)]" />;
+const BarSep = () => <div className="w-px h-5 bg-[var(--ui-border)] mx-0.5 shrink-0" />;
 
 export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   const projectId = project?.id ?? 'default';
@@ -345,6 +350,27 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   const [viewMode, setViewMode] = useState<ViewMode>('view');
   // 아이콘 모드 — 모든 카드를 작게 압축 표시 (도면 한눈에 보기)
   const [iconMode, setIconMode] = useState(false);
+  // 도면 테마 — 다크 / 흰색 도면(라이트). 브라우저별로 기억
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    try { return (typeof window !== 'undefined' && window.localStorage.getItem('sfm-theme') === 'light') ? 'light' : 'dark'; } catch { return 'dark'; }
+  });
+  const light = theme === 'light';
+  const toggleTheme = () => setTheme(t => {
+    const next = t === 'light' ? 'dark' : 'light';
+    try { window.localStorage.setItem('sfm-theme', next); } catch { /* noop */ }
+    return next;
+  });
+  // 장비 검색
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQ, setSearchQ] = useState('');
+  const [searchIdx, setSearchIdx] = useState(0);
+  const [flashId, setFlashId] = useState<string | null>(null);
+  // 스냅샷
+  const [showSnapshots, setShowSnapshots] = useState(false);
+  const [snapshots, setSnapshots] = useState<SnapshotMeta[] | null>(null);
+  const [snapBusy, setSnapBusy] = useState<string | null>(null);
+  const [snapError, setSnapError] = useState<string | null>(null);
+  const [snapNotice, setSnapNotice] = useState<string | null>(null);
   const editMode = viewMode !== 'view';   // 기존 코드 호환
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [traceId, setTraceId] = useState<string | null>(null);
@@ -492,7 +518,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   }>({ active: false, startDist: 0, startScale: 1, startMidX: 0, startMidY: 0, startOffset: { x: 0, y: 0 } });
 
   // state mirror
-  const stateRef = useRef({ editMode, viewMode, devices, selectedIds, visibleLayerIds: new Set<string>(), layers, modalOpen: false });
+  const stateRef = useRef({ editMode, viewMode, devices, selectedIds, visibleLayerIds: new Set<string>(), layers, modalOpen: false, snapshotsOpen: false, searchOpen: false });
 
   // ===== Undo stack =====
   // 편집 모드에서 Cmd/Ctrl+Z로 마지막 동작을 되돌림.
@@ -524,6 +550,28 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   stateRef.current.devices = devices;
   stateRef.current.selectedIds = selectedIds;
   stateRef.current.layers = layers;
+
+  // ===== 실시간 일시정지 + 전체 다시 읽기 (스냅샷 복원용) =====
+  const realtimeHoldRef = useRef(false);
+  const channelRef = useRef<any>(null);
+  const reloadTimerRef = useRef<number | null>(null);
+  const reloadFromDb = async () => {
+    const data = await fetchProjectData(projectId);
+    setLayers(data.layers as any);
+    setRacks(data.racks as any);
+    setDevices(data.devices as any);
+    setConnections(data.connections as any);
+  };
+  // 이벤트를 잠시 멈추고(이미 쏟아지는 삭제/추가 이벤트 무시) 2.5초 뒤 DB 기준으로 맞춤
+  const reloadAfterSettle = () => {
+    realtimeHoldRef.current = true;
+    if (reloadTimerRef.current != null) window.clearTimeout(reloadTimerRef.current);
+    reloadTimerRef.current = window.setTimeout(async () => {
+      reloadTimerRef.current = null;
+      realtimeHoldRef.current = false;
+      try { await reloadFromDb(); } catch (e) { console.warn('[Reload] 실패', e); }
+    }, 2500);
+  };
 
   // ===== Load data =====
   useEffect(() => {
@@ -577,6 +625,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     // (이전: 모든 프로젝트의 변경을 전부 받아서 클라이언트에서 버림 / racks는 필터 자체가 없었음)
     // DELETE 이벤트는 Supabase에서 필터를 지원하지 않으므로 id로 로컬에 있는 것만 반영
     const ch = (supabase as any).channel(`sfm_${projectId}`);
+    let flushTimerCleanup = () => {};
     const pf = `project_id=eq.${projectId}`;
     const upsertById = <T extends { id: string }>(prev: T[], row: T): T[] => {
       const i = prev.findIndex(x => x.id === row.id);
@@ -585,26 +634,57 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       next[i] = row;
       return next;
     };
+    // 이벤트를 40ms 동안 모았다가 테이블별로 한 번에 반영 → 대량 변경(복원·일괄 삭제·다른 사람의 일괄 편집) 때
+    // 이벤트마다 도면 전체가 다시 그려지던 것을 1회로 줄임
+    type Op = { kind: 'upsert'; row: any } | { kind: 'delete'; id: string };
+    const queues = new Map<(fn: (prev: any[]) => any[]) => void, Op[]>();
+    let flushTimer: number | null = null;
+    const flush = () => {
+      flushTimer = null;
+      const entries = Array.from(queues.entries());
+      queues.clear();
+      entries.forEach(([set, ops]) => set(prev => {
+        let next = prev;
+        let changed = false;
+        for (const op of ops) {
+          if (op.kind === 'upsert') { next = upsertById(next, op.row); changed = true; }
+          else if (next.some(x => x.id === op.id)) { next = next.filter(x => x.id !== op.id); changed = true; }
+        }
+        return changed ? next : prev;
+      }));
+    };
+    const enqueue = (set: (fn: (prev: any[]) => any[]) => void, op: Op) => {
+      // 스냅샷 복원 중에는 무시 — 같은 id가 지워졌다 다시 들어오는 이벤트 순서가 뒤섞일 수 있어서
+      // 복원이 끝난 뒤 DB에서 전체를 다시 읽어 맞춘다
+      if (realtimeHoldRef.current) return;
+      const q = queues.get(set);
+      if (q) q.push(op); else queues.set(set, [op]);
+      if (flushTimer == null) flushTimer = window.setTimeout(flush, 40);
+    };
+    flushTimerCleanup = () => { if (flushTimer != null) window.clearTimeout(flushTimer); };
     const subscribeTable = <T extends { id: string }>(table: string, set: (fn: (prev: T[]) => T[]) => void) => {
-      ch.on('postgres_changes', { event: 'INSERT', schema: 'public', table, filter: pf }, (p: any) => set(prev => upsertById(prev, p.new)))
-        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table, filter: pf }, (p: any) => set(prev => upsertById(prev, p.new)))
+      const s = set as unknown as (fn: (prev: any[]) => any[]) => void;
+      ch.on('postgres_changes', { event: 'INSERT', schema: 'public', table, filter: pf }, (p: any) => enqueue(s, { kind: 'upsert', row: p.new }))
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table, filter: pf }, (p: any) => enqueue(s, { kind: 'upsert', row: p.new }))
         .on('postgres_changes', { event: 'DELETE', schema: 'public', table }, (p: any) => {
           const id = p.old?.id;
-          if (!id) return;
-          set(prev => (prev.some(x => x.id === id) ? prev.filter(x => x.id !== id) : prev));
+          if (id) enqueue(s, { kind: 'delete', id });
         });
     };
     subscribeTable<Device>('devices', setDevices);
     subscribeTable<Connection>('connections', setConnections);
     subscribeTable<Layer>('layers', setLayers);
     subscribeTable<Rack>('racks', setRacks);
+    // 다른 화면에서 스냅샷을 복원하면 → 잠시 이벤트를 멈췄다가 DB에서 전체 다시 읽기
+    ch.on('broadcast', { event: 'project-reload' }, () => { reloadAfterSettle(); });
+    channelRef.current = ch;
     ch.on('presence', { event: 'sync' }, () => {
       setOnline(Object.keys(ch.presenceState()).length || 1);
     });
     ch.subscribe(async (status: string) => {
       if (status === 'SUBSCRIBED') await ch.track({ user_id: crypto.randomUUID() });
     });
-    return () => { (supabase as any).removeChannel(ch); };
+    return () => { flushTimerCleanup(); channelRef.current = null; (supabase as any).removeChannel(ch); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
@@ -1147,7 +1227,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       const isPgm = from.role === 'switcher' && from.pgmPort === c.from_port;
       const isPatch = c.is_patch === true;
       const isTraced = traced.connections.has(c.id);
-      const color = isPatch ? '#F97316' : baseColor;
+      const color = inkFor(isPatch ? '#F97316' : baseColor, light);   // 흰색 도면에서는 밝은 색을 어둡게 보정
 
       // NaN/undefined 좌표 가드 — 어떤 이유든 잘못된 값이면 케이블 skip
       if (!Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(x2) || !Number.isFinite(y2)) return;
@@ -1164,7 +1244,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     return list;
     // dragOffset/viewport/offset/scale 제외 — 드래그/팬 중 재계산 안 되게
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connections, devices, traced, hidePatchbay, inspectHubs, visiblePortsCache, traceId, layerById, iconMode]);
+  }, [connections, devices, traced, hidePatchbay, inspectHubs, visiblePortsCache, traceId, layerById, iconMode, light]);
 
   // 허브(패치베이/라우터) IN → OUT 매핑
   // 패치베이: normals(IN→OUT) + 수동 패치(OUT,IN)
@@ -1249,12 +1329,24 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       const ae = document.activeElement as HTMLElement | null;
       const tag = (ae?.tagName ?? '').toLowerCase();
       const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || !!ae?.isContentEditable;
-      if (typing) return; // 입력 중이면 브라우저 기본 동작에 맡김
       const modalOpen = stateRef.current.modalOpen;
+      // Ctrl+K — 장비 검색 (입력 중에도 동작)
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K' || e.key === 'ㅏ') && !modalOpen) {
+        e.preventDefault();
+        setSearchQ(''); setSearchIdx(0); setSearchOpen(true);
+        return;
+      }
+      if (typing) return; // 입력 중이면 브라우저 기본 동작에 맡김
+      if (e.key === '/' && !modalOpen) {
+        e.preventDefault();
+        setSearchQ(''); setSearchIdx(0); setSearchOpen(true);
+        return;
+      }
       if (e.key === 'Escape' && !modalOpen) {
         setPendingFrom(null);
         setTraceId(null);
         setSelectedIds(prev => (prev.size ? new Set() : prev));
+        setShowSnapshots(false);
         return;
       }
       if (!modalOpen && (e.key === 'f' || e.key === 'F' || e.key === 'ㄹ') && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -1792,6 +1884,105 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     e.stopPropagation();
   };
 
+  // ===== 스냅샷 (복원 지점) =====
+  const refreshSnapshots = async () => {
+    try {
+      setSnapshots(await listSnapshots(projectId));
+    } catch (e: any) {
+      setSnapshots([]);
+      setSnapError(`목록을 불러오지 못했습니다: ${e?.message ?? e}`);
+    }
+  };
+  // 자동 스냅샷 — 성공 여부 반환 (패널이 열려 있으면 목록 갱신)
+  const autoSnapshot = async (reason: string): Promise<boolean> => {
+    try {
+      await createSnapshot(projectId, reason, 'auto');
+      lastAutoSnapAtRef.current = Date.now();
+      if (stateRef.current.snapshotsOpen) refreshSnapshots();
+      return true;
+    } catch (e) {
+      console.warn('[Snapshot] 자동 스냅샷 실패', e);
+      return false;
+    }
+  };
+  const lastAutoSnapAtRef = useRef(0);
+  const handleCreateSnapshot = async (name: string) => {
+    setSnapError(null); setSnapNotice(null);
+    setSnapBusy('저장 중…');
+    try {
+      await createSnapshot(projectId, name || `수동 저장`, 'manual');
+      setSnapNotice('스냅샷을 저장했습니다.');
+      await refreshSnapshots();
+    } catch (e: any) {
+      setSnapError(`저장 실패: ${e?.message ?? e}`);
+    } finally {
+      setSnapBusy(null);
+    }
+  };
+  const handleRestoreSnapshot = async (s: SnapshotMeta) => {
+    setSnapError(null); setSnapNotice(null);
+    setSnapBusy('복원 중… (현재 상태를 먼저 백업합니다)');
+    // 복원하는 동안 쏟아지는 삭제/추가 실시간 이벤트는 무시 — 끝나면 DB에서 전체 다시 읽음
+    realtimeHoldRef.current = true;
+    try {
+      const { data } = await restoreSnapshot(projectId, s.path);
+      // 화면 상태를 스냅샷 데이터로 즉시 교체 → 이벤트가 가라앉은 뒤 DB 기준으로 한 번 더 맞춤
+      reloadAfterSettle();
+      // 같은 프로젝트를 보고 있는 다른 화면에도 다시 읽기 신호
+      try { channelRef.current?.send({ type: 'broadcast', event: 'project-reload', payload: { at: Date.now() } }); } catch { /* noop */ }
+      setLayers(data.layers as any);
+      setRacks(data.racks as any);
+      setDevices(data.devices as any);
+      setConnections(data.connections as any);
+      setSelectedIds(new Set());
+      setTraceId(null);
+      setPendingFrom(null);
+      undoStackRef.current = [];
+      setUndoLabel(null);
+      setSnapNotice(`복원 완료 — 장비 ${data.devices.length} · 케이블 ${data.connections.length}. 복원 직전 상태는 '복원 직전 자동 백업'으로 저장됐습니다.`);
+      await refreshSnapshots();
+    } catch (e: any) {
+      reloadAfterSettle();   // 실패해도 화면은 DB 실제 상태로 맞춤
+      setSnapError(`${e?.message ?? e}${e?.backup ? `\n→ 목록의 '복원 직전 자동 백업'(${new Date(e.backup.createdAt).toLocaleTimeString()})으로 되돌릴 수 있습니다.` : ''}`);
+      await refreshSnapshots();
+    } finally {
+      setSnapBusy(null);
+    }
+  };
+  const handleDeleteSnapshot = async (s: SnapshotMeta) => {
+    setSnapError(null); setSnapNotice(null);
+    setSnapBusy('삭제 중…');
+    try {
+      await deleteSnapshot(s.path);
+      await refreshSnapshots();
+    } catch (e: any) {
+      setSnapError(`삭제 실패: ${e?.message ?? e}`);
+    } finally {
+      setSnapBusy(null);
+    }
+  };
+  const openSnapshots = () => {
+    setShowSnapshots(true);
+    setSnapError(null); setSnapNotice(null);
+    setSnapshots(null);
+    refreshSnapshots();
+  };
+
+  // 편집/연결을 시작하면 자동 스냅샷 — 같은 프로젝트에 최근 30분 내 스냅샷이 없을 때만 (백그라운드)
+  useEffect(() => {
+    if (!editMode || loading) return;
+    if (Date.now() - lastAutoSnapAtRef.current < 30 * 60 * 1000) return;
+    lastAutoSnapAtRef.current = Date.now();
+    (async () => {
+      try {
+        const list = await listSnapshots(projectId);
+        const newest = list[0]?.createdAt ?? 0;
+        if (Date.now() - newest > 30 * 60 * 1000) await autoSnapshot('편집 시작 시 자동 백업');
+      } catch { /* noop */ }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editMode, loading, projectId]);
+
   // 장비 + 연결된 케이블 삭제 (로컬 즉시 반영 → DB)
   const removeDeviceAndConns = async (id: string) => {
     setDevices(prev => prev.filter(x => x.id !== id));
@@ -2170,6 +2361,8 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     setDevices(prev => prev.filter(d => !idSet.has(d.id)));
     setConnections(prev => prev.filter(c => !idSet.has(c.from_device) && !idSet.has(c.to_device)));
     setSelectedIds(new Set());
+    // 여러 장비 삭제 전 자동 스냅샷 (DB에서 지우기 전에 저장 — 실패해도 삭제는 진행, 되돌리기는 별도로 가능)
+    if (ids.length >= 2) await autoSnapshot(`${ids.length}개 장비 삭제 직전`);
     await Promise.all([
       (supabase as any).from('connections').delete().in('from_device', ids),
       (supabase as any).from('connections').delete().in('to_device', ids),
@@ -2340,7 +2533,10 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     });
   };
   const handleResetAll = async () => {
-    if (!confirm(`프로젝트 "${currentProject?.name ?? projectId}" 의 모든 데이터를 삭제하고 초기 상태로 되돌립니다. 계속하시겠어요?`)) return;
+    if (!confirm(`프로젝트 "${currentProject?.name ?? projectId}" 의 모든 데이터를 삭제하고 초기 상태로 되돌립니다.\n(지우기 전 상태는 스냅샷으로 자동 저장되어 복원할 수 있습니다) 계속하시겠어요?`)) return;
+    // 초기화 전 자동 스냅샷 — 실패하면 초기화 중단 (되돌릴 방법이 없어지므로)
+    const ok = await autoSnapshot('초기화 직전');
+    if (!ok && !confirm('스냅샷 저장에 실패했습니다. 그래도 초기화할까요? (되돌릴 수 없습니다)')) return;
     // 현재 프로젝트 한정 삭제
     await (supabase as any).from('connections').delete().eq('project_id', projectId);
     await (supabase as any).from('devices').delete().eq('project_id', projectId);
@@ -2368,6 +2564,35 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   // ===== 렌더 최적화: 데이터가 바뀔 때만 다시 만드는 SVG 오버레이 =====
   // (이전: 상태가 조금만 바뀌어도 매 렌더마다 전체 케이블 라벨/가상 케이블을 다시 계산)
   const labelLod = scale > 0.5 ? 3 : scale > 0.45 ? 2 : scale > 0.4 ? 1 : 0;
+  // 많이 축소했을 때(글자를 읽을 수 없는 배율)는 포트 글자·배지·카드 옆 라벨을 그리지 않음 → DOM 대폭 감소
+  const lodLow = scale < 0.35;
+
+  // ===== 장비 검색 =====
+  const searchResults = useMemo(() => {
+    const q = searchQ.trim().toLowerCase();
+    if (!q) return [] as Device[];
+    const hit = (s?: string) => !!s && s.toLowerCase().includes(q);
+    return devices
+      .filter(d => hit(d.name) || hit(d.model) || hit(d.location) || hit(d.roomNumber) || hit(DEVICE_ROLE_LABELS[d.role ?? 'standard']))
+      .sort((a, b) => Number(!(a.name ?? '').toLowerCase().startsWith(q)) - Number(!(b.name ?? '').toLowerCase().startsWith(q)))
+      .slice(0, 12);
+  }, [devices, searchQ]);
+  const flashTimerRef = useRef<number | null>(null);
+  // 장비로 이동 + 잠깐 강조
+  const focusDevice = (d: Device) => {
+    if (hidePatchbay && (d.role === 'patchbay' || d.role === 'router')) setHidePatchbay(false);
+    if (traceId && !traced.devices.has(d.id)) setTraceId(null);
+    const w = iconMode ? 96 : deviceWidth(d);
+    const h = iconMode ? 36 : deviceHeight(d, visibleLayerIds);
+    const vw = viewportElRef.current?.clientWidth ?? viewport.w;
+    const vh = viewportElRef.current?.clientHeight ?? (viewport.h - TOPBAR_H);
+    const s = Math.min(1.2, Math.max(viewRef.current.scale, 0.85));
+    setView(s, { x: vw / 2 - (d.x + w / 2) * s, y: vh / 2 - (d.y + h / 2) * s });
+    setSearchOpen(false);
+    setFlashId(d.id);
+    if (flashTimerRef.current != null) window.clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = window.setTimeout(() => setFlashId(null), 2000);
+  };
 
   // 편집/연결 모드 — 케이블 클릭 영역 + 연결방식/Tie-Line/PATCH 라벨
   const editCableOverlay = useMemo(() => {
@@ -2413,7 +2638,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       const isPatch = c.is_patch === true;
       const mx = (x1 + x2) / 2;
       const my = (y1 + y2) / 2;
-      const cableColor = isPatch ? '#F97316' : color;
+      const cableColor = inkFor(isPatch ? '#F97316' : color, light);
 
       return (
         <g key={c.id} style={{ pointerEvents: 'none' }}>
@@ -2425,7 +2650,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
           />
           {ct && (labelLod >= 3 || isTraced || isPgm || isPatch) && (
             <g>
-              <rect x={mx - 24} y={my - 8.5} width="48" height="15" rx="4" fill="rgba(8,8,10,0.92)" stroke={cableColor} strokeWidth="0.6" />
+              <rect x={mx - 24} y={my - 8.5} width="48" height="15" rx="4" fill={light ? 'rgba(255,255,255,0.96)' : 'rgba(8,8,10,0.92)'} stroke={cableColor} strokeWidth="0.6" />
               <text x={mx} y={my + 2.8} textAnchor="middle" fontSize="9.5" fill={cableColor} fontFamily="var(--font-mono)" fontWeight="700" letterSpacing="0.02em">
                 {style?.label ?? ct}
               </text>
@@ -2433,8 +2658,8 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
           )}
           {c.tie_line && (labelLod >= 1 || isTraced) && (
             <g>
-              <rect x={mx - 30} y={my + 8} width="60" height="12" rx="3" fill="rgba(20,15,5,0.92)" stroke="#F59E0B" strokeWidth="0.5" />
-              <text x={mx} y={my + 17} textAnchor="middle" fontSize="8.5" fill="#FCD34D" fontFamily="var(--font-mono)" fontWeight="700">
+              <rect x={mx - 30} y={my + 8} width="60" height="12" rx="3" fill={light ? '#FFFBEB' : 'rgba(20,15,5,0.92)'} stroke="#F59E0B" strokeWidth="0.5" />
+              <text x={mx} y={my + 17} textAnchor="middle" fontSize="8.5" fill={light ? '#92400E' : '#FCD34D'} fontFamily="var(--font-mono)" fontWeight="700">
                 {c.tie_line}
               </text>
             </g>
@@ -2451,7 +2676,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       );
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editMode, connections, devById, visibleDeviceIds, visibleLayerIds, traceId, traced, hidePatchbay, inspectHubs, visiblePortsCache, layerById, labelLod]);
+  }, [editMode, connections, devById, visibleDeviceIds, visibleLayerIds, traceId, traced, hidePatchbay, inspectHubs, visiblePortsCache, layerById, labelLod, light]);
 
   // 허브 숨김 모드 — 패치베이/라우터를 건너뛴 라벨-to-라벨 가상 케이블
   const virtualCablesEl = useMemo(() => {
@@ -2486,7 +2711,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
         if (traceId && !isVcTraced) return;
         const lid = d.outputsMeta?.[p.name]?.layerId;
         const layerColor = lid ? layerById.get(lid)?.color : undefined;
-        const clr = layerColor ?? (d.type === 'audio' ? TYPE_COLORS.audio.main : d.type === 'combined' ? TYPE_COLORS.combined.main : TYPE_COLORS.video.main);
+        const clr = inkFor(layerColor ?? (d.type === 'audio' ? TYPE_COLORS.audio.main : d.type === 'combined' ? TYPE_COLORS.combined.main : TYPE_COLORS.video.main), light);
         vcs.push({
           id: `vc_${d.id}_${p.name}`,
           fromDev: d, fromPortIdx: idx,
@@ -2500,9 +2725,10 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
       <g style={{ pointerEvents: 'none' }}>
         {vcs.map(vc => {
           // OUT 라벨 박스 오른쪽 끝점 → IN 라벨 박스 왼쪽 끝점
-          const x1 = vc.fromDev.x + deviceWidth(vc.fromDev) + 6 + LABEL_WIDTH + LABEL_PAD;
+          // (축소 화면(lodLow)에선 라벨을 그리지 않으므로 카드 가장자리에서 바로 연결)
+          const x1 = vc.fromDev.x + deviceWidth(vc.fromDev) + (lodLow ? 0 : 6 + LABEL_WIDTH + LABEL_PAD);
           const y1 = vc.fromDev.y + HEADER_H + PADDING_Y + vc.fromPortIdx * PORT_H + PORT_H / 2;
-          const x2 = vc.toDev.x - 6 - LABEL_WIDTH - LABEL_PAD;
+          const x2 = vc.toDev.x - (lodLow ? 0 : 6 + LABEL_WIDTH + LABEL_PAD);
           const y2 = vc.toDev.y + HEADER_H + PADDING_Y + vc.toPortIdx * PORT_H + PORT_H / 2;
           const midX = (x1 + x2) / 2;
           const path = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
@@ -2526,7 +2752,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
         })}
       </g>
     );
-  }, [hidePatchbay, devices, visibleDeviceIds, visiblePortsCache, followPathFromOut, traceId, traced, layerById]);
+  }, [hidePatchbay, devices, visibleDeviceIds, visiblePortsCache, followPathFromOut, traceId, traced, layerById, light, lodLow]);
 
   // ===== 화면 맞춤 (전체 보기) =====
   const fitToContent = (opts?: { minScale?: number; maxScale?: number }) => {
@@ -2564,6 +2790,8 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
   // 모달이 열려 있으면 Esc/F 단축키는 도면에 적용하지 않음
   stateRef.current.modalOpen = !!(editingDevice || editingMixer || editingPanel || editingCable
     || showPatchbayMgr || showWallboxMgr || showBulkEditor || showProjectSettings);
+  stateRef.current.snapshotsOpen = showSnapshots;
+  stateRef.current.searchOpen = searchOpen;
 
   if (loading) {
     return (
@@ -2622,22 +2850,23 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
     { kind: 'dist-y',   title: '세로 균등 분배', icon: <AlignVerticalDistributeCenter size={15} />, min3: true },
   ];
   const MODES: Array<{ id: ViewMode; label: string; icon: ReactNode; title: string; on: string }> = [
-    { id: 'view',    label: '보기', icon: <Eye size={14} />,    title: '보기 — 장비를 클릭하면 신호 경로를 추적합니다', on: 'bg-white/15 text-white' },
+    { id: 'view',    label: '보기', icon: <Eye size={14} />,    title: '보기 — 장비를 클릭하면 신호 경로를 추적합니다', on: 'bg-[var(--ui-active)] text-[var(--ui-text)]' },
     { id: 'connect', label: '연결', icon: <Cable size={14} />,  title: '연결 — 출력 포트 → 입력 포트 순서로 클릭해 케이블 연결', on: 'bg-sky-500 text-white' },
     { id: 'edit',    label: '편집', icon: <Pencil size={14} />, title: '편집 — 장비 추가·이동·수정', on: 'bg-amber-500 text-neutral-950' },
   ];
-  const ICON_BTN = 'h-8 w-8 inline-flex items-center justify-center rounded-md text-neutral-300 hover:text-white hover:bg-white/10 shrink-0';
+  const ICON_BTN = 'h-8 w-8 inline-flex items-center justify-center rounded-md text-[var(--ui-text-2)] hover:text-[var(--ui-text)] hover:bg-[var(--ui-hover)] shrink-0';
   const showSelectionBar = editMode && selectedIds.size > 0;
+  const PANEL = 'bg-[var(--ui-panel)] border border-[var(--ui-border)] shadow-xl shadow-black/20';
 
   return (
-    <div className="h-screen w-screen bg-neutral-950 text-white overflow-hidden relative select-none">
-      {/* ===== 상단 바 — 1줄: [목록·프로젝트] [모드] [추가·되돌리기] ··· [레이어·표시·관리] [상태] ===== */}
-      <div data-ui className="absolute top-0 left-0 right-0 z-30 flex items-center gap-1 px-2 bg-neutral-950 border-b border-white/10" style={{ height: TOPBAR_H }}>
+    <div className={`sfm-root ${light ? 'theme-light' : 'theme-dark'} h-screen w-screen bg-[var(--ui-bg)] text-[var(--ui-text)] overflow-hidden relative select-none`}>
+      {/* ===== 상단 바 — 1줄: [목록·프로젝트] [모드] [추가·되돌리기] ··· [검색·스냅샷·레이어·표시·관리·테마] [상태] ===== */}
+      <div data-ui className="absolute top-0 left-0 right-0 z-30 flex items-center gap-1 px-2 bg-[var(--ui-bar)] border-b border-[var(--ui-border)]" style={{ height: TOPBAR_H }}>
         <a href="/" className={ICON_BTN} title="프로젝트 목록"><ArrowLeft size={16} /></a>
         <button
           type="button"
           onClick={() => setShowProjectSettings(true)}
-          className="h-9 flex items-center gap-2 pl-1 pr-2 rounded-md hover:bg-white/10 min-w-0 shrink"
+          className="h-9 flex items-center gap-2 pl-1 pr-2 rounded-md hover:bg-[var(--ui-hover)] min-w-0 shrink"
           title="프로젝트 설정 (이름·색·배경 이미지·사용할 장비 역할·용어)"
         >
           <span
@@ -2647,23 +2876,23 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
           <span className="hidden sm:block min-w-0 max-w-[200px] text-left">
             <span className="block text-[13px] font-semibold truncate leading-tight">{currentProject?.name ?? 'Signal Flow Map'}</span>
             {currentProject?.description && (
-              <span className="block text-[10.5px] text-neutral-500 truncate leading-tight">{currentProject.description}</span>
+              <span className="block text-[10.5px] text-[var(--ui-muted)] truncate leading-tight">{currentProject.description}</span>
             )}
           </span>
-          <Settings2 size={14} className="hidden md:block text-neutral-500 shrink-0" />
+          <Settings2 size={14} className="hidden md:block text-[var(--ui-muted)] shrink-0" />
         </button>
 
-        <div className="w-px h-6 bg-white/10 mx-1 shrink-0" />
+        <div className="w-px h-6 bg-[var(--ui-border)] mx-1 shrink-0" />
 
         {/* 모드 */}
-        <div className="flex items-center gap-0.5 bg-white/[0.06] rounded-lg p-0.5 shrink-0">
+        <div className="flex items-center gap-0.5 bg-[var(--ui-seg)] rounded-lg p-0.5 shrink-0">
           {MODES.map(m => (
             <button
               key={m.id}
               type="button"
               onClick={() => switchMode(m.id)}
               title={m.title}
-              className={`h-7 px-2 sm:px-2.5 inline-flex items-center gap-1.5 rounded-md text-[12px] font-medium transition-colors ${viewMode === m.id ? m.on : 'text-neutral-400 hover:text-white'}`}
+              className={`h-7 px-2 sm:px-2.5 inline-flex items-center gap-1.5 rounded-md text-[12px] font-medium transition-colors ${viewMode === m.id ? m.on : 'text-[var(--ui-muted)] hover:text-[var(--ui-text)]'}`}
             >
               {m.icon}<span className="hidden sm:inline">{m.label}</span>
             </button>
@@ -2720,15 +2949,24 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
 
         <div className="flex-1 min-w-0" />
 
-        {/* 오른쪽: 보기 옵션 */}
-        <TbButton active={showLayerPanel} onClick={() => setShowLayerPanel(s => !s)} title="레이어 표시/관리">
+        {/* 오른쪽: 찾기·기록·보기 옵션 */}
+        <TbButton active={searchOpen} onClick={() => { setSearchQ(''); setSearchIdx(0); setSearchOpen(o => !o); }} title="장비 검색 (Ctrl+K 또는 /)">
+          <Search size={15} />
+          <span className="hidden lg:inline">검색</span>
+        </TbButton>
+        <TbButton active={showSnapshots} onClick={() => (showSnapshots ? setShowSnapshots(false) : openSnapshots())} title="스냅샷 — 저장해 둔 시점으로 되돌리기" className="hidden sm:inline-flex">
+          <History size={15} />
+          <span className="hidden lg:inline">스냅샷</span>
+        </TbButton>
+        <TbButton active={showLayerPanel} onClick={() => setShowLayerPanel(s => !s)} title="레이어 표시/관리" className="hidden sm:inline-flex">
           <Layers size={15} />
           <span className="hidden md:inline">레이어</span>
-          <span className="hidden sm:inline font-mono text-[11px] text-neutral-500">{visibleLayerCount}/{layers.length}</span>
+          <span className="font-mono text-[11px] text-[var(--ui-muted)]">{visibleLayerCount}/{layers.length}</span>
         </TbButton>
         <Dropdown align="right" label={<><SlidersHorizontal size={15} /><span className="hidden md:inline">표시</span></>} title="표시 옵션">
-          {() => (
+          {close => (
             <>
+              <MenuItem icon={light ? <Sun size={15} /> : <Moon size={15} />} label="흰색 도면 모드" checked={light} onClick={toggleTheme} />
               <MenuItem icon={<Square size={14} />} label="아이콘 모드 (카드 축소)" checked={iconMode} onClick={() => setIconMode(m => !m)} />
               {hubDevices.length > 0 && (
                 <>
@@ -2737,6 +2975,9 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                 </>
               )}
               <MenuItem icon={<Palette size={15} />} label="범례" checked={showLegend} onClick={() => setShowLegend(s => !s)} />
+              <div className="sm:hidden">
+                <MenuItem icon={<Layers size={15} />} label="레이어…" hint={`${visibleLayerCount}/${layers.length}`} onClick={() => { close(); setShowLayerPanel(true); }} />
+              </div>
               {currentProject?.background_image_url && (
                 <MenuItem
                   icon={currentProject.background_locked ? <Lock size={14} /> : <Unlock size={14} />}
@@ -2751,6 +2992,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
         <Dropdown align="right" label={<><Wrench size={15} /><span className="hidden md:inline">관리</span></>} title="관리 도구">
           {close => (
             <>
+              <MenuItem icon={<History size={15} />} label="스냅샷 · 복원 지점" onClick={() => { close(); openSnapshots(); }} />
               <MenuItem icon={<PanelsTopLeft size={15} />} label="패치베이 관리" hint={patchbayCount} onClick={() => { close(); setShowPatchbayMgr(true); }} />
               <MenuItem icon={<LayoutGrid size={15} />} label="월박스 관리" hint={wallboxCount} onClick={() => { close(); setShowWallboxMgr(true); }} />
               <MenuItem icon={<Settings2 size={15} />} label="프로젝트 설정" onClick={() => { close(); setShowProjectSettings(true); }} />
@@ -2763,83 +3005,172 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
             </>
           )}
         </Dropdown>
+        <button type="button" onClick={toggleTheme} className={`${ICON_BTN} hidden md:inline-flex`} title={light ? '다크 모드로' : '흰색 도면 모드로'}>
+          {light ? <Moon size={15} /> : <Sun size={15} />}
+        </button>
 
-        {/* 상태: 신호 시뮬레이션 · 장비/케이블 수 · 접속자 */}
+        {/* 상태: 저장 · 신호 시뮬레이션 · 장비/케이블 수 · 접속자 */}
+        <div className="flex items-center pl-1.5 shrink-0">
+          <SaveIndicator onOpenSnapshots={openSnapshots} />
+        </div>
         <div
-          className="hidden md:flex items-center gap-2.5 pl-2.5 ml-1 border-l border-white/10 text-[11px] font-mono text-neutral-500 shrink-0"
+          className="hidden md:flex items-center gap-2.5 pl-2.5 ml-1 border-l border-[var(--ui-border)] text-[11px] font-mono text-[var(--ui-muted)] shrink-0"
           title={`장비 ${devices.length} · 케이블 ${connections.length} · 접속 ${online}명`}
         >
           {(activeSources > 0 || hasDisplays) && (
-            <span className="text-lime-400/90" title="신호 시뮬레이션: 활성 소스 → 신호가 도달한 디스플레이">
+            <span className={light ? 'text-lime-700' : 'text-lime-400/90'} title="신호 시뮬레이션: 활성 소스 → 신호가 도달한 디스플레이">
               ▶{activeSources}→{displaySources.size}
             </span>
           )}
           <span>{devices.length}D·{connections.length}C</span>
-          <span className="flex items-center gap-1 text-emerald-400"><Users size={12} />{online}</span>
+          <span className={`flex items-center gap-1 ${light ? 'text-emerald-600' : 'text-emerald-400'}`}><Users size={12} />{online}</span>
         </div>
       </div>
 
       {showLayerPanel && <LayerPanel layers={layers} onClose={() => setShowLayerPanel(false)} />}
 
+      {/* 스냅샷 패널 */}
+      {showSnapshots && (
+        <SnapshotPanel
+          snapshots={snapshots}
+          busy={snapBusy}
+          error={snapError}
+          notice={snapNotice}
+          onCreate={handleCreateSnapshot}
+          onRestore={handleRestoreSnapshot}
+          onDelete={handleDeleteSnapshot}
+          onRefresh={() => { setSnapshots(null); refreshSnapshots(); }}
+          onClose={() => setShowSnapshots(false)}
+        />
+      )}
+
+      {/* 장비 검색 */}
+      {searchOpen && (
+        <div data-ui className={`absolute top-14 left-1/2 -translate-x-1/2 z-40 w-[380px] max-w-[calc(100vw-24px)] rounded-xl overflow-hidden ${PANEL}`}>
+          <div className="flex items-center gap-2 px-3 h-11 border-b border-[var(--ui-border)]">
+            <Search size={15} className="text-[var(--ui-muted)] shrink-0" />
+            <input
+              autoFocus
+              value={searchQ}
+              onChange={e => { setSearchQ(e.target.value); setSearchIdx(0); }}
+              onKeyDown={e => {
+                if (e.key === 'Escape') { setSearchOpen(false); return; }
+                if (e.key === 'ArrowDown') { e.preventDefault(); setSearchIdx(i => Math.min(i + 1, Math.max(0, searchResults.length - 1))); }
+                if (e.key === 'ArrowUp') { e.preventDefault(); setSearchIdx(i => Math.max(0, i - 1)); }
+                if (e.key === 'Enter' && searchResults[searchIdx]) focusDevice(searchResults[searchIdx]);
+              }}
+              placeholder="장비 이름·모델·위치 검색"
+              className="flex-1 min-w-0 bg-transparent text-[13px] text-[var(--ui-text)] placeholder:text-[var(--ui-muted)] focus:outline-none"
+            />
+            <kbd className="hidden sm:inline text-[10px] px-1.5 py-0.5 rounded border border-[var(--ui-border)] text-[var(--ui-muted)] font-mono">Esc</kbd>
+          </div>
+          {searchQ.trim() && (
+            <div className="max-h-[50vh] overflow-y-auto custom-scroll py-1">
+              {searchResults.length === 0 && (
+                <div className="px-3 py-4 text-center text-[12px] text-[var(--ui-muted)]">일치하는 장비가 없습니다.</div>
+              )}
+              {searchResults.map((d, i) => {
+                const rs = ROLE_STYLE[d.role ?? 'standard'];
+                return (
+                  <button
+                    key={d.id}
+                    type="button"
+                    onMouseEnter={() => setSearchIdx(i)}
+                    onClick={() => focusDevice(d)}
+                    className={`w-full flex items-center gap-2.5 px-3 py-2 text-left ${i === searchIdx ? 'bg-[var(--ui-hover)]' : ''}`}
+                  >
+                    <span className="w-1.5 h-6 rounded-full shrink-0" style={{ background: (light ? LIGHT_TYPE_COLORS : TYPE_COLORS as any)[d.type]?.main ?? '#64748B' }} />
+                    <span className="flex-1 min-w-0">
+                      <span className="block text-[12.5px] font-medium truncate">{d.name}</span>
+                      <span className="block text-[11px] text-[var(--ui-muted)] truncate">
+                        {rs ? `${rs.icon} ` : ''}{DEVICE_ROLE_LABELS[d.role ?? 'standard']}{d.model ? ` · ${d.model}` : ''}{d.location ? ` · ${d.location}` : ''}
+                      </span>
+                    </span>
+                    {!visibleDeviceIds.has(d.id) && <span className="text-[10px] text-[var(--ui-muted)] shrink-0">숨김 레이어</span>}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* 신호 추적 상태 (보기 모드) */}
-      {!editMode && traceDev && (
-        <div data-ui className="absolute top-14 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 pl-3 pr-1 h-9 rounded-full bg-sky-950/90 border border-sky-500/40 shadow-lg text-[12px] whitespace-nowrap max-w-[calc(100vw-24px)]">
-          <Crosshair size={14} className="text-sky-300 shrink-0" />
-          <span className="text-sky-100 truncate">신호 추적 · <span className="font-semibold">{traceDev.name}</span></span>
-          <span className="text-sky-300/70 font-mono text-[11px] shrink-0">{traced.devices.size}대 · {traced.connections.size}선</span>
-          <button type="button" onClick={() => setTraceId(null)} className="h-7 w-7 inline-flex items-center justify-center rounded-full text-sky-200 hover:bg-white/10 shrink-0" title="추적 해제 (Esc)">
+      {!editMode && traceDev && !searchOpen && (
+        <div data-ui className={`absolute top-14 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 pl-3 pr-1 h-9 rounded-full border shadow-lg text-[12px] whitespace-nowrap max-w-[calc(100vw-24px)] ${light ? 'bg-sky-50 border-sky-300 text-sky-900' : 'bg-sky-950/90 border-sky-500/40 text-sky-100'}`}>
+          <Crosshair size={14} className={`${light ? 'text-sky-600' : 'text-sky-300'} shrink-0`} />
+          <span className="truncate">신호 추적 · <span className="font-semibold">{traceDev.name}</span></span>
+          <span className={`font-mono text-[11px] shrink-0 ${light ? 'text-sky-700/70' : 'text-sky-300/70'}`}>{traced.devices.size}대 · {traced.connections.size}선</span>
+          <button type="button" onClick={() => setTraceId(null)} className="h-7 w-7 inline-flex items-center justify-center rounded-full hover:bg-[var(--ui-hover)] shrink-0" title="추적 해제 (Esc)">
             <X size={14} />
           </button>
         </div>
       )}
 
       {/* 케이블 연결 대기 */}
-      {pendingFrom && (
-        <div data-ui className="absolute top-14 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2.5 pl-3 pr-1 h-9 rounded-full bg-amber-950/90 border border-amber-500/40 shadow-lg text-[12px] whitespace-nowrap max-w-[calc(100vw-24px)]">
+      {pendingFrom && !searchOpen && (
+        <div data-ui className={`absolute top-14 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2.5 pl-3 pr-1 h-9 rounded-full border shadow-lg text-[12px] whitespace-nowrap max-w-[calc(100vw-24px)] ${light ? 'bg-amber-50 border-amber-300 text-amber-900' : 'bg-amber-950/90 border-amber-500/40 text-amber-100'}`}>
           <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0" />
-          <span className="text-amber-100 truncate">
+          <span className="truncate">
             <span className="font-mono">{devById.get(pendingFrom.device)?.name} · {pendingFrom.port}</span>
-            <span className="text-amber-300/80 ml-2">→ 연결할 입력 포트를 클릭</span>
+            <span className="opacity-75 ml-2">→ 연결할 입력 포트를 클릭</span>
           </span>
-          <button type="button" onClick={() => setPendingFrom(null)} className="h-7 px-2.5 rounded-full text-amber-200 hover:bg-white/10 text-[11.5px] shrink-0" title="취소 (Esc)">취소</button>
+          <button type="button" onClick={() => setPendingFrom(null)} className="h-7 px-2.5 rounded-full hover:bg-[var(--ui-hover)] text-[11.5px] shrink-0" title="취소 (Esc)">취소</button>
+        </div>
+      )}
+
+      {/* 빈 프로젝트 안내 */}
+      {devices.length === 0 && (
+        <div className="absolute inset-x-0 bottom-0 z-10 flex items-center justify-center pointer-events-none" style={{ top: TOPBAR_H }}>
+          <div data-ui className={`pointer-events-auto text-center max-w-sm mx-4 rounded-2xl p-6 ${PANEL}`}>
+            <div className="text-[15px] font-semibold">아직 장비가 없어요</div>
+            <div className="text-[12.5px] text-[var(--ui-muted)] mt-1.5 leading-relaxed">
+              장비를 추가한 뒤, <b className="font-semibold text-[var(--ui-text-2)]">연결</b> 모드에서 출력 포트 → 입력 포트를 차례로 클릭하면 케이블이 이어집니다.
+            </div>
+            <button
+              type="button"
+              onClick={() => { setViewMode('edit'); handleAddDevice(); }}
+              className="mt-4 h-9 px-4 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-[13px] font-medium inline-flex items-center gap-1.5"
+            ><Plus size={15} />첫 장비 추가</button>
+          </div>
         </div>
       )}
 
       {/* 범례 */}
       {showLegend && (
-        <div data-ui className="absolute bottom-[68px] right-4 z-20 w-[250px] rounded-xl border border-white/10 bg-neutral-900 shadow-2xl shadow-black/60 p-3">
+        <div data-ui className={`absolute bottom-[68px] right-4 z-20 w-[250px] rounded-xl p-3 ${PANEL}`}>
           <div className="flex items-center justify-between mb-2">
-            <div className="text-[12px] font-semibold text-neutral-200 flex items-center gap-1.5"><Palette size={13} /> 범례</div>
-            <button type="button" onClick={() => setShowLegend(false)} className="h-6 w-6 inline-flex items-center justify-center rounded hover:bg-white/10 text-neutral-400" title="닫기"><X size={13} /></button>
+            <div className="text-[12px] font-semibold flex items-center gap-1.5"><Palette size={13} /> 범례</div>
+            <button type="button" onClick={() => setShowLegend(false)} className="h-6 w-6 inline-flex items-center justify-center rounded hover:bg-[var(--ui-hover)] text-[var(--ui-muted)]" title="닫기"><X size={13} /></button>
           </div>
-          <div className="text-[10.5px] text-neutral-500 mb-1">장비 타입</div>
-          <div className="flex gap-3 mb-2.5 text-[11px] text-neutral-300">
+          <div className="text-[10.5px] text-[var(--ui-muted)] mb-1">장비 타입</div>
+          <div className="flex gap-3 mb-2.5 text-[11px] text-[var(--ui-text-2)]">
             <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-sky-500" />Video</span>
             <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-rose-500" />Audio</span>
             <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-purple-500" />V+A</span>
           </div>
-          <div className="text-[10.5px] text-neutral-500 mb-1">케이블</div>
+          <div className="text-[10.5px] text-[var(--ui-muted)] mb-1">케이블</div>
           <div className="space-y-0.5">
             {LEGEND_LINES.map(l => (
               <div key={l.name} className="flex items-center gap-2 py-0.5">
                 <svg width="32" height="10" className="shrink-0">
-                  <line x1="0" y1="5" x2="32" y2="5" stroke={l.color} strokeWidth="2" strokeDasharray={l.dash} />
+                  <line x1="0" y1="5" x2="32" y2="5" stroke={inkFor(l.color, light)} strokeWidth="2" strokeDasharray={l.dash} />
                 </svg>
-                <span className="text-[11px] font-mono font-semibold text-neutral-200 w-14">{l.name}</span>
-                <span className="text-[10.5px] text-neutral-500">{l.desc}</span>
+                <span className="text-[11px] font-mono font-semibold w-14">{l.name}</span>
+                <span className="text-[10.5px] text-[var(--ui-muted)]">{l.desc}</span>
               </div>
             ))}
           </div>
-          <div className="mt-2 pt-2 border-t border-white/10 text-[10px] text-neutral-500 leading-relaxed">
-            포트·케이블의 <span className="text-neutral-300">연결 타입</span>을 지정하면 해당 색·패턴으로 표시됩니다.
+          <div className="mt-2 pt-2 border-t border-[var(--ui-border)] text-[10px] text-[var(--ui-muted)] leading-relaxed">
+            포트·케이블의 <span className="text-[var(--ui-text-2)]">연결 타입</span>을 지정하면 해당 색·패턴으로 표시됩니다.
           </div>
         </div>
       )}
 
       {/* 모드별 조작 안내 (한 줄) */}
-      {!showSelectionBar && (
-        <div className="hidden md:block absolute bottom-4 left-4 z-20 h-9 leading-9 px-3 rounded-lg bg-neutral-900/90 border border-white/10 text-[11.5px] text-neutral-400 pointer-events-none truncate max-w-[calc(100vw-260px)]">
-          {viewMode === 'view' && '장비 클릭: 신호 추적 · 스위처 OUT 클릭: PGM 지정 · 라우터 OUT 클릭: 입력 전환 · 드래그: 화면 이동 · 휠: 확대/축소 · F: 전체 보기'}
+      {!showSelectionBar && devices.length > 0 && (
+        <div className={`hidden md:block absolute bottom-4 left-4 z-20 h-9 leading-9 px-3 rounded-lg text-[11.5px] text-[var(--ui-muted)] pointer-events-none truncate max-w-[calc(100vw-260px)] ${PANEL}`}>
+          {viewMode === 'view' && '장비 클릭: 신호 추적 · 스위처 OUT 클릭: PGM 지정 · 라우터 OUT 클릭: 입력 전환 · 드래그: 화면 이동 · 휠: 확대/축소 · F: 전체 보기 · Ctrl+K: 검색'}
           {viewMode === 'connect' && '출력 포트(오른쪽 ●) → 입력 포트(왼쪽 ●) 순서로 클릭하면 케이블이 연결됩니다 · 케이블 클릭: 속성 · Esc: 취소'}
           {viewMode === 'edit' && '장비 클릭: 편집 · 드래그: 이동 · Shift+클릭: 다중 선택 · Shift+드래그: 영역 선택 · 케이블 클릭: 속성 · Ctrl+Z: 되돌리기'}
         </div>
@@ -2847,10 +3178,10 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
 
       {/* 선택 도구 (편집 모드에서 장비 선택 시) */}
       {showSelectionBar && (
-        <div data-ui className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-0.5 p-1 rounded-xl bg-neutral-900 border border-white/10 shadow-2xl shadow-black/60 max-w-[calc(100vw-24px)] overflow-x-auto">
-          <span className="px-2 text-[12px] text-amber-300 font-semibold whitespace-nowrap">{selectedIds.size}개 선택</span>
+        <div data-ui className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-0.5 p-1 rounded-xl max-w-[calc(100vw-24px)] overflow-x-auto ${PANEL}`}>
+          <span className={`px-2 text-[12px] font-semibold whitespace-nowrap ${light ? 'text-amber-600' : 'text-amber-300'}`}>{selectedIds.size}개 선택</span>
           {selectedGroupInfo && (
-            <span className="text-[11px] px-1.5 py-0.5 rounded bg-fuchsia-500/15 text-fuchsia-200 whitespace-nowrap mr-1">⬢ {selectedGroupInfo.name}</span>
+            <span className="text-[11px] px-1.5 py-0.5 rounded bg-fuchsia-500/15 text-fuchsia-500 whitespace-nowrap mr-1">⬢ {selectedGroupInfo.name}</span>
           )}
           <BarSep />
           <TbButton onClick={() => setShowBulkEditor(true)} title="선택한 장비에 공통 값 일괄 적용"><Pencil size={14} />일괄편집</TbButton>
@@ -2872,23 +3203,23 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
             </>
           )}
           <BarSep />
-          <TbButton onClick={handleDeleteSelected} title="선택한 장비 삭제" className="!text-rose-300 hover:!bg-rose-500/20"><Trash2 size={14} />삭제</TbButton>
+          <TbButton onClick={handleDeleteSelected} title="선택한 장비 삭제" className="!text-rose-500 hover:!bg-rose-500/15"><Trash2 size={14} />삭제</TbButton>
           <button type="button" onClick={() => setSelectedIds(new Set())} title="선택 해제 (Esc)" className={ICON_BTN}><X size={14} /></button>
         </div>
       )}
 
       {/* 줌 */}
-      <div data-ui className="absolute bottom-4 right-4 z-20 flex items-center gap-0.5 p-1 rounded-xl bg-neutral-900 border border-white/10 shadow-lg">
+      <div data-ui className={`absolute bottom-4 right-4 z-20 flex items-center gap-0.5 p-1 rounded-xl ${PANEL}`}>
         <button type="button" onClick={() => zoomBy(1 / 1.2)} title="축소" className={ICON_BTN}><Minus size={15} /></button>
         <button
           type="button"
           ref={zoomLabelRef}
           onClick={() => zoomBy(1 / viewRef.current.scale)}
           title="100%로 보기"
-          className="h-8 w-12 rounded-md text-[11px] font-mono text-neutral-400 hover:text-white hover:bg-white/10"
+          className="h-8 w-12 rounded-md text-[11px] font-mono text-[var(--ui-muted)] hover:text-[var(--ui-text)] hover:bg-[var(--ui-hover)]"
         >{`${Math.round(scale * 100)}%`}</button>
         <button type="button" onClick={() => zoomBy(1.2)} title="확대" className={ICON_BTN}><Plus size={15} /></button>
-        <div className="w-px h-5 bg-white/10 mx-0.5" />
+        <div className="w-px h-5 bg-[var(--ui-border)] mx-0.5" />
         <button type="button" onClick={() => fitToContent()} title="전체 보기 (F)" className={ICON_BTN}><Maximize size={15} /></button>
       </div>
 
@@ -2903,7 +3234,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
         onTouchEnd={onCanvasTouchEnd}
         style={{
           top: TOPBAR_H,
-          backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.05) 1px, transparent 1px)',
+          backgroundImage: 'radial-gradient(circle, var(--ui-grid) 1px, transparent 1px)',
           backgroundSize: `${24 * scale}px ${24 * scale}px`,
           backgroundPosition: `${offset.x}px ${offset.y}px`,
           touchAction: 'none',                        // 브라우저 기본 팬/줌 차단 → 우리가 처리
@@ -2922,6 +3253,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
             offsetX={offset.x}
             offsetY={offset.y}
             cables={canvasCables}
+            light={light}
           />
         </div>
 
@@ -3026,7 +3358,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                     <text
                       x={minX + 15} y={minY + 10}
                       fontSize="10.5"
-                      fill="#F5D0FE"
+                      fill={light ? '#86198F' : '#F5D0FE'}
                       fontWeight="700"
                       fontFamily="var(--font-sans)"
                       dominantBaseline="middle"
@@ -3057,7 +3389,9 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
             if (d.x + w + 170 < cull.l || d.x - 170 > cull.r) return null;
             if (d.y + h < cull.t || d.y > cull.b) return null;
 
-            const color = TYPE_COLORS[d.type] ?? TYPE_COLORS.video;
+            const color = light
+              ? (LIGHT_TYPE_COLORS[d.type] ?? LIGHT_TYPE_COLORS.video)
+              : (TYPE_COLORS[d.type] ?? TYPE_COLORS.video);
             const isSelected = selectedIds.has(d.id);
             const isTraceTarget = traceId === d.id;
             const vpCached = visiblePortsCache.get(d.id);
@@ -3109,7 +3443,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                   } as unknown as React.MouseEvent, d);
                 }}
                 onClick={e => onDeviceClickView(e, d)}
-                className={`absolute rounded-xl overflow-hidden ${isSelected ? 'device-selected' : ''}`}
+                className={`absolute rounded-xl overflow-hidden ${isSelected ? 'device-selected' : ''} ${flashId === d.id ? 'device-flash' : ''}`}
                 style={(() => {
                   // 아이콘 모드: 가로 96px, 세로 자동 (헤더만)
                   const useBaseW = iconMode ? 96 : w;
@@ -3123,10 +3457,12 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                     width: useBaseW,
                     minHeight: useBaseH,
                     ...(iconMode ? { maxHeight: useBaseH, height: useBaseH } : {}),
-                    background: isPatchbay ? 'rgba(10,14,14,0.95)'
-                      : isWallbox ? 'rgba(14,12,8,0.95)'
-                      : isRouterRole ? 'rgba(14,10,6,0.95)'
-                      : 'rgba(8,8,10,0.95)',
+                    background: light
+                      ? (isPatchbay ? '#F0FDFA' : isWallbox ? '#FFFBEB' : isRouterRole ? '#FFF7ED' : '#FFFFFF')
+                      : (isPatchbay ? 'rgba(10,14,14,0.95)'
+                        : isWallbox ? 'rgba(14,12,8,0.95)'
+                        : isRouterRole ? 'rgba(14,10,6,0.95)'
+                        : 'rgba(8,8,10,0.95)'),
                     border: `${borderWidth}px solid ${
                       isPatchbay && !isSelected && !isTraceTarget ? 'rgba(20,184,166,0.4)'
                       : isWallbox && !isSelected && !isTraceTarget ? 'rgba(245,158,11,0.4)'
@@ -3138,7 +3474,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                       ? `0 0 0 2px rgba(251,191,36,0.6)`
                       : isTraceTarget
                       ? `0 0 0 2px ${color.glow}aa`
-                      : undefined,
+                      : (light ? '0 1px 2px rgba(15,23,42,0.08)' : undefined),
                     cursor: editMode ? 'move' : 'pointer',
                     transform: finalTransform || undefined,
                     transformOrigin: '0 0',
@@ -3164,7 +3500,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                       {roleStyle && (
                         <span
                           className="text-[9px] px-1 py-[1px] rounded shrink-0 font-mono font-bold"
-                          style={{ background: roleStyle.bg, color: roleStyle.fg, border: `0.5px solid ${roleStyle.bd}` }}
+                          style={{ background: roleStyle.bg, color: inkFor(roleStyle.fg, light), border: `0.5px solid ${roleStyle.bd}` }}
                           title={DEVICE_ROLE_LABELS[role]}
                         >{roleStyle.icon} {DEVICE_ROLE_LABELS[role]}</span>
                       )}
@@ -3242,7 +3578,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                       const ctStyle = ct ? CONN_TYPE_STYLES[ct] : undefined;
                       const lid = meta?.layerId;
                       const layer = lid ? layerById.get(lid) : undefined;
-                      const portColor = layer?.color ?? color.main;
+                      const portColor = inkFor(layer?.color ?? color.main, light);
                       const isSel = d.selectedInput === p.name;
                       // 보기 모드에서 스위처/라우터/디스플레이의 IN을 클릭해 활성 입력 변경
                       // 보기 모드에서 스위처/디스플레이의 IN을 클릭해 활성 입력 변경
@@ -3273,7 +3609,8 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                               }}
                             ></span>
                           </button>
-                          <div className="ml-2 flex-1 flex items-center gap-1.5 min-w-0">
+                          {/* 축소 화면에서는 포트 글자·배지 생략 (읽을 수 없는 크기 — DOM 절감) */}
+                          {!lodLow && (<div className="ml-2 flex-1 flex items-center gap-1.5 min-w-0">
                             {isSel && canSelect && (
                               <span className="text-[9.5px] px-1.5 py-[2px] rounded font-mono font-bold shrink-0"
                                 style={{ background: 'linear-gradient(90deg, #0891b2, #06b6d4)', color: 'white', boxShadow: '0 0 8px rgba(34,211,238,0.6)' }}>
@@ -3288,7 +3625,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                               </span>
                             )}
                             {meta?.label && <span className="text-[10.5px] text-neutral-500 truncate">{meta.label}</span>}
-                          </div>
+                          </div>)}
                         </div>
                       );
                     })}
@@ -3302,7 +3639,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                       const ctStyle = ct ? CONN_TYPE_STYLES[ct] : undefined;
                       const lid = meta?.layerId;
                       const layer = lid ? layerById.get(lid) : undefined;
-                      const portColor = layer?.color ?? color.main;
+                      const portColor = inkFor(layer?.color ?? color.main, light);
                       const isPending = pendingFrom?.device === d.id && pendingFrom?.port === p.name;
                       const isPgm = d.role === 'switcher' && d.pgmPort === p.name;
                       const isSwitcherViewMode = !editMode && d.role === 'switcher';
@@ -3333,7 +3670,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                             : undefined
                           }
                         >
-                          <div className="flex-1 flex items-center justify-end gap-1.5 min-w-0 mr-2">
+                          {!lodLow && (<div className="flex-1 flex items-center justify-end gap-1.5 min-w-0 mr-2">
                             {meta?.label && <span className="text-[10.5px] text-neutral-500 truncate text-right">{meta.label}</span>}
                             {isPgm && (
                               <span className="text-[9.5px] px-2 py-[2px] rounded font-mono font-bold shrink-0"
@@ -3355,7 +3692,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
                               </span>
                             )}
                             <span className="text-[11.5px] text-neutral-200 font-mono truncate font-medium">{p.name}</span>
-                          </div>
+                          </div>)}
                           <button
                             data-port
                             onMouseDown={onPortMouseDown}
@@ -3829,7 +4166,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
               </div>
 
               {/* 왼쪽: IN 쪽 Hub 연결 배지 (각 IN 포트와 y좌표 정렬) */}
-              {!isPatchbay && !isWallbox && role !== 'router' && inVis.length > 0 && (hubConnections.length > 0 || hidePatchbay) && (
+              {!lodLow && !isPatchbay && !isWallbox && role !== 'router' && inVis.length > 0 && (hubConnections.length > 0 || hidePatchbay) && (
                 <div
                   data-ui
                   data-follow={d.id}
@@ -3926,7 +4263,7 @@ export default function SignalFlowMap({ project }: { project?: Project } = {}) {
               )}
 
               {/* 오른쪽: OUT 포트 옆 dest 라벨 (설계도면 스타일, 각 포트와 y좌표 정렬) */}
-              {!isPatchbay && !isWallbox && role !== 'router' && outVis.length > 0 && (
+              {!lodLow && !isPatchbay && !isWallbox && role !== 'router' && outVis.length > 0 && (
                 <div
                   data-ui
                   data-follow={d.id}
